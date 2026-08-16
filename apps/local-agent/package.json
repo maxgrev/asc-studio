@@ -6,6 +6,7 @@
   "dependencies": {
     "@asc-studio/contracts": "*",
     "@asc-studio/core": "*",
+    "@asc-studio/provider-apple-ads": "*",
     "@asc-studio/provider-app-store-connect": "*",
     "@asc-studio/provider-demo": "*",
     "@modelcontextprotocol/sdk": "^1.20.2",

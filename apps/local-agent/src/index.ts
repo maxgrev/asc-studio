@@ -4,6 +4,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   AddBuildToGroupInputSchema,
+  AppleAdsCampaignReportInputSchema,
+  AppleAdsKeywordResearchInputSchema,
   AppStoreConnectCredentialsInputSchema,
   AppStorePlatformSchema,
   CreateVersionInputSchema,
@@ -15,6 +17,12 @@ import {
 } from "@asc-studio/contracts";
 import type { ScreenshotDisplayType, ScreenshotUploadReceipt } from "@asc-studio/contracts";
 import { AscStudioService, DomainError } from "@asc-studio/core";
+import {
+  AppleAdsApiError,
+  AppleAdsCredentialUnavailableError,
+  AppleAdsPlatformProvider,
+  type AppleAdsCredentials,
+} from "@asc-studio/provider-apple-ads";
 import { AppStoreConnectApiError, AppStoreConnectProvider } from "@asc-studio/provider-app-store-connect";
 import { MockAscProvider } from "@asc-studio/provider-demo";
 import { z } from "zod";
@@ -368,12 +376,44 @@ const isTrustedOrigin = (value: string | undefined) => {
 const credentialStore = new AppStoreConnectCredentialStore(dataDirectory);
 const accountLock = new AsyncReadWriteLock();
 
-const resolveProvider = () => {
-  if (mode === "demo") return new MockAscProvider();
-  return new AppStoreConnectProvider({
-    credentials: () => credentialStore.load(),
-    uploadDirectory: screenshotUploadsDirectory,
-  });
+const loadAppleAdsCredentials = async (): Promise<AppleAdsCredentials | null> => {
+  const values = {
+    profileName: process.env.ASC_STUDIO_ADS_PROFILE_NAME,
+    clientId: process.env.ASC_STUDIO_ADS_CLIENT_ID,
+    teamId: process.env.ASC_STUDIO_ADS_TEAM_ID,
+    keyId: process.env.ASC_STUDIO_ADS_KEY_ID,
+    privateKey: process.env.ASC_STUDIO_ADS_PRIVATE_KEY,
+    privateKeyPath: process.env.ASC_STUDIO_ADS_PRIVATE_KEY_PATH,
+    adAccountId: process.env.ASC_STUDIO_ADS_AD_ACCOUNT_ID,
+  };
+  const configured = Object.values(values).some((value) => value !== undefined);
+  if (!configured) return null;
+  if (!values.clientId || !values.teamId || !values.keyId || !values.adAccountId) {
+    throw new Error("Apple Ads requires ASC_STUDIO_ADS_CLIENT_ID, ASC_STUDIO_ADS_TEAM_ID, ASC_STUDIO_ADS_KEY_ID, and ASC_STUDIO_ADS_AD_ACCOUNT_ID.");
+  }
+  if ((values.privateKey ? 1 : 0) + (values.privateKeyPath ? 1 : 0) !== 1) {
+    throw new Error("Set exactly one of ASC_STUDIO_ADS_PRIVATE_KEY or ASC_STUDIO_ADS_PRIVATE_KEY_PATH.");
+  }
+  if (!/^\d+$/.test(values.adAccountId)) throw new Error("ASC_STUDIO_ADS_AD_ACCOUNT_ID must be numeric.");
+  if (!values.clientId.startsWith("SEARCHADS.") || !values.teamId.startsWith("SEARCHADS.")) {
+    throw new Error("Apple Ads client and team IDs must start with SEARCHADS.");
+  }
+  let privateKey = values.privateKey;
+  let authBackend = "environment variable";
+  if (values.privateKeyPath) {
+    if (!isAbsolute(values.privateKeyPath)) throw new Error("ASC_STUDIO_ADS_PRIVATE_KEY_PATH must be absolute.");
+    privateKey = await readFile(values.privateKeyPath, "utf8");
+    authBackend = `environment file ${basename(values.privateKeyPath)}`;
+  }
+  return {
+    profileName: values.profileName?.trim() || "Apple Ads",
+    clientId: values.clientId,
+    teamId: values.teamId,
+    keyId: values.keyId,
+    privateKey: privateKey!,
+    adAccountId: values.adAccountId,
+    authBackend,
+  };
 };
 
 const main = async () => {
@@ -382,12 +422,19 @@ const main = async () => {
     const webStats = await stat(webDirectory).catch(() => null);
     if (!webStats?.isDirectory()) throw new Error(`ASC_STUDIO_WEB_DIR is not a readable directory: ${webDirectory}`);
   }
-  const provider = resolveProvider();
+  const demoProvider = mode === "demo" ? new MockAscProvider() : null;
+  const adsCredentials = mode === "live" ? await loadAppleAdsCredentials() : null;
+  const provider = demoProvider ?? new AppStoreConnectProvider({
+    credentials: () => credentialStore.load(),
+    uploadDirectory: screenshotUploadsDirectory,
+  });
+  const adsProvider = demoProvider ?? new AppleAdsPlatformProvider({ credentials: async () => adsCredentials });
   const status = await provider.getStatus();
   const databaseName = status.mode === "demo" ? "demo.sqlite" : "live.sqlite";
   const store = new SqlitePlanStore(join(dataDirectory, databaseName));
   const service = new AscStudioService({
     provider,
+    adsProvider,
     store,
     now: () => new Date(),
     id: () => randomUUID(),
@@ -467,6 +514,40 @@ const main = async () => {
       }
       if (request.method === "GET" && url.pathname === "/api/status") {
         json(response, 200, await service.getStatus());
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/apple-ads/status") {
+        json(response, 200, await service.getAppleAdsStatus());
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/apple-ads/keywords/research") {
+        const input = AppleAdsKeywordResearchInputSchema.parse(await readBody(request));
+        json(response, 200, { research: await service.researchAppleAdsKeywords(input) });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/apple-ads/campaigns") {
+        const appId = url.searchParams.get("appId")?.trim() || undefined;
+        json(response, 200, { campaigns: await service.listAppleAdsCampaigns(appId) });
+        return;
+      }
+      const adsAdGroupsMatch = url.pathname.match(/^\/api\/apple-ads\/campaigns\/([^/]+)\/adgroups$/);
+      if (request.method === "GET" && adsAdGroupsMatch?.[1]) {
+        json(response, 200, { adGroups: await service.listAppleAdsAdGroups(decodeURIComponent(adsAdGroupsMatch[1])) });
+        return;
+      }
+      const adsCampaignKeywordsMatch = url.pathname.match(/^\/api\/apple-ads\/campaigns\/([^/]+)\/keywords$/);
+      if (request.method === "GET" && adsCampaignKeywordsMatch?.[1]) {
+        json(response, 200, { keywords: await service.listAppleAdsKeywords({ campaignId: decodeURIComponent(adsCampaignKeywordsMatch[1]) }) });
+        return;
+      }
+      const adsAdGroupKeywordsMatch = url.pathname.match(/^\/api\/apple-ads\/adgroups\/([^/]+)\/keywords$/);
+      if (request.method === "GET" && adsAdGroupKeywordsMatch?.[1]) {
+        json(response, 200, { keywords: await service.listAppleAdsKeywords({ adGroupId: decodeURIComponent(adsAdGroupKeywordsMatch[1]) }) });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/apple-ads/campaign-report") {
+        const input = AppleAdsCampaignReportInputSchema.parse(await readBody(request));
+        json(response, 200, { report: await service.getAppleAdsCampaignReport(input) });
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/connections/app-store-connect") {
@@ -748,6 +829,20 @@ const main = async () => {
             ...(error.requestId ? { details: { requestId: error.requestId } } : {}),
           },
         });
+        return;
+      }
+      if (error instanceof AppleAdsApiError) {
+        json(response, error.status === 429 ? 503 : 502, {
+          error: {
+            code: `apple_ads_${error.code.toLowerCase()}`,
+            message: error.message,
+            ...(error.requestId ? { details: { requestId: error.requestId } } : {}),
+          },
+        });
+        return;
+      }
+      if (error instanceof AppleAdsCredentialUnavailableError) {
+        json(response, 409, { error: { code: "apple_ads_not_configured", message: error.message } });
         return;
       }
       if (error instanceof z.ZodError) {

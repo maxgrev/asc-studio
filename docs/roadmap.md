@@ -64,6 +64,14 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Follow Apple's signed screenshot upload operations and processed-state checks
 - Keep demo and live providers behind the same core ports
 
+## Apple Ads intelligence — complete
+
+- Keep Apple Ads OAuth credentials separate from App Store Connect keys
+- Query Apple Ads Platform API v1 keyword suggestions and search-term popularity
+- Rank candidates with Apple-provided signals without inventing search counts or difficulty
+- Read campaigns, ad groups, keywords, and campaign performance through the local API and MCP
+- Keep Apple Ads MCP tools read-only until campaign writes have typed review plans and local approval
+
 ## Next — Submission train
 
 - Direct IPA/PKG upload through Apple's Build Uploads resources, with a local picker and progress

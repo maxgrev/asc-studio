@@ -1,6 +1,14 @@
 import type {
   AddBuildToGroupInput,
   AgentStatus,
+  AppleAdsAdGroup,
+  AppleAdsCampaign,
+  AppleAdsCampaignMetrics,
+  AppleAdsCampaignReportInput,
+  AppleAdsKeyword,
+  AppleAdsKeywordResearchInput,
+  AppleAdsKeywordResearchResult,
+  AppleAdsStatus,
   AppStoreLocale,
   AppStorePlatform,
   AppStoreVersion,
@@ -53,6 +61,15 @@ export interface AscProvider {
   getVersionSubmissionStatus(versionId: string): Promise<VersionSubmissionStatus>;
 }
 
+export interface AppleAdsProvider {
+  getAppleAdsStatus(): Promise<AppleAdsStatus>;
+  researchAppleAdsKeywords(input: AppleAdsKeywordResearchInput): Promise<AppleAdsKeywordResearchResult>;
+  listAppleAdsCampaigns(appId?: string): Promise<AppleAdsCampaign[]>;
+  listAppleAdsAdGroups(campaignId: string): Promise<AppleAdsAdGroup[]>;
+  listAppleAdsKeywords(input: { campaignId?: string; adGroupId?: string }): Promise<AppleAdsKeyword[]>;
+  getAppleAdsCampaignReport(input: AppleAdsCampaignReportInput): Promise<AppleAdsCampaignMetrics>;
+}
+
 export interface ApplyScreenshotChangesInput {
   localizationId: string;
   locale: AppStoreLocale;
@@ -88,6 +105,7 @@ export interface PlanStore {
 
 export interface CoreDependencies {
   provider: AscProvider;
+  adsProvider?: AppleAdsProvider;
   store: PlanStore;
   now: () => Date;
   id: () => string;
@@ -185,6 +203,33 @@ export class AscStudioService {
 
   getStatus() {
     return this.dependencies.provider.getStatus();
+  }
+
+  getAppleAdsStatus() {
+    return this.appleAdsProvider().getAppleAdsStatus();
+  }
+
+  researchAppleAdsKeywords(input: AppleAdsKeywordResearchInput) {
+    return this.appleAdsProvider().researchAppleAdsKeywords(input);
+  }
+
+  listAppleAdsCampaigns(appId?: string) {
+    return this.appleAdsProvider().listAppleAdsCampaigns(appId);
+  }
+
+  listAppleAdsAdGroups(campaignId: string) {
+    return this.appleAdsProvider().listAppleAdsAdGroups(campaignId);
+  }
+
+  listAppleAdsKeywords(input: { campaignId?: string; adGroupId?: string }) {
+    if (!input.campaignId && !input.adGroupId) {
+      throw new DomainError("apple_ads_scope_required", "Choose a campaign or ad group before listing keywords.");
+    }
+    return this.appleAdsProvider().listAppleAdsKeywords(input);
+  }
+
+  getAppleAdsCampaignReport(input: AppleAdsCampaignReportInput) {
+    return this.appleAdsProvider().getAppleAdsCampaignReport(input);
   }
 
   listApps(options?: AppListOptions) {
@@ -781,6 +826,13 @@ export class AscStudioService {
     if (build.expired || build.processingStatus !== "Ready") {
       throw new DomainError("build_not_ready", `Build ${build.buildNumber} is not processed and ready for submission.`);
     }
+  }
+
+  private appleAdsProvider() {
+    if (!this.dependencies.adsProvider) {
+      throw new DomainError("apple_ads_unavailable", "Apple Ads is not available in this ASC Studio session.");
+    }
+    return this.dependencies.adsProvider;
   }
 
   private async requireVersion(appId: string, versionId: string) {

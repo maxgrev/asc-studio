@@ -50,6 +50,140 @@ export const AgentStatusSchema = z.object({
 });
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
+export const AppleAdsStatusSchema = z.object({
+  mode: AgentModeSchema,
+  configured: z.boolean(),
+  connected: z.boolean(),
+  provider: z.enum(["apple-ads-platform-api", "demo"]),
+  adAccountId: z.string().min(1).nullable(),
+  detail: z.string().min(1),
+}).strict();
+export type AppleAdsStatus = z.infer<typeof AppleAdsStatusSchema>;
+
+export const AppleAdsMoneySchema = z.object({
+  amount: z.string().regex(/^\d+(?:\.\d+)?$/, "Use a non-negative decimal amount."),
+  currency: z.string().regex(/^[A-Z]{3}$/, "Use an ISO 4217 currency code."),
+}).strict();
+export type AppleAdsMoney = z.infer<typeof AppleAdsMoneySchema>;
+
+export const AppleAdsCampaignSchema = z.object({
+  id: z.string().min(1),
+  adAccountId: z.string().min(1),
+  name: z.string().min(1),
+  promotedObjectId: z.string().min(1),
+  status: z.string().min(1),
+  systemStatus: z.string().min(1),
+  displayStatus: z.string().min(1),
+  startTime: z.string().nullable(),
+  endTime: z.string().nullable(),
+  dailyBudget: AppleAdsMoneySchema,
+  countriesOrRegions: z.array(z.string().regex(/^[A-Z]{2}$/)),
+  supplyPlacements: z.array(z.string().min(1)),
+  bidStrategyType: z.string().min(1),
+  deleted: z.boolean(),
+  modificationTime: z.string().nullable(),
+}).strict();
+export type AppleAdsCampaign = z.infer<typeof AppleAdsCampaignSchema>;
+
+export const AppleAdsAdGroupSchema = z.object({
+  id: z.string().min(1),
+  campaignId: z.string().min(1),
+  name: z.string().min(1),
+  status: z.string().min(1),
+  systemStatus: z.string().min(1),
+  displayStatus: z.string().min(1),
+  automatedKeywordsOptIn: z.boolean(),
+  bid: AppleAdsMoneySchema.nullable(),
+  startTime: z.string().nullable(),
+  endTime: z.string().nullable(),
+  deleted: z.boolean(),
+  modificationTime: z.string().nullable(),
+}).strict();
+export type AppleAdsAdGroup = z.infer<typeof AppleAdsAdGroupSchema>;
+
+export const AppleAdsKeywordSchema = z.object({
+  id: z.string().min(1),
+  campaignId: z.string().min(1),
+  adGroupId: z.string().min(1),
+  text: z.string().min(1),
+  matchType: z.string().min(1),
+  bid: AppleAdsMoneySchema.nullable(),
+  status: z.string().min(1),
+  displayStatus: z.string().min(1),
+  deleted: z.boolean(),
+  modificationTime: z.string().nullable(),
+}).strict();
+export type AppleAdsKeyword = z.infer<typeof AppleAdsKeywordSchema>;
+
+const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date in YYYY-MM-DD format.");
+export const AppleAdsKeywordResearchInputSchema = z.object({
+  appId: z.string().min(1),
+  countryOrRegion: z.string().regex(/^[A-Z]{2}$/, "Use an ISO 3166-1 alpha-2 country code."),
+  genre: z.string().regex(/^[A-Z][A-Z0-9_]{1,79}$/, "Use an Apple Ads genre identifier."),
+  start: IsoDateSchema,
+  end: IsoDateSchema,
+  granularity: z.enum(["WEEKLY_SUN_SAT", "MONTHLY"]),
+  seedTerms: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
+  limit: z.number().int().min(1).max(200).default(50),
+}).strict().superRefine((input, context) => {
+  if (input.start > input.end) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "The start date must not be after the end date.", path: ["start"] });
+  }
+  if (input.granularity === "WEEKLY_SUN_SAT" && new Date(`${input.start}T00:00:00Z`).getUTCDay() !== 0) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Weekly research must start on a Sunday.", path: ["start"] });
+  }
+});
+export type AppleAdsKeywordResearchInput = z.infer<typeof AppleAdsKeywordResearchInputSchema>;
+
+export const AppleAdsKeywordResearchItemSchema = z.object({
+  text: z.string().min(1),
+  source: z.enum(["suggestion", "popularity", "both"]),
+  suggestionPopularity: z.number().min(0).max(100).nullable(),
+  searchPopularity: z.number().min(1).max(100).nullable(),
+  searchPopularityInGenre: z.number().min(1).max(100).nullable(),
+  rankInGenre: z.number().int().positive().nullable(),
+  searchPopularityTier: z.number().int().min(1).max(5).nullable(),
+  opportunityScore: z.number().min(0).max(100),
+}).strict();
+export type AppleAdsKeywordResearchItem = z.infer<typeof AppleAdsKeywordResearchItemSchema>;
+
+export const AppleAdsKeywordResearchResultSchema = z.object({
+  appId: z.string().min(1),
+  countryOrRegion: z.string().regex(/^[A-Z]{2}$/),
+  genre: z.string().min(1),
+  start: IsoDateSchema,
+  end: IsoDateSchema,
+  granularity: z.enum(["WEEKLY_SUN_SAT", "MONTHLY"]),
+  keywords: z.array(AppleAdsKeywordResearchItemSchema),
+  note: z.string().min(1),
+}).strict();
+export type AppleAdsKeywordResearchResult = z.infer<typeof AppleAdsKeywordResearchResultSchema>;
+
+export const AppleAdsCampaignReportInputSchema = z.object({
+  campaignId: z.string().min(1),
+  start: IsoDateSchema,
+  end: IsoDateSchema,
+  timeZone: z.enum(["ORTZ", "UTC"]).default("ORTZ"),
+}).strict().refine((input) => input.start <= input.end, {
+  message: "The start date must not be after the end date.",
+  path: ["start"],
+});
+export type AppleAdsCampaignReportInput = z.infer<typeof AppleAdsCampaignReportInputSchema>;
+
+export const AppleAdsCampaignMetricsSchema = z.object({
+  campaignId: z.string().min(1),
+  name: z.string().min(1),
+  localSpend: AppleAdsMoneySchema.nullable(),
+  impressions: z.number().int().nonnegative(),
+  taps: z.number().int().nonnegative(),
+  tapThroughRate: z.number().nonnegative(),
+  tapInstalls: z.number().int().nonnegative(),
+  totalInstalls: z.number().int().nonnegative(),
+  averageCostPerTap: AppleAdsMoneySchema.nullable(),
+  averageCostPerAcquisition: AppleAdsMoneySchema.nullable(),
+}).strict();
+export type AppleAdsCampaignMetrics = z.infer<typeof AppleAdsCampaignMetricsSchema>;
+
 export const AppStoreConnectCredentialsInputSchema = z.object({
   profileName: z.string().trim().min(1).max(80),
   issuerId: z.string().trim().min(1).max(128),
@@ -580,6 +714,31 @@ export const AppsResponseSchema = z.object({
   apps: z.array(AppSummarySchema),
 });
 export type AppsResponse = z.infer<typeof AppsResponseSchema>;
+
+export const AppleAdsCampaignsResponseSchema = z.object({
+  campaigns: z.array(AppleAdsCampaignSchema),
+});
+export type AppleAdsCampaignsResponse = z.infer<typeof AppleAdsCampaignsResponseSchema>;
+
+export const AppleAdsAdGroupsResponseSchema = z.object({
+  adGroups: z.array(AppleAdsAdGroupSchema),
+});
+export type AppleAdsAdGroupsResponse = z.infer<typeof AppleAdsAdGroupsResponseSchema>;
+
+export const AppleAdsKeywordsResponseSchema = z.object({
+  keywords: z.array(AppleAdsKeywordSchema),
+});
+export type AppleAdsKeywordsResponse = z.infer<typeof AppleAdsKeywordsResponseSchema>;
+
+export const AppleAdsKeywordResearchResponseSchema = z.object({
+  research: AppleAdsKeywordResearchResultSchema,
+});
+export type AppleAdsKeywordResearchResponse = z.infer<typeof AppleAdsKeywordResearchResponseSchema>;
+
+export const AppleAdsCampaignReportResponseSchema = z.object({
+  report: AppleAdsCampaignMetricsSchema,
+});
+export type AppleAdsCampaignReportResponse = z.infer<typeof AppleAdsCampaignReportResponseSchema>;
 
 export const BuildsResponseSchema = z.object({
   builds: z.array(BuildSummarySchema),

@@ -1,14 +1,15 @@
 # ASC Studio
 
-ASC Studio is a local-first App Store Connect control plane with a desktop-grade web interface and an MCP server. It connects straight to Apple's public App Store Connect API. It does not install, invoke, or parse another App Store tool.
+ASC Studio is a local-first App Store Connect and Apple Ads control plane with a desktop-grade web interface and an MCP server. It connects straight to Apple's public APIs. It does not install, invoke, or parse another App Store tool.
 
-This repository now contains five complete vertical slices:
+This repository now contains six complete vertical slices:
 
 - A TestFlight control room for builds, filters, build details, tester groups, and reviewed group assignments.
 - A multi-platform release workspace for iOS, macOS, tvOS, and visionOS version creation, localized What's New, promotional text, keywords, exact diffs, and submission-readiness checks.
 - A guarded App Review path that selects a processed build, previews attachment and submission, checks for stale Apple data, confirms once, and reads the resulting submission state.
 - BYOK release-copy translation that turns one source locale into checked local drafts for selected locales without reading or changing keywords.
 - Per-locale, per-device screenshot sets with local file checks, add or replace modes, exact review plans, stale-data checks, and guarded upload or deletion.
+- Apple Ads Platform API v1 keyword research that combines app suggestions with country-and-genre search popularity, plus campaign, ad-group, keyword, and performance inspection tools.
 
 App Store writes use the same plan, review, stale-check, confirm, and audit path. Translation creates local drafts; it does not write to Apple. The rest of the product map lives in [the roadmap](docs/roadmap.md).
 
@@ -24,6 +25,7 @@ flowchart LR
   MCP["MCP clients"] --> Agent
   Agent --> Core["Plans, policy, and audit"]
   Core --> ASC["Direct Apple API provider"]
+  Core --> Ads["Apple Ads Platform API v1"]
   Core --> DB["Local SQLite log"]
   ASC --> Apple["App Store Connect"]
 ```
@@ -32,6 +34,7 @@ flowchart LR
 - [ChatGPT subscriptions and API billing are separate](https://help.openai.com/en/articles/9039756-managing-billing-settings-on-chatgpt-web-and-platform), so ASC Studio does not claim that a ChatGPT or Codex subscription pays for GUI model calls.
 - The GUI and MCP server share the same App Store policy. There is no arbitrary `run_asc_command` escape hatch.
 - The local agent signs short-lived Apple JWTs. The browser never receives a saved private key, and audit records never contain credentials.
+- App Store Connect and Apple Ads use separate keys. An App Store Connect key is never sent to the Apple Ads API.
 
 See [the architecture record](docs/adr/0001-local-control-plane.md) for the full decision.
 
@@ -104,6 +107,24 @@ To test the same built local app without touching Apple:
 npm run local:demo
 ```
 
+### Enable Apple Ads tools
+
+Apple Ads uses a separate OAuth client, private key, and ad-account ID. Create an API user and upload its public key in Apple Ads, then start ASC Studio with the credentials Apple gives you:
+
+```bash
+ASC_STUDIO_ADS_PROFILE_NAME="Growth" \
+ASC_STUDIO_ADS_CLIENT_ID="SEARCHADS.…" \
+ASC_STUDIO_ADS_TEAM_ID="SEARCHADS.…" \
+ASC_STUDIO_ADS_KEY_ID="KEY_ID" \
+ASC_STUDIO_ADS_AD_ACCOUNT_ID="123456789" \
+ASC_STUDIO_ADS_PRIVATE_KEY_PATH="/absolute/path/to/private-key.pem" \
+npm run local
+```
+
+The local agent signs the OAuth client secret and exchanges it for a one-hour access token. It sends Apple Ads credentials only to `appleid.apple.com` and `api.ads.apple.com`. You can use `ASC_STUDIO_ADS_PRIVATE_KEY` instead of the file path, but not both. See Apple's [Platform API OAuth guide](https://developer.apple.com/documentation/apple-ads-platform-api/implementing-oauth-for-the-apple-ads-platform-api) for key setup.
+
+Keyword research combines Apple's app-specific suggestions with weekly or monthly search-term popularity for an exact country and genre. Popularity is relative, not an estimated search count. Apple does not expose keyword difficulty, so ASC Studio does not invent that value.
+
 `npm run dev` and `npm run dev:live` are development commands. They run the Vite server with hot reload. `npm run dev` always uses isolated sample data and cannot fall through to a real connection.
 
 Demo mode also uses a marked sample translator. It does not need an OpenAI key and never calls OpenAI.
@@ -128,6 +149,12 @@ The GUI and MCP tokens differ and change on each launch. Start Codex from an env
 The MCP server exposes:
 
 - `get_asc_status`
+- `get_apple_ads_status`
+- `research_apple_ads_keywords`
+- `list_apple_ads_campaigns`
+- `list_apple_ads_ad_groups`
+- `list_apple_ads_keywords`
+- `get_apple_ads_campaign_report`
 - `list_apps`
 - `list_testflight_builds`
 - `list_app_store_versions`
@@ -158,6 +185,7 @@ apps/
 packages/
   contracts/                Shared schemas and public data types
   core/                     Provider ports, plans, confirmation, stale checks
+  provider-apple-ads/       Direct Apple Ads OAuth and Platform API v1 provider
   provider-app-store-connect/ Direct Apple API client and provider
   provider-demo/            Deterministic isolated provider
 docs/
@@ -165,11 +193,12 @@ docs/
   design/                   Accepted concept and verified renders
 ```
 
-The provider creates ten-minute ES256 JWTs, sends typed JSON:API requests only to Apple's API origin, and follows Apple's signed URLs for asset chunks. It never exposes a generic request runner through the GUI or MCP.
+The App Store Connect provider creates ten-minute ES256 JWTs, sends typed JSON:API requests only to Apple's API origin, and follows Apple's signed URLs for asset chunks. The Apple Ads provider creates signed OAuth client secrets and sends typed v1 requests with an exact ad-account scope. Neither provider exposes a generic request runner through the GUI or MCP.
 
 ## Current limits
 
 - The direct provider has fixture coverage for authentication, pagination, builds, localization writes, and screenshot uploads. It still needs read-only and guarded-write checks across several real accounts before a stable release.
+- Apple Ads campaign, ad-group, keyword, and report tools are read-only. Campaign writes still need typed plans, stale checks, and local GUI approval before they can join the MCP surface.
 - Build attachment and review submission use Apple's public relationships and review-submission resources. Cancellation, phased release controls, App Review detail editing, and review attachments still need their own slices.
 - Translation currently uses BYOK through `OPENAI_API_KEY`; managed ChatGPT sign-in is not part of this slice.
 - The translation action covers What’s New and promotional text. Locale keyword research and suggestions need their own workflow and never reuse translation output.

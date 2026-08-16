@@ -31,6 +31,13 @@ const startAgent = async (options: { serveWeb?: boolean; mode?: "demo" | "live" 
     "ASC_STUDIO_KEY_ID",
     "ASC_STUDIO_PRIVATE_KEY",
     "ASC_STUDIO_PRIVATE_KEY_PATH",
+    "ASC_STUDIO_ADS_PROFILE_NAME",
+    "ASC_STUDIO_ADS_CLIENT_ID",
+    "ASC_STUDIO_ADS_TEAM_ID",
+    "ASC_STUDIO_ADS_KEY_ID",
+    "ASC_STUDIO_ADS_PRIVATE_KEY",
+    "ASC_STUDIO_ADS_PRIVATE_KEY_PATH",
+    "ASC_STUDIO_ADS_AD_ACCOUNT_ID",
   ]) delete environment[name];
   const child = spawn(process.execPath, launchArguments, {
     cwd: appRoot,
@@ -111,6 +118,27 @@ describe("local-agent live connection setup", () => {
       detail: "Connect an App Store Connect API key before using live mode.",
     });
   });
+
+  it("keeps Apple Ads optional and returns a clear error for unconfigured tools", async () => {
+    const status = await fetch(`${agent!.baseUrl}/api/apple-ads/status`, { headers: authorization(guiToken) });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({ configured: false, connected: false, adAccountId: null });
+
+    const research = await fetch(`${agent!.baseUrl}/api/apple-ads/keywords/research`, {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: JSON.stringify({
+        appId: "123456789",
+        countryOrRegion: "US",
+        genre: "PRODUCTIVITY_UTILITIES",
+        start: "2026-08-09",
+        end: "2026-08-15",
+        granularity: "WEEKLY_SUN_SAT",
+      }),
+    });
+    expect(research.status).toBe(409);
+    expect(await research.json()).toMatchObject({ error: { code: "apple_ads_not_configured" } });
+  });
 });
 
 const screenshotPng = (width: number, height: number, colorType = 2) => {
@@ -186,6 +214,12 @@ describe("local-agent session boundary", () => {
     expect(tools.status).toBe(200);
     expect(toolsBody.result.tools.map((tool) => tool.name)).toEqual([
       "get_asc_status",
+      "get_apple_ads_status",
+      "research_apple_ads_keywords",
+      "list_apple_ads_campaigns",
+      "list_apple_ads_ad_groups",
+      "list_apple_ads_keywords",
+      "get_apple_ads_campaign_report",
       "list_apps",
       "list_testflight_builds",
       "list_app_store_versions",
@@ -202,6 +236,60 @@ describe("local-agent session boundary", () => {
     });
     expect(call.status).toBe(200);
     expect(await call.json()).toMatchObject({ result: { structuredContent: { mode: "demo", connected: true } } });
+  });
+
+  it("serves demo Apple Ads keyword research, campaign hierarchy, and reports", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const [statusResponse, campaignsResponse, researchResponse] = await Promise.all([
+      fetch(`${agent!.baseUrl}/api/apple-ads/status`, { headers: authorization(guiToken) }),
+      fetch(`${agent!.baseUrl}/api/apple-ads/campaigns?appId=demo-app-orbit-notes`, { headers: authorization(guiToken) }),
+      fetch(`${agent!.baseUrl}/api/apple-ads/keywords/research`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          appId: "demo-app-orbit-notes",
+          countryOrRegion: "US",
+          genre: "PRODUCTIVITY_UTILITIES",
+          start: "2026-08-09",
+          end: "2026-08-15",
+          granularity: "WEEKLY_SUN_SAT",
+          seedTerms: ["writing"],
+          limit: 10,
+        }),
+      }),
+    ]);
+
+    expect(statusResponse.status).toBe(200);
+    expect(await statusResponse.json()).toMatchObject({ provider: "demo", connected: true, adAccountId: "demo-ads-account" });
+    expect(campaignsResponse.status).toBe(200);
+    expect(await campaignsResponse.json()).toMatchObject({ campaigns: [
+      expect.objectContaining({ id: "demo-ads-campaign-brand", promotedObjectId: "demo-app-orbit-notes" }),
+      expect.objectContaining({ id: "demo-ads-campaign-discovery", promotedObjectId: "demo-app-orbit-notes" }),
+    ] });
+    expect(researchResponse.status).toBe(200);
+    expect(await researchResponse.json()).toMatchObject({ research: {
+      countryOrRegion: "US",
+      genre: "PRODUCTIVITY_UTILITIES",
+      keywords: expect.arrayContaining([expect.objectContaining({ text: "notes app", source: "both" })]),
+    } });
+
+    const [adGroupsResponse, keywordsResponse, reportResponse] = await Promise.all([
+      fetch(`${agent!.baseUrl}/api/apple-ads/campaigns/demo-ads-campaign-brand/adgroups`, { headers: authorization(guiToken) }),
+      fetch(`${agent!.baseUrl}/api/apple-ads/campaigns/demo-ads-campaign-brand/keywords`, { headers: authorization(guiToken) }),
+      fetch(`${agent!.baseUrl}/api/apple-ads/campaign-report`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          campaignId: "demo-ads-campaign-brand",
+          start: "2026-08-01",
+          end: "2026-08-15",
+          timeZone: "ORTZ",
+        }),
+      }),
+    ]);
+    expect(await adGroupsResponse.json()).toMatchObject({ adGroups: [expect.objectContaining({ id: "demo-ads-group-brand-exact" })] });
+    expect(await keywordsResponse.json()).toMatchObject({ keywords: expect.arrayContaining([expect.objectContaining({ text: "orbit notes" })]) });
+    expect(await reportResponse.json()).toMatchObject({ report: { campaignId: "demo-ads-campaign-brand", impressions: 48_320 } });
   });
 
   it("generates only the requested release-copy fields in demo mode", async () => {

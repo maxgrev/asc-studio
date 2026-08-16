@@ -1,5 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  AppleAdsAdGroupSchema,
+  AppleAdsCampaignMetricsSchema,
+  AppleAdsCampaignReportInputSchema,
+  AppleAdsCampaignSchema,
+  AppleAdsKeywordResearchInputSchema,
+  AppleAdsKeywordResearchResultSchema,
+  AppleAdsKeywordSchema,
+  AppleAdsStatusSchema,
   AppStorePlatformSchema,
   AppStoreVersionSchema,
   AppSummarySchema,
@@ -25,7 +33,7 @@ const createMcpServer = (service: AscStudioService) => {
     { name: "asc-studio", version: "0.6.0" },
     {
       instructions:
-        "Use read tools to resolve exact App Store Connect IDs before any action. This release exposes reads only through MCP; consequential changes require review in the local ASC Studio GUI.",
+        "Use read tools to resolve exact App Store Connect and Apple Ads IDs before any action. Apple Ads popularity is a relative first-party signal, not an absolute search count. This release exposes reads only through MCP; consequential changes require review in the local ASC Studio GUI.",
     },
   );
 
@@ -49,6 +57,144 @@ const createMcpServer = (service: AscStudioService) => {
         return {
           structuredContent,
           content: [{ type: "text", text: `${status.mode === "demo" ? "Demo" : "Live"} mode: ${status.detail}` }],
+        };
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_apple_ads_status",
+    {
+      title: "Check Apple Ads status",
+      description: "Check whether the separate Apple Ads Platform API v1 credential set is configured and connected.",
+      inputSchema: {},
+      outputSchema: AppleAdsStatusSchema.shape,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    },
+    async () => {
+      try {
+        const status = await service.getAppleAdsStatus();
+        return {
+          structuredContent: status,
+          content: [{ type: "text", text: status.detail }],
+        };
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "research_apple_ads_keywords",
+    {
+      title: "Research App Store keywords",
+      description: "Merge Apple Ads app-specific keyword suggestions with first-party search-term popularity for one country, genre, and weekly or monthly date range. Returns relative scores, not search counts or invented difficulty estimates.",
+      inputSchema: AppleAdsKeywordResearchInputSchema.innerType().shape,
+      outputSchema: { research: AppleAdsKeywordResearchResultSchema },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    },
+    async (input) => {
+      try {
+        const research = await service.researchAppleAdsKeywords(AppleAdsKeywordResearchInputSchema.parse(input));
+        return {
+          structuredContent: { research },
+          content: [{ type: "text", text: `Found ${research.keywords.length} ranked keyword candidate${research.keywords.length === 1 ? "" : "s"} for ${research.countryOrRegion} ${research.genre}.` }],
+        };
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_apple_ads_campaigns",
+    {
+      title: "List Apple Ads campaigns",
+      description: "List App Store campaigns in the configured Apple Ads ad account, optionally limited to one app ID.",
+      inputSchema: { appId: z.string().min(1).optional() },
+      outputSchema: { campaigns: z.array(AppleAdsCampaignSchema) },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ appId }) => {
+      try {
+        const campaigns = await service.listAppleAdsCampaigns(appId);
+        return {
+          structuredContent: { campaigns },
+          content: [{ type: "text", text: `Found ${campaigns.length} Apple Ads campaign${campaigns.length === 1 ? "" : "s"}.` }],
+        };
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_apple_ads_ad_groups",
+    {
+      title: "List Apple Ads ad groups",
+      description: "List ad groups and Search Match state for one exact Apple Ads campaign ID.",
+      inputSchema: { campaignId: z.string().min(1) },
+      outputSchema: { adGroups: z.array(AppleAdsAdGroupSchema) },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ campaignId }) => {
+      try {
+        const adGroups = await service.listAppleAdsAdGroups(campaignId);
+        return {
+          structuredContent: { adGroups },
+          content: [{ type: "text", text: `Found ${adGroups.length} Apple Ads ad group${adGroups.length === 1 ? "" : "s"}.` }],
+        };
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_apple_ads_keywords",
+    {
+      title: "List Apple Ads keywords",
+      description: "List keywords, match types, bids, and delivery state for one exact campaign or ad group ID.",
+      inputSchema: {
+        campaignId: z.string().min(1).optional(),
+        adGroupId: z.string().min(1).optional(),
+      },
+      outputSchema: { keywords: z.array(AppleAdsKeywordSchema) },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ campaignId, adGroupId }) => {
+      try {
+        const keywords = await service.listAppleAdsKeywords({
+          ...(campaignId ? { campaignId } : {}),
+          ...(adGroupId ? { adGroupId } : {}),
+        });
+        return {
+          structuredContent: { keywords },
+          content: [{ type: "text", text: `Found ${keywords.length} Apple Ads keyword${keywords.length === 1 ? "" : "s"}.` }],
+        };
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_apple_ads_campaign_report",
+    {
+      title: "Get Apple Ads campaign report",
+      description: "Read spend, impressions, taps, installs, and unit costs for one campaign and date range.",
+      inputSchema: AppleAdsCampaignReportInputSchema.innerType().shape,
+      outputSchema: { report: AppleAdsCampaignMetricsSchema },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    },
+    async (input) => {
+      try {
+        const report = await service.getAppleAdsCampaignReport(AppleAdsCampaignReportInputSchema.parse(input));
+        return {
+          structuredContent: { report },
+          content: [{ type: "text", text: `${report.name}: ${report.impressions} impressions, ${report.taps} taps, ${report.totalInstalls} total installs.` }],
         };
       } catch (error) {
         return errorResult(error);

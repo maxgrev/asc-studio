@@ -1,6 +1,14 @@
 import type {
   AddBuildToGroupInput,
   AgentStatus,
+  AppleAdsAdGroup,
+  AppleAdsCampaign,
+  AppleAdsCampaignMetrics,
+  AppleAdsCampaignReportInput,
+  AppleAdsKeyword,
+  AppleAdsKeywordResearchInput,
+  AppleAdsKeywordResearchResult,
+  AppleAdsStatus,
   AppStorePlatform,
   AppStoreVersion,
   AppSummary,
@@ -20,7 +28,7 @@ import type {
   VersionSubmissionResult,
   VersionSubmissionStatus,
 } from "@asc-studio/contracts";
-import type { ApplyScreenshotChangesInput, AppListOptions, AscProvider, BuildListOptions, VersionListOptions } from "@asc-studio/core";
+import type { AppleAdsProvider, ApplyScreenshotChangesInput, AppListOptions, AscProvider, BuildListOptions, VersionListOptions } from "@asc-studio/core";
 
 const orbitNotes: AppSummary = {
   id: "demo-app-orbit-notes",
@@ -37,6 +45,101 @@ const fieldLog: AppSummary = {
 };
 
 const apps = [orbitNotes, fieldLog];
+
+const demoCampaigns: AppleAdsCampaign[] = [
+  {
+    id: "demo-ads-campaign-brand",
+    adAccountId: "demo-ads-account",
+    name: "Orbit Notes · Brand",
+    promotedObjectId: orbitNotes.id,
+    status: "ENABLED",
+    systemStatus: "RUNNING",
+    displayStatus: "RUNNING",
+    startTime: "2026-07-01T00:00:00.000",
+    endTime: null,
+    dailyBudget: { amount: "35.00", currency: "USD" },
+    countriesOrRegions: ["US"],
+    supplyPlacements: ["APPSTORE_SEARCH_RESULTS"],
+    bidStrategyType: "MANUAL_CPT",
+    deleted: false,
+    modificationTime: "2026-08-15T18:00:00.000Z",
+  },
+  {
+    id: "demo-ads-campaign-discovery",
+    adAccountId: "demo-ads-account",
+    name: "Orbit Notes · Discovery",
+    promotedObjectId: orbitNotes.id,
+    status: "PAUSED",
+    systemStatus: "NOT_RUNNING",
+    displayStatus: "PAUSED",
+    startTime: "2026-07-01T00:00:00.000",
+    endTime: null,
+    dailyBudget: { amount: "20.00", currency: "USD" },
+    countriesOrRegions: ["US", "CA"],
+    supplyPlacements: ["APPSTORE_SEARCH_RESULTS"],
+    bidStrategyType: "MANUAL_CPT",
+    deleted: false,
+    modificationTime: "2026-08-14T09:30:00.000Z",
+  },
+];
+
+const demoAdGroups: AppleAdsAdGroup[] = [
+  {
+    id: "demo-ads-group-brand-exact",
+    campaignId: "demo-ads-campaign-brand",
+    name: "Brand exact",
+    status: "ENABLED",
+    systemStatus: "RUNNING",
+    displayStatus: "RUNNING",
+    automatedKeywordsOptIn: false,
+    bid: { amount: "1.25", currency: "USD" },
+    startTime: "2026-07-01T00:00:00.000",
+    endTime: null,
+    deleted: false,
+    modificationTime: "2026-08-15T18:00:00.000Z",
+  },
+  {
+    id: "demo-ads-group-search-match",
+    campaignId: "demo-ads-campaign-discovery",
+    name: "Search Match",
+    status: "PAUSED",
+    systemStatus: "NOT_RUNNING",
+    displayStatus: "PAUSED",
+    automatedKeywordsOptIn: true,
+    bid: { amount: "0.85", currency: "USD" },
+    startTime: "2026-07-01T00:00:00.000",
+    endTime: null,
+    deleted: false,
+    modificationTime: "2026-08-14T09:30:00.000Z",
+  },
+];
+
+const demoKeywords: AppleAdsKeyword[] = [
+  {
+    id: "demo-ads-keyword-orbit-notes",
+    campaignId: "demo-ads-campaign-brand",
+    adGroupId: "demo-ads-group-brand-exact",
+    text: "orbit notes",
+    matchType: "EXACT",
+    bid: { amount: "1.25", currency: "USD" },
+    status: "ENABLED",
+    displayStatus: "RUNNING",
+    deleted: false,
+    modificationTime: "2026-08-15T18:00:00.000Z",
+  },
+  {
+    id: "demo-ads-keyword-notes-app",
+    campaignId: "demo-ads-campaign-brand",
+    adGroupId: "demo-ads-group-brand-exact",
+    text: "notes app",
+    matchType: "EXACT",
+    bid: { amount: "1.55", currency: "USD" },
+    status: "ENABLED",
+    displayStatus: "RUNNING",
+    deleted: false,
+    modificationTime: "2026-08-15T18:00:00.000Z",
+  },
+];
 
 const groupsByApp = new Map<string, TesterGroup[]>([
   [orbitNotes.id, [
@@ -268,7 +371,7 @@ const screenshotSnapshot = (asset: ScreenshotAsset): ScreenshotAssetSnapshot => 
   sortOrder: asset.sortOrder,
 });
 
-export class MockAscProvider implements AscProvider {
+export class MockAscProvider implements AscProvider, AppleAdsProvider {
   private readonly attachedBuildIds = new Map<string, string>();
   private readonly submissions = new Map<string, VersionSubmissionStatus>();
 
@@ -281,6 +384,91 @@ export class MockAscProvider implements AscProvider {
       profile: "Demo workspace",
       authBackend: "isolated demo data",
       detail: "Demo mode is isolated and never calls App Store Connect.",
+    };
+  }
+
+  async getAppleAdsStatus(): Promise<AppleAdsStatus> {
+    return {
+      mode: "demo",
+      configured: true,
+      connected: true,
+      provider: "demo",
+      adAccountId: "demo-ads-account",
+      detail: "Demo Apple Ads data is isolated and never calls Apple.",
+    };
+  }
+
+  async researchAppleAdsKeywords(input: AppleAdsKeywordResearchInput): Promise<AppleAdsKeywordResearchResult> {
+    const base = [
+      { text: "notes app", suggestionPopularity: 82, searchPopularity: 88, searchPopularityInGenre: 94, rankInGenre: 3, searchPopularityTier: 5 },
+      { text: "note taking", suggestionPopularity: 77, searchPopularity: 84, searchPopularityInGenre: 90, rankInGenre: 5, searchPopularityTier: 5 },
+      { text: "task manager", suggestionPopularity: 66, searchPopularity: 91, searchPopularityInGenre: 96, rankInGenre: 1, searchPopularityTier: 5 },
+      { text: "daily planner", suggestionPopularity: 71, searchPopularity: 79, searchPopularityInGenre: 83, rankInGenre: 8, searchPopularityTier: 4 },
+      { text: "markdown notes", suggestionPopularity: 73, searchPopularity: 61, searchPopularityInGenre: 72, rankInGenre: 24, searchPopularityTier: 3 },
+    ];
+    const byText = new Map(base.map((item) => [item.text, item]));
+    for (const [index, seed] of input.seedTerms.entries()) {
+      const text = seed.trim().toLocaleLowerCase("en-US");
+      if (!byText.has(text)) {
+        byText.set(text, {
+          text,
+          suggestionPopularity: Math.max(45, 65 - index),
+          searchPopularity: 50,
+          searchPopularityInGenre: 55,
+          rankInGenre: 40 + index,
+          searchPopularityTier: 3,
+        });
+      }
+    }
+    const keywords = [...byText.values()]
+      .map((item) => ({
+        ...item,
+        source: "both" as const,
+        opportunityScore: Math.round(item.searchPopularity * 0.55 + item.searchPopularityInGenre * 0.2 + item.suggestionPopularity * 0.25),
+      }))
+      .sort((left, right) => right.opportunityScore - left.opportunityScore)
+      .slice(0, input.limit);
+    return {
+      appId: input.appId,
+      countryOrRegion: input.countryOrRegion,
+      genre: input.genre,
+      start: input.start,
+      end: input.end,
+      granularity: input.granularity,
+      keywords,
+      note: "Demo opportunity scores use sample Apple popularity and app-suggestion signals. No keyword difficulty is inferred.",
+    };
+  }
+
+  async listAppleAdsCampaigns(appId?: string) {
+    return structuredClone(appId ? demoCampaigns.filter((campaign) => campaign.promotedObjectId === appId) : demoCampaigns);
+  }
+
+  async listAppleAdsAdGroups(campaignId: string) {
+    return structuredClone(demoAdGroups.filter((adGroup) => adGroup.campaignId === campaignId));
+  }
+
+  async listAppleAdsKeywords(input: { campaignId?: string; adGroupId?: string }) {
+    return structuredClone(demoKeywords.filter((keyword) => (
+      (!input.campaignId || keyword.campaignId === input.campaignId)
+      && (!input.adGroupId || keyword.adGroupId === input.adGroupId)
+    )));
+  }
+
+  async getAppleAdsCampaignReport(input: AppleAdsCampaignReportInput): Promise<AppleAdsCampaignMetrics> {
+    const campaign = demoCampaigns.find((candidate) => candidate.id === input.campaignId);
+    if (!campaign) throw new Error(`Apple Ads campaign ${input.campaignId} was not found.`);
+    return {
+      campaignId: campaign.id,
+      name: campaign.name,
+      localSpend: { amount: "412.80", currency: "USD" },
+      impressions: 48_320,
+      taps: 3_214,
+      tapThroughRate: 0.0665,
+      tapInstalls: 1_844,
+      totalInstalls: 1_973,
+      averageCostPerTap: { amount: "0.13", currency: "USD" },
+      averageCostPerAcquisition: { amount: "0.22", currency: "USD" },
     };
   }
 
