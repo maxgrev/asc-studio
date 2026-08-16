@@ -1,0 +1,33 @@
+{
+  "data": [
+    {
+      "type": "betaGroups",
+      "id": "group-team",
+      "attributes": {
+        "name": "Team",
+        "createdDate": "2026-01-01T00:00:00Z",
+        "isInternalGroup": true,
+        "hasAccessToAllBuilds": false
+      }
+    },
+    {
+      "type": "betaGroups",
+      "id": "group-external",
+      "attributes": {
+        "name": "Early Access",
+        "publicLinkEnabled": true,
+        "publicLink": "https://testflight.apple.com/join/example"
+      }
+    },
+    {
+      "type": "betaGroups",
+      "id": "group-empty",
+      "attributes": {
+        "name": "No Builds Yet"
+      }
+    }
+  ],
+  "links": {
+    "self": "https://api.appstoreconnect.apple.com/v1/apps/1234567890/betaGroups"
+  }
+}

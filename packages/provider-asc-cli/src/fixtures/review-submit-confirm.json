@@ -1,0 +1,16 @@
+{
+  "appId": "1234567890",
+  "version": "2.5.0",
+  "versionId": "version-250",
+  "buildId": "build-204",
+  "platform": "IOS",
+  "submissionId": "review-submission-250",
+  "submittedDate": "2026-07-31T19:05:00Z",
+  "buildAttachment": {
+    "versionId": "version-250",
+    "buildId": "build-204",
+    "currentBuildId": "build-200",
+    "attached": true
+  },
+  "messages": ["Attached build and submitted version."]
+}

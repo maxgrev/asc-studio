@@ -1,0 +1,85 @@
+{
+  "versionLocalizationId": "localization-en-US",
+  "sets": [
+    {
+      "set": {
+        "type": "appScreenshotSets",
+        "id": "set-iphone-en-US",
+        "attributes": { "screenshotDisplayType": "APP_IPHONE_67" },
+        "relationships": {
+          "appScreenshots": {
+            "links": { "related": "https://api.appstoreconnect.apple.com/v1/appScreenshotSets/set-iphone-en-US/appScreenshots" }
+          }
+        },
+        "links": { "self": "https://api.appstoreconnect.apple.com/v1/appScreenshotSets/set-iphone-en-US" }
+      },
+      "screenshots": [
+        {
+          "type": "appScreenshots",
+          "id": "screenshot-editor",
+          "attributes": {
+            "fileSize": 0,
+            "fileName": "01-editor.png",
+            "sourceFileChecksum": "317897e59ec76dd91ba4ae09134e00b3",
+            "imageAsset": {
+              "templateUrl": "https://is1-ssl.mzstatic.com/image/thumb/01-editor/{w}x{h}bb.{f}",
+              "width": 1290,
+              "height": 2796
+            },
+            "assetToken": "fixture-editor",
+            "assetType": "SortedScreenShot",
+            "assetDeliveryState": { "state": "COMPLETE", "errors": [], "warnings": [] }
+          },
+          "links": { "self": "https://api.appstoreconnect.apple.com/v1/appScreenshots/screenshot-editor" }
+        },
+        {
+          "type": "appScreenshots",
+          "id": "screenshot-search",
+          "attributes": {
+            "fileSize": 1400000,
+            "fileName": "02-search.png",
+            "sourceFileChecksum": "apple-checksum-search",
+            "imageAsset": {
+              "templateUrl": "https://is1-ssl.mzstatic.com/image/thumb/02-search/{w}x{h}bb.{f}",
+              "width": 1290,
+              "height": 2796
+            },
+            "assetDeliveryState": { "state": "COMPLETE", "errors": [], "warnings": [] }
+          },
+          "links": { "self": "https://api.appstoreconnect.apple.com/v1/appScreenshots/screenshot-search" }
+        }
+      ]
+    },
+    {
+      "set": {
+        "type": "appScreenshotSets",
+        "id": "set-mac-en-US",
+        "attributes": { "screenshotDisplayType": "APP_DESKTOP" },
+        "relationships": {
+          "appScreenshots": {
+            "links": { "related": "https://api.appstoreconnect.apple.com/v1/appScreenshotSets/set-mac-en-US/appScreenshots" }
+          }
+        },
+        "links": { "self": "https://api.appstoreconnect.apple.com/v1/appScreenshotSets/set-mac-en-US" }
+      },
+      "screenshots": [
+        {
+          "type": "appScreenshots",
+          "id": "screenshot-mac-editor",
+          "attributes": {
+            "fileSize": 0,
+            "fileName": "01-mac-editor.png",
+            "sourceFileChecksum": "apple-checksum-mac",
+            "imageAsset": {
+              "templateUrl": "https://is1-ssl.mzstatic.com/image/thumb/mac-editor/{w}x{h}bb.{f}",
+              "width": 2880,
+              "height": 1800
+            },
+            "assetDeliveryState": { "state": "COMPLETE" }
+          },
+          "links": { "self": "https://api.appstoreconnect.apple.com/v1/appScreenshots/screenshot-mac-editor" }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "data": [
+    {
+      "type": "appStoreVersions",
+      "id": "version-250",
+      "attributes": {
+        "platform": "IOS",
+        "versionString": "2.5.0",
+        "appStoreState": "PREPARE_FOR_SUBMISSION",
+        "copyright": "2026 Northstar Labs",
+        "createdDate": "2026-07-31T18:00:00Z",
+        "releaseType": "MANUAL"
+      },
+      "links": { "self": "https://api.appstoreconnect.apple.com/v1/appStoreVersions/version-250" }
+    },
+    {
+      "type": "appStoreVersions",
+      "id": "version-240",
+      "attributes": {
+        "platform": "IOS",
+        "versionString": "2.4.0",
+        "appStoreState": "READY_FOR_DISTRIBUTION",
+        "createdDate": "2026-06-20T18:00:00Z",
+        "releaseType": "MANUAL"
+      },
+      "links": { "self": "https://api.appstoreconnect.apple.com/v1/appStoreVersions/version-240" }
+    },
+    {
+      "type": "appStoreVersions",
+      "id": "version-mac-310",
+      "attributes": {
+        "platform": "MAC_OS",
+        "versionString": "3.1.0",
+        "appStoreState": "PREPARE_FOR_SUBMISSION",
+        "copyright": "2026 Northstar Labs",
+        "createdDate": "2026-07-30T18:00:00Z",
+        "releaseType": "MANUAL"
+      },
+      "links": { "self": "https://api.appstoreconnect.apple.com/v1/appStoreVersions/version-mac-310" }
+    }
+  ],
+  "links": { "self": "https://api.appstoreconnect.apple.com/v1/apps/1234567890/appStoreVersions" }
+}

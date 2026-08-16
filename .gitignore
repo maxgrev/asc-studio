@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.asc-studio/
+.DS_Store
+coverage/
+*.log
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.p8
+*.p12
+*.pem
+*.key
+*.mobileprovision

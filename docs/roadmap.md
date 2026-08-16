@@ -1,0 +1,108 @@
+# Roadmap
+
+ASC Studio should grow by complete, auditable workflows. A long list of thin API wrappers would be easy to ship and hard to trust.
+
+## 0.1 — TestFlight control room — complete
+
+- Detect `asc`, profile state, and provider mode
+- List apps, builds, processing state, expiry, and groups
+- Search and filter builds
+- Plan, review, and add a build to a tester group
+- Store a local audit record
+- Expose read-only MCP tools
+- Keep demo and live data separate
+
+## 0.2 — Release workspace — complete
+
+- Select an app without restarting the local agent
+- Create a new editable App Store version
+- Carry stable metadata forward while leaving What's New empty
+- Pull version localizations
+- Edit promotional text, keywords, and What's New
+- Show locale-aware diffs and field limits
+- Reject expired plans, profile changes, and stale Apple data
+- Run structured `asc validate` readiness checks
+- Add read-only version and localization MCP tools
+- Keep demo and live writes on the same reviewed mutation path
+
+## 0.3 — Guarded App Review submission — complete
+
+- Select a ready, unexpired build that matches the version and platform
+- Run `asc review submit --dry-run` before creating a local plan
+- Include validation counts, current build attachment, and exact target IDs in the review
+- Re-read the profile, version, build, validation report, and dry-run result before confirmation
+- Attach the chosen build and submit through one confirmed `asc` workflow
+- Read submission status in the GUI, API, and read-only MCP server
+- Serve the built GUI and live agent through one loopback-only local command
+
+## 0.4 — Assisted release copy — complete
+
+- Use a local-agent BYOK path instead of implying that ChatGPT subscription billing covers API calls
+- Translate What’s New from one source locale into selected locale drafts
+- Translate promotional text only when the user includes it
+- Keep keywords out of translation requests and preserve every locale's current keywords
+- Validate model output against strict field, locale, and App Store length limits
+- Keep demo translation local and deterministic
+
+## 0.5 — Release screenshots — complete
+
+- Read screenshot sets for one version localization and device type at a time
+- Support iOS, macOS, tvOS, and visionOS screenshot device sets
+- Check file type, dimensions, transparency, size, order, and the ten-file limit before planning
+- Add screenshots, remove selected screenshots, or replace a full set
+- Show exact uploads and removals, then re-read Apple state before confirmation
+- Expose screenshot sets through the read-only MCP server
+
+## Next — Submission train
+
+- Add a glossary and a separate locale-specific keyword research workflow
+- Add description and support/marketing URL editing
+- App Review details and attachments
+- App preview videos with upload progress and processed-state checks
+- Cancel and release controls
+- Long-running jobs with persisted events, cancellation, and recovery
+- Webhook intake plus polling reconciliation
+
+## 0.6 — Monetization
+
+- IAPs, subscriptions, groups, offers, prices, territory availability, and review assets
+- Version-aware IAP and subscription metadata
+- Purchasing-power-parity plans with exact territory diffs
+- StoreKit configuration export and test checks
+
+## 0.7 — Distribution
+
+- Bundle IDs, capabilities, certificates, profiles, and devices
+- Profile regeneration after capability changes
+- CSR and private-key custody rules
+- A local Mac worker for archive, sign, export, upload, and dSYM jobs
+
+## 0.8 — Store growth
+
+- In-App Events
+- Custom product pages and experiments
+- Promoted purchases and offers
+- Customer reviews and responses
+- Product-page asset reuse and experiment workflows
+
+## 1.0 — Open operator platform
+
+- Packaged desktop app
+- Revisit managed sign-in if a supported product and billing path fits a standalone open-source app
+- Public MCP service with OAuth 2.1 and tenant authorization
+- Durable queues and remote Mac workers
+- Stable provider and tool contracts
+- Signed releases, SBOMs, and a compatibility matrix
+
+## Explicit web-only boundaries
+
+The public Apple API does not cover every App Store task. The product must label these gaps instead of pretending a private endpoint is stable:
+
+- Initial app record creation
+- Developer ID certificate creation
+- APNs service-key creation and one-time key download
+- Privacy Nutrition Label answers
+- Resolution Center and App Review message threads
+- Some Account Holder agreements, tax, and banking work
+
+Web-only adapters, if added, will live behind a separate capability and review policy. They will never masquerade as public API support.

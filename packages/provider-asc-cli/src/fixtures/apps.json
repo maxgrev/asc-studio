@@ -1,0 +1,35 @@
+{
+  "data": [
+    {
+      "type": "apps",
+      "id": "1234567890",
+      "attributes": {
+        "name": "Orbit Notes",
+        "bundleId": "com.example.orbitnotes",
+        "sku": "ORBIT_NOTES",
+        "primaryLocale": "en-US"
+      },
+      "links": {
+        "self": "https://api.appstoreconnect.apple.com/v1/apps/1234567890"
+      }
+    },
+    {
+      "type": "apps",
+      "id": "9876543210",
+      "attributes": {
+        "name": "Field Log",
+        "bundleId": "com.example.fieldlog",
+        "sku": "FIELD_LOG"
+      }
+    }
+  ],
+  "links": {
+    "self": "https://api.appstoreconnect.apple.com/v1/apps"
+  },
+  "meta": {
+    "paging": {
+      "total": 2,
+      "limit": 200
+    }
+  }
+}
