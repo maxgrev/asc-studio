@@ -1,11 +1,11 @@
 # ADR 0001: Use one local control plane
 
-Status: accepted for the first release
+Status: accepted; provider and credential parts superseded by [ADR 0002](0002-direct-app-store-connect-api.md)
 Date: 2026-07-31
 
 ## Context
 
-ASC Studio needs a full GUI, MCP tools, long App Store jobs, local credentials, clear confirmation, and an audit record. If the GUI and MCP server call `asc` on their own, they can race, apply different safety rules, and record different histories.
+ASC Studio needs a full GUI, MCP tools, long App Store jobs, local credentials, clear confirmation, and an audit record. If the GUI and MCP server call a provider on their own, they can race, apply different safety rules, and record different histories.
 
 The App Store Connect API also has state-dependent writes and long async work. Upload, processing, TestFlight review, and App Review cannot be treated as one request and one response.
 
@@ -17,10 +17,10 @@ The code follows these dependency rules:
 
 - `contracts` owns shared schemas.
 - `core` owns use cases, risk classes, plans, confirmation, and provider ports.
-- Provider packages implement those ports and translate stable domain input into allowlisted `asc` argument arrays.
+- Provider packages implement those ports and translate stable domain input into typed Apple API requests.
 - Apps compose the packages. Browser code cannot import Node, SQLite, or provider code.
 
-`asc` owns App Store Connect credentials. ASC Studio stores only profile names, operation plans, safe summaries, and output digests. It does not copy API keys or `.p8` files into its database.
+The direct provider owns App Store Connect authentication. ASC Studio keeps private keys outside its database, plans, audit summaries, and browser state.
 
 ## Mutation policy
 
@@ -64,7 +64,7 @@ Costs:
 
 - The local agent must manage lifecycle and version compatibility.
 - SQLite and loopback HTTP add work compared with a browser-only app.
-- `asc` JSON output needs fixtures and fail-closed compatibility tests.
+- Apple's API responses and upload state machines need fixtures and fail-closed compatibility tests.
 
 ## Next decisions
 
@@ -72,4 +72,4 @@ Costs:
 - Desktop packaging: Electron first or Tauri with a Node sidecar
 - Public MCP OAuth and tenant boundaries
 - A supported managed-sign-in and billing path for a packaged open-source app, if one becomes suitable
-- Provider compatibility policy and release matrix
+- Apple API compatibility policy and release matrix

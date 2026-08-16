@@ -4,7 +4,7 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 
 ## 0.1 — TestFlight control room — complete
 
-- Detect `asc`, profile state, and provider mode
+- Detect connection state and provider mode
 - List apps, builds, processing state, expiry, and groups
 - Search and filter builds
 - Plan, review, and add a build to a tester group
@@ -21,17 +21,17 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Edit promotional text, keywords, and What's New
 - Show locale-aware diffs and field limits
 - Reject expired plans, profile changes, and stale Apple data
-- Run structured `asc validate` readiness checks
+- Run structured submission-readiness checks
 - Add read-only version and localization MCP tools
 - Keep demo and live writes on the same reviewed mutation path
 
 ## 0.3 — Guarded App Review submission — complete
 
 - Select a ready, unexpired build that matches the version and platform
-- Run `asc review submit --dry-run` before creating a local plan
+- Preview build attachment and review submission before creating a local plan
 - Include validation counts, current build attachment, and exact target IDs in the review
-- Re-read the profile, version, build, validation report, and dry-run result before confirmation
-- Attach the chosen build and submit through one confirmed `asc` workflow
+- Re-read the connection, version, build, validation report, and preview before confirmation
+- Attach the chosen build and submit through one confirmed workflow
 - Read submission status in the GUI, API, and read-only MCP server
 - Serve the built GUI and live agent through one loopback-only local command
 
@@ -53,8 +53,19 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Show exact uploads and removals, then re-read Apple state before confirmation
 - Expose screenshot sets through the read-only MCP server
 
+## 0.6 — Direct Apple API provider — complete
+
+- Remove the external `asc` CLI runtime and version pin
+- Sign short-lived Apple JWTs in the local agent
+- Connect and validate an API key inside the GUI
+- Store imported credentials outside SQLite with owner-only permissions
+- Port apps, versions, localizations, builds, groups, screenshots, and review submissions
+- Follow Apple's signed screenshot upload operations and processed-state checks
+- Keep demo and live providers behind the same core ports
+
 ## Next — Submission train
 
+- Direct IPA/PKG upload through Apple's Build Uploads resources, with a local picker and progress
 - Add a glossary and a separate locale-specific keyword research workflow
 - Add description and support/marketing URL editing
 - App Review details and attachments
@@ -63,21 +74,21 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Long-running jobs with persisted events, cancellation, and recovery
 - Webhook intake plus polling reconciliation
 
-## 0.6 — Monetization
+## 0.7 — Monetization
 
 - IAPs, subscriptions, groups, offers, prices, territory availability, and review assets
 - Version-aware IAP and subscription metadata
 - Purchasing-power-parity plans with exact territory diffs
 - StoreKit configuration export and test checks
 
-## 0.7 — Distribution
+## 0.8 — Distribution
 
 - Bundle IDs, capabilities, certificates, profiles, and devices
 - Profile regeneration after capability changes
 - CSR and private-key custody rules
 - A local Mac worker for archive, sign, export, upload, and dSYM jobs
 
-## 0.8 — Store growth
+## 0.9 — Store growth
 
 - In-App Events
 - Custom product pages and experiments

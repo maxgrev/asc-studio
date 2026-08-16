@@ -26,14 +26,8 @@ export const LocalizationEditor = ({ baseline, draft, hasSavedDraft, onSave, onR
   }, [draft]);
 
   const issues = useMemo(() => {
-    const next = metadataIssues(form);
-    for (const field of ["promotionalText", "keywords"] as const) {
-      if (baseline[field] && !form[field]) {
-        next.push({ field, message: "Replace this value instead of clearing it; asc 1.4.2 cannot clear this field safely." });
-      }
-    }
-    return next;
-  }, [baseline, form]);
+    return metadataIssues(form);
+  }, [form]);
   const issueFor = (field: MetadataField) => issues.find((issue) => issue.field === field)?.message;
   const dirty = !draftMatches(form, draft);
 

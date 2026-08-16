@@ -126,8 +126,7 @@ class FakeAscProvider implements AscProvider {
     return {
       mode: "demo",
       connected: true,
-      ascAvailable: true,
-      cliVersion: null,
+      provider: "demo",
       profile: null,
       authBackend: null,
       detail: "Core test provider",

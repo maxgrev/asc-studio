@@ -42,13 +42,25 @@ export const AgentModeSchema = z.enum(["live", "demo"]);
 export const AgentStatusSchema = z.object({
   mode: AgentModeSchema,
   connected: z.boolean(),
-  ascAvailable: z.boolean(),
-  cliVersion: z.string().nullable(),
+  provider: z.enum(["app-store-connect-api", "demo"]),
   profile: z.string().nullable(),
   authBackend: z.string().nullable(),
   detail: z.string(),
 });
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
+
+export const AppStoreConnectCredentialsInputSchema = z.object({
+  profileName: z.string().trim().min(1).max(80),
+  issuerId: z.string().trim().min(1).max(128),
+  keyId: z.string().trim().regex(/^[A-Z0-9]{8,32}$/, "Use the key ID shown in App Store Connect."),
+  privateKey: z.string().min(1).max(16_384),
+}).strict();
+export type AppStoreConnectCredentialsInput = z.infer<typeof AppStoreConnectCredentialsInputSchema>;
+
+export const AppStoreConnectConnectionResponseSchema = z.object({
+  status: AgentStatusSchema,
+}).strict();
+export type AppStoreConnectConnectionResponse = z.infer<typeof AppStoreConnectConnectionResponseSchema>;
 
 export const AppStorePlatformSchema = z.enum(["IOS", "MAC_OS", "TV_OS", "VISION_OS"]);
 export type AppStorePlatform = z.infer<typeof AppStorePlatformSchema>;
@@ -274,9 +286,9 @@ export type UpdateVersionLocalizationsInput = z.infer<typeof UpdateVersionLocali
 
 export const VersionLocalizationPatchSchema = z.object({
   locale: AppStoreLocaleSchema,
-  whatsNew: z.string().min(1).max(4_000).optional(),
-  promotionalText: z.string().min(1).max(170).optional(),
-  keywords: z.string().min(1).max(100).optional(),
+  whatsNew: z.string().max(4_000).optional(),
+  promotionalText: z.string().max(170).optional(),
+  keywords: z.string().max(100).optional(),
 }).superRefine((patch, context) => {
   if (patch.whatsNew === undefined && patch.promotionalText === undefined && patch.keywords === undefined) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "At least one field must change." });

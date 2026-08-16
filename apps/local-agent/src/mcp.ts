@@ -22,7 +22,7 @@ const errorResult = (error: unknown) => ({
 
 const createMcpServer = (service: AscStudioService) => {
   const server = new McpServer(
-    { name: "asc-studio", version: "0.4.0" },
+    { name: "asc-studio", version: "0.6.0" },
     {
       instructions:
         "Use read tools to resolve exact App Store Connect IDs before any action. This release exposes reads only through MCP; consequential changes require review in the local ASC Studio GUI.",
@@ -33,7 +33,7 @@ const createMcpServer = (service: AscStudioService) => {
     "get_asc_status",
     {
       title: "Check ASC Studio status",
-      description: "Check whether ASC Studio is using isolated demo data or a live local asc profile.",
+      description: "Check whether ASC Studio is using isolated demo data or a direct App Store Connect API connection.",
       inputSchema: {},
       outputSchema: {
         mode: z.enum(["live", "demo"]),
@@ -60,7 +60,7 @@ const createMcpServer = (service: AscStudioService) => {
     "list_apps",
     {
       title: "List App Store Connect apps",
-      description: "List apps available to the active local asc profile, including stable IDs and bundle IDs.",
+      description: "List apps available to the active App Store Connect connection, including stable IDs and bundle IDs.",
       inputSchema: {},
       outputSchema: { apps: z.array(AppSummarySchema) },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },

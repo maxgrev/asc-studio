@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   AddBuildToGroupInputSchema,
+  AppStoreConnectCredentialsInputSchema,
   AppStorePlatformSchema,
   CreateVersionInputSchema,
   GenerateReleaseCopyTranslationsInputSchema,
@@ -14,8 +15,10 @@ import {
 } from "@asc-studio/contracts";
 import type { ScreenshotDisplayType, ScreenshotUploadReceipt } from "@asc-studio/contracts";
 import { AscStudioService, DomainError } from "@asc-studio/core";
-import { CliAscProvider, MockAscProvider } from "@asc-studio/provider-asc-cli";
+import { AppStoreConnectApiError, AppStoreConnectProvider } from "@asc-studio/provider-app-store-connect";
+import { MockAscProvider } from "@asc-studio/provider-demo";
 import { z } from "zod";
+import { AppStoreConnectCredentialStore } from "./credentials.js";
 import { handleMcpRequest } from "./mcp.js";
 import { SqlitePlanStore } from "./store.js";
 import { createReleaseCopyTranslator, TranslationProviderError } from "./translation.js";
@@ -57,7 +60,6 @@ const domainStatus = (code: string) => {
     "build_app_mismatch",
     "build_not_ready",
     "build_version_mismatch",
-    "field_clear_not_supported",
     "no_changes",
     "plan_not_confirmable",
     "plan_changed",
@@ -312,16 +314,14 @@ const isTrustedOrigin = (value: string | undefined) => {
   }
 };
 
-const resolveProvider = async () => {
+const credentialStore = new AppStoreConnectCredentialStore(dataDirectory);
+
+const resolveProvider = () => {
   if (mode === "demo") return new MockAscProvider();
-  const live = new CliAscProvider({
-    ...(process.env.ASC_STUDIO_ASC_BIN ? { binary: process.env.ASC_STUDIO_ASC_BIN } : {}),
-    ...(process.env.ASC_STUDIO_PROFILE ? { profile: process.env.ASC_STUDIO_PROFILE } : {}),
+  return new AppStoreConnectProvider({
+    credentials: () => credentialStore.load(),
     uploadDirectory: screenshotUploadsDirectory,
   });
-  const status = await live.getStatus();
-  if (!status.connected) throw new Error(`Live mode requested, but asc is not ready: ${status.detail}`);
-  return live;
 };
 
 const main = async () => {
@@ -330,7 +330,7 @@ const main = async () => {
     const webStats = await stat(webDirectory).catch(() => null);
     if (!webStats?.isDirectory()) throw new Error(`ASC_STUDIO_WEB_DIR is not a readable directory: ${webDirectory}`);
   }
-  const provider = await resolveProvider();
+  const provider = resolveProvider();
   const status = await provider.getStatus();
   const databaseName = status.mode === "demo" ? "demo.sqlite" : "live.sqlite";
   const store = new SqlitePlanStore(join(dataDirectory, databaseName));
@@ -390,15 +390,28 @@ const main = async () => {
         return;
       }
       if (request.method === "GET" && url.pathname === "/") {
-        json(response, 200, { name: "ASC Studio local agent", version: "0.4.0", mcp: "/mcp" });
+        json(response, 200, { name: "ASC Studio local agent", version: "0.6.0", mcp: "/mcp" });
         return;
       }
       if (request.method === "GET" && url.pathname === "/health") {
-        json(response, 200, { name: "ASC Studio local agent", version: "0.4.0", mode: status.mode, connected: status.connected });
+        json(response, 200, { name: "ASC Studio local agent", version: "0.6.0", mode: status.mode, connected: status.connected });
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/status") {
         json(response, 200, await service.getStatus());
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/connection/app-store-connect") {
+        if (mode !== "live") throw new RequestError("demo_connection", "Demo mode cannot save a live connection.", 409);
+        const input = AppStoreConnectCredentialsInputSchema.parse(await readBody(request));
+        const candidate = new AppStoreConnectProvider({
+          credentials: { ...input, authBackend: "Pending local credential file" },
+          uploadDirectory: screenshotUploadsDirectory,
+        });
+        const candidateStatus = await candidate.getStatus();
+        if (!candidateStatus.connected) throw new RequestError("connection_failed", candidateStatus.detail, 422);
+        await credentialStore.save(input);
+        json(response, 200, { status: await service.getStatus() });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/uploads/screenshots") {
@@ -625,6 +638,16 @@ const main = async () => {
       }
       if (error instanceof TranslationProviderError) {
         json(response, error.status, { error: { code: error.code, message: error.message } });
+        return;
+      }
+      if (error instanceof AppStoreConnectApiError) {
+        json(response, error.status === 429 ? 503 : 502, {
+          error: {
+            code: `app_store_connect_${error.code.toLowerCase()}`,
+            message: error.message,
+            ...(error.requestId ? { details: { requestId: error.requestId } } : {}),
+          },
+        });
         return;
       }
       if (error instanceof z.ZodError) {

@@ -65,7 +65,7 @@ export const Sidebar = ({ app, apps, status, activeSection, onAppChange, onNavig
         </button>
         {switcherOpen ? (
           <div className="app-menu" role="menu" aria-label="Available apps">
-            <div className="app-menu-label">Apps in {status?.profile ?? "this profile"}</div>
+            <div className="app-menu-label">Apps in {status?.profile ?? "this connection"}</div>
             {apps.map((candidate) => (
               <button
                 type="button"

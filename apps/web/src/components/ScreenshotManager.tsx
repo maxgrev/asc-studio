@@ -7,7 +7,7 @@ import type {
   UpdateScreenshotsMutationPlan,
   VersionLocalization,
 } from "@asc-studio/contracts";
-import { ArrowDown, ArrowUp, Image as ImageIcon, ImagePlus, Maximize2, RefreshCw, Trash2, Upload } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, Image as ImageIcon, ImagePlus, Maximize2, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../api.js";
 import { localeNames } from "../releaseMetadata.js";
@@ -80,6 +80,7 @@ export const ScreenshotManager = ({
   const optionFamilies = [...new Set(options.map((option) => option.family).filter((family): family is string => Boolean(family)))];
   const effectiveDeleteCount = strategy === "replace" ? assets.length : deleteIds.size;
   const resultCount = assets.length - effectiveDeleteCount + staged.length;
+  const availableSlots = 10 - (strategy === "replace" ? 0 : assets.length - deleteIds.size) - staged.length;
   const hasPendingChanges = staged.length > 0 || deleteIds.size > 0 || plan !== null || (strategy === "replace" && assets.length > 0);
   const controlsLocked = hasPendingChanges || uploading || busy;
   const previewIndex = previewAssetId ? assets.findIndex((asset) => asset.id === previewAssetId) : -1;
@@ -134,7 +135,6 @@ export const ScreenshotManager = ({
 
   const stageFiles = async (files: File[]) => {
     if (!version.editable || files.length === 0 || uploading) return;
-    const availableSlots = 10 - (strategy === "replace" ? 0 : assets.length - deleteIds.size) - staged.length;
     if (files.length > availableSlots) {
       setError(`This set has room for ${Math.max(availableSlots, 0)} more screenshot${availableSlots === 1 ? "" : "s"}.`);
       return;
@@ -248,12 +248,18 @@ export const ScreenshotManager = ({
         </header>
 
         <div className="screenshot-toolbar">
-          <label><span>Locale</span><select value={selectedLocalization?.id ?? ""} disabled={controlsLocked || localizations.length === 0} onChange={(event) => { setPreviewAssetId(null); setSelectedLocalizationId(event.target.value); }}>{localizations.map((localization) => <option value={localization.id} key={localization.id}>{localeNames[localization.locale]} · {localization.locale}</option>)}</select></label>
-          <label><span>Device set</span><select value={displayType} disabled={controlsLocked} onChange={(event) => { setPreviewAssetId(null); setDisplayType(event.target.value as ScreenshotDisplayType); }}>{optionFamilies.length ? optionFamilies.map((family) => <optgroup label={family} key={family}>{options.filter((option) => option.family === family).map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</optgroup>) : options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>
+          <label className="screenshot-field">
+            <span className="screenshot-field-label">Locale</span>
+            <span className="screenshot-select"><select value={selectedLocalization?.id ?? ""} disabled={controlsLocked || localizations.length === 0} onChange={(event) => { setPreviewAssetId(null); setSelectedLocalizationId(event.target.value); }}>{localizations.map((localization) => <option value={localization.id} key={localization.id}>{localeNames[localization.locale]} · {localization.locale}</option>)}</select><ChevronDown size={14} /></span>
+          </label>
+          <label className="screenshot-field">
+            <span className="screenshot-field-label">Device set</span>
+            <span className="screenshot-select"><select value={displayType} disabled={controlsLocked} onChange={(event) => { setPreviewAssetId(null); setDisplayType(event.target.value as ScreenshotDisplayType); }}>{optionFamilies.length ? optionFamilies.map((family) => <optgroup label={family} key={family}>{options.filter((option) => option.family === family).map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</optgroup>) : options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select><ChevronDown size={14} /></span>
+          </label>
           <div className="screenshot-dimension-hint"><strong>{selectedOption.label}</strong><span>{selectedOption.hint}</span></div>
           <div className="screenshot-strategy" aria-label="Upload mode">
-            <button type="button" className={strategy === "append" ? "active" : ""} disabled={busy} onClick={() => setStrategy("append")}>Add</button>
-            <button type="button" className={strategy === "replace" ? "active" : ""} disabled={busy} onClick={() => { setStrategy("replace"); setDeleteIds(new Set()); }}>Replace set</button>
+            <button type="button" className={strategy === "append" ? "active" : ""} aria-pressed={strategy === "append"} disabled={!version.editable || busy || uploading} onClick={() => setStrategy("append")}>Add</button>
+            <button type="button" className={strategy === "replace" ? "active" : ""} aria-pressed={strategy === "replace"} disabled={!version.editable || busy || uploading} onClick={() => { setStrategy("replace"); setDeleteIds(new Set()); }}>Replace set</button>
           </div>
         </div>
 
@@ -278,6 +284,7 @@ export const ScreenshotManager = ({
                         onClick={() => setPreviewAssetId(asset.id)}
                       >
                         {asset.imageUrl ? <img src={asset.imageUrl} alt="" /> : <div className={`demo-shot tone-${index % 4}`}><ImageIcon size={28} /><span>{index + 1}</span></div>}
+                        <span className="screenshot-position" aria-hidden="true">{index + 1}</span>
                         <span className="screenshot-expand-cue" aria-hidden="true"><Maximize2 size={14} /></span>
                         {scheduled ? <span className="screenshot-removal">Remove</span> : null}
                       </button>
@@ -292,11 +299,11 @@ export const ScreenshotManager = ({
             )}
           </section>
 
-          <section className="screenshot-set queued-set">
-            <header><div><h3>Ready to upload</h3><p>{staged.length ? `${staged.length} staged locally · drag order is preserved` : "PNG or JPEG · no transparency · up to 10 per set"}</p></div><strong className={resultCount > 10 ? "count-invalid" : ""}>{resultCount}/10 after changes</strong></header>
-            <label className={version.editable ? "screenshot-dropzone" : "screenshot-dropzone disabled"} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void stageFiles(Array.from(event.dataTransfer.files)); }}>
-              <input type="file" accept="image/png,image/jpeg" multiple disabled={!version.editable || uploading || busy} onChange={(event) => { void stageFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} />
-              {uploading ? <><span className="spinner" /><strong>Checking and staging files…</strong></> : <><ImagePlus size={25} /><strong>Drop screenshots here or choose files</strong><span>ASC Studio checks the actual image data, dimensions, and transparency.</span></>}
+          <section className={staged.length ? "screenshot-set queued-set" : "screenshot-set queued-set empty"}>
+            <header><div><h3>Ready to upload</h3><p>{staged.length ? `${staged.length} staged locally · review the order below` : "PNG or JPEG · no transparency · up to 10 per set"}</p></div><strong className={resultCount > 10 ? "count-invalid" : ""}>{resultCount}/10 after changes</strong></header>
+            <label className={!version.editable ? "screenshot-dropzone disabled" : availableSlots <= 0 ? "screenshot-dropzone full" : "screenshot-dropzone"} aria-disabled={!version.editable || availableSlots <= 0} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (availableSlots > 0) void stageFiles(Array.from(event.dataTransfer.files)); }}>
+              <input type="file" accept="image/png,image/jpeg" multiple disabled={!version.editable || uploading || busy || availableSlots <= 0} onChange={(event) => { void stageFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} />
+              {uploading ? <><span className="spinner" /><strong>Checking and staging files…</strong></> : availableSlots <= 0 ? <><CheckCircle2 size={25} /><strong>All 10 slots are filled</strong><span>Remove a screenshot or switch to Replace set to upload a new sequence.</span></> : <><ImagePlus size={25} /><strong>Drop screenshots here or choose files</strong><span>ASC Studio checks the actual image data, dimensions, and transparency.</span></>}
             </label>
             {staged.length ? (
               <ol className="staged-screenshot-list">
@@ -316,7 +323,7 @@ export const ScreenshotManager = ({
 
         <footer className="screenshot-footer">
           <div><strong>{hasPendingChanges ? "Local screenshot changes" : "Screenshot set matches App Store Connect"}</strong><span>{hasPendingChanges ? "Review an exact plan before upload." : "Select another locale or device set to inspect it."}</span></div>
-          <button className="button primary" type="button" disabled={!version.editable || busy || uploading || resultCount > 10 || (!staged.length && !deleteIds.size && strategy !== "replace")} onClick={() => void review()}><Upload size={16} />{busy ? "Preparing plan…" : "Review changes"}</button>
+          <button className={hasPendingChanges ? "button primary" : "button secondary"} type="button" disabled={!version.editable || busy || uploading || resultCount > 10 || (!staged.length && !deleteIds.size && strategy !== "replace")} onClick={() => void review()}><Upload size={16} />{busy ? "Preparing plan…" : "Review changes"}</button>
         </footer>
       </section>
 

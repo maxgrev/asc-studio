@@ -16,7 +16,7 @@ interface RunningAgent {
   dataDirectory: string;
 }
 
-const startAgent = async (options: { serveWeb?: boolean } = {}): Promise<RunningAgent> => {
+const startAgent = async (options: { serveWeb?: boolean; mode?: "demo" | "live" } = {}): Promise<RunningAgent> => {
   const dataDirectory = await mkdtemp(join(tmpdir(), "asc-studio-agent-test-"));
   const webDirectory = join(dataDirectory, "web");
   if (options.serveWeb) {
@@ -24,11 +24,19 @@ const startAgent = async (options: { serveWeb?: boolean } = {}): Promise<Running
     await writeFile(join(webDirectory, "index.html"), '<!doctype html><div id="root">ASC Studio built GUI</div>', "utf8");
     await writeFile(join(webDirectory, "assets", "app.js"), 'document.title = "ASC Studio";', "utf8");
   }
+  const environment = { ...process.env };
+  for (const name of [
+    "ASC_STUDIO_PROFILE_NAME",
+    "ASC_STUDIO_ISSUER_ID",
+    "ASC_STUDIO_KEY_ID",
+    "ASC_STUDIO_PRIVATE_KEY",
+    "ASC_STUDIO_PRIVATE_KEY_PATH",
+  ]) delete environment[name];
   const child = spawn(process.execPath, launchArguments, {
     cwd: appRoot,
     env: {
-      ...process.env,
-      ASC_STUDIO_MODE: "demo",
+      ...environment,
+      ASC_STUDIO_MODE: options.mode ?? "demo",
       ASC_STUDIO_PORT: "0",
       ASC_STUDIO_DATA_DIR: dataDirectory,
       ASC_STUDIO_GUI_TOKEN: guiToken,
@@ -82,6 +90,26 @@ const mcpHeaders = (token: string) => ({
   ...authorization(token),
   accept: "application/json, text/event-stream",
   "content-type": "application/json",
+});
+
+describe("local-agent live connection setup", () => {
+  let agent: RunningAgent | undefined;
+
+  beforeAll(async () => { agent = await startAgent({ mode: "live" }); });
+  afterAll(async () => { await stopAgent(agent); });
+
+  it("starts without a third-party CLI or saved credentials and reports setup state", async () => {
+    const response = await fetch(`${agent!.baseUrl}/api/status`, { headers: authorization(guiToken) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      mode: "live",
+      connected: false,
+      provider: "app-store-connect-api",
+      profile: null,
+      authBackend: null,
+      detail: "Connect an App Store Connect API key before using live mode.",
+    });
+  });
 });
 
 const screenshotPng = (width: number, height: number, colorType = 2) => {

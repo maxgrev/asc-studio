@@ -1,6 +1,7 @@
 import {
   ActivityResponseSchema,
   AgentStatusSchema,
+  AppStoreConnectConnectionResponseSchema,
   ApiErrorSchema,
   AppsResponseSchema,
   BuildsResponseSchema,
@@ -18,6 +19,7 @@ import {
 } from "@asc-studio/contracts";
 import type {
   AddBuildToGroupInput,
+  AppStoreConnectCredentialsInput,
   AppStorePlatform,
   ScreenshotDisplayType,
   ScreenshotUploadReceipt,
@@ -99,6 +101,11 @@ const request = async <T>(path: string, schema: ResponseSchema<T>, options?: Req
 
 export const api = {
   status: () => request("/api/status", AgentStatusSchema),
+  connectAppStoreConnect: (input: AppStoreConnectCredentialsInput) => request(
+    "/api/connection/app-store-connect",
+    AppStoreConnectConnectionResponseSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  ),
   translationStatus: () => request("/api/translations/status", TranslationProviderStatusSchema),
   generateReleaseCopyTranslations: (input: GenerateReleaseCopyTranslationsInput) => request(
     "/api/translations/release-copy",

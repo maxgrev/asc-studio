@@ -387,17 +387,6 @@ export class AscStudioService {
       throw new DomainError("no_changes", "The draft matches App Store Connect.");
     }
 
-    for (const entry of changed) {
-      for (const field of localizationFields) {
-        if (entry.before[field] && !entry.after[field]) {
-          throw new DomainError(
-            "field_clear_not_supported",
-            `asc 1.4.2 cannot safely clear ${field} for ${entry.after.locale}; replace it with a non-empty value.`,
-          );
-        }
-      }
-    }
-
     const createdAt = this.dependencies.now();
     const expiresAt = new Date(createdAt.getTime() + 10 * 60 * 1000);
     const before = { localizations: changed.map((entry) => entry.before) };
@@ -459,7 +448,7 @@ export class AscStudioService {
       throw new DomainError("version_already_submitted", `${version.versionString} is already submitted for review.`);
     }
     if (!preview.wouldSubmit) {
-      throw new DomainError("submission_unavailable", `asc did not confirm that ${version.versionString} can be submitted.`);
+      throw new DomainError("submission_unavailable", `The Apple API did not confirm that ${version.versionString} can be submitted.`);
     }
 
     const createdAt = this.dependencies.now();
@@ -825,7 +814,7 @@ export class AscStudioService {
     }
     const profile = await this.activeProfile();
     if (profile !== plan.context.profile) {
-      throw new DomainError("workspace_changed", "The active asc profile changed. Review a fresh plan in this workspace.");
+      throw new DomainError("workspace_changed", "The active App Store Connect connection changed. Review a fresh plan in this workspace.");
     }
     return plan;
   }

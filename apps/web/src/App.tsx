@@ -1,6 +1,7 @@
 import type { AgentStatus, AppSummary } from "@asc-studio/contracts";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
+import { ConnectionSetup } from "./components/ConnectionSetup.js";
 import { ReleaseWorkspace } from "./components/ReleaseWorkspace.js";
 import { Sidebar, type WorkspaceSection } from "./components/Sidebar.js";
 import { TestFlightWorkspace } from "./components/TestFlightWorkspace.js";
@@ -19,8 +20,16 @@ export const App = () => {
   const loadShell = useCallback(async () => {
     setLoading(true);
     try {
+      const nextStatus = await api.status();
+      setStatus(nextStatus);
+      if (nextStatus.mode === "live" && !nextStatus.connected) {
+        setApps([]);
+        setSelectedAppId(null);
+        setFatalError(null);
+        return;
+      }
       const appResponse = await api.apps({ limit: initialAppLimit, paginate: false });
-      if (appResponse.apps.length === 0) throw new Error("The active asc profile does not contain any apps.");
+      if (appResponse.apps.length === 0) throw new Error("The active App Store Connect connection does not contain any apps.");
       setApps(appResponse.apps);
       setSelectedAppId((current) => current && appResponse.apps.some((app) => app.id === current)
         ? current
@@ -43,7 +52,6 @@ export const App = () => {
 
   useEffect(() => {
     void loadShell();
-    void api.status().then(setStatus).catch(() => undefined);
   }, [loadShell]);
 
   const app = apps.find((candidate) => candidate.id === selectedAppId) ?? null;
@@ -58,11 +66,16 @@ export const App = () => {
         onAppChange={setSelectedAppId}
         onNavigate={setSection}
       />
-      {fatalError || !app ? (
+      {status?.mode === "live" && !status.connected ? (
+        <ConnectionSetup status={status} onConnected={(connectedStatus) => {
+          setStatus(connectedStatus);
+          void loadShell();
+        }} />
+      ) : fatalError || !app ? (
         <main className="workspace shell-error-workspace">
           <div className="shell-error" role="alert">
             <h1>{loading ? "Loading ASC Studio" : "Could not open ASC Studio"}</h1>
-            <p>{loading ? "Reading the local agent and active App Store Connect profile." : fatalError ?? "No app is available."}</p>
+            <p>{loading ? "Reading the local agent and App Store Connect." : fatalError ?? "No app is available."}</p>
             {!loading ? <button className="button primary" type="button" onClick={() => void loadShell()}>Try again</button> : null}
           </div>
         </main>

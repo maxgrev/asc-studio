@@ -22,12 +22,14 @@ Before the first stable release, only the current `main` branch receives securit
 - The agent binds to loopback and accepts local origins only.
 - Separate, random per-launch bearer tokens protect GUI and MCP routes. An MCP token cannot confirm a GUI plan.
 - The GUI receives its token in a URL fragment, stores it for the browser session, and clears the fragment before making requests.
-- `asc` owns App Store Connect credentials.
-- Provider commands use argument arrays with `shell: false`.
+- The direct provider signs ten-minute Apple JWTs in the local agent. It never sends the `.p8` key or bearer token to browser code.
+- GUI-imported App Store Connect keys live in owner-only files under the local data folder. Environment credentials can override them for unattended runs.
+- Authorized API requests are origin-locked to App Store Connect. Apple's signed asset-upload URLs do not receive the Apple bearer token.
+- Automatic provider retries apply to reads, not mutations.
 - MCP exposes read-only tools in the first release.
 - Mutations require an expiring plan, exact digest, and stale-state check.
 - API and MCP bodies have the same 64 KiB limit.
-- Audit records store safe summaries, not credentials.
+- SQLite and audit records store safe summaries, not credentials.
 - Demo data uses a separate database and cannot call the live provider.
 - `OPENAI_API_KEY` stays in the local agent process and never reaches browser code, SQLite, or logs.
 - Release copy goes to OpenAI only after the user presses Translate. Keywords are never included in that request.

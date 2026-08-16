@@ -50,7 +50,7 @@ if (mode !== "demo" && mode !== "live") {
     console.log("");
     console.log(`GUI session URL: ${baseUrl}/#session=${encodeURIComponent(guiToken)}`);
     console.log(`MCP bearer token: ${mcpToken}`);
-    console.log(mode === "live" ? "Using the active local asc profile." : "Using isolated demo data.");
+    console.log(mode === "live" ? "Using ASC Studio's direct App Store Connect API provider." : "Using isolated demo data.");
   });
   child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
 

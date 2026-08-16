@@ -1,8 +1,0 @@
-{
-  "storageBackend": "Config File",
-  "storageLocation": "/redacted/config.json",
-  "credentials": [],
-  "environmentCredentialsProvided": true,
-  "environmentCredentialsComplete": true,
-  "environmentNote": "Environment credentials detected."
-}

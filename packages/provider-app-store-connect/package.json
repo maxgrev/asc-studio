@@ -1,6 +1,6 @@
 {
-  "name": "@asc-studio/provider-asc-cli",
-  "version": "0.4.0",
+  "name": "@asc-studio/provider-app-store-connect",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "exports": {

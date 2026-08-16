@@ -242,7 +242,7 @@ interface ReadinessDialogProps {
 }
 
 export const ReadinessDialog = ({ report, demo, busy, error, onRetry, onClose }: ReadinessDialogProps) => (
-  <DialogFrame title="Submission readiness" subtitle={demo ? "Sample results using the same validation contract." : "Live results from asc validate."} busy={busy} onClose={onClose}>
+  <DialogFrame title="Submission readiness" subtitle={demo ? "Sample results using the same validation contract." : "Live preflight results from Apple's public API."} busy={busy} onClose={onClose}>
     <div className="dialog-content readiness-content">
       {busy ? <div className="readiness-loading"><span className="spinner" />Checking App Store metadata, build, review details, and availability…</div> : report ? (
         <>
