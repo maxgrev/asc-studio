@@ -1,6 +1,7 @@
 import {
   ActivityResponseSchema,
   AgentStatusSchema,
+  AppStoreConnectAccountsResponseSchema,
   AppStoreConnectConnectionResponseSchema,
   ApiErrorSchema,
   AppsResponseSchema,
@@ -101,10 +102,21 @@ const request = async <T>(path: string, schema: ResponseSchema<T>, options?: Req
 
 export const api = {
   status: () => request("/api/status", AgentStatusSchema),
+  appleAccounts: () => request("/api/connections/app-store-connect", AppStoreConnectAccountsResponseSchema),
   connectAppStoreConnect: (input: AppStoreConnectCredentialsInput) => request(
-    "/api/connection/app-store-connect",
+    "/api/connections/app-store-connect",
     AppStoreConnectConnectionResponseSchema,
     { method: "POST", body: JSON.stringify(input) },
+  ),
+  activateAppleAccount: (connectionId: string) => request(
+    `/api/connections/app-store-connect/${encodeURIComponent(connectionId)}/activate`,
+    AppStoreConnectConnectionResponseSchema,
+    { method: "POST" },
+  ),
+  removeAppleAccount: (connectionId: string) => request(
+    `/api/connections/app-store-connect/${encodeURIComponent(connectionId)}`,
+    AppStoreConnectConnectionResponseSchema,
+    { method: "DELETE" },
   ),
   translationStatus: () => request("/api/translations/status", TranslationProviderStatusSchema),
   generateReleaseCopyTranslations: (input: GenerateReleaseCopyTranslationsInput) => request(

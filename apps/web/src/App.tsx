@@ -1,6 +1,7 @@
-import type { AgentStatus, AppSummary } from "@asc-studio/contracts";
-import { useCallback, useEffect, useState } from "react";
+import type { AgentStatus, AppStoreConnectAccount, AppSummary } from "@asc-studio/contracts";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
+import { AppleAccountDialog } from "./components/AppleAccountDialog.js";
 import { ConnectionSetup } from "./components/ConnectionSetup.js";
 import { ReleaseWorkspace } from "./components/ReleaseWorkspace.js";
 import { Sidebar, type WorkspaceSection } from "./components/Sidebar.js";
@@ -11,17 +12,24 @@ const initialAppLimit = 25;
 export const App = () => {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [apps, setApps] = useState<AppSummary[]>([]);
+  const [accounts, setAccounts] = useState<AppStoreConnectAccount[]>([]);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [section, setSection] = useState<WorkspaceSection>("releases");
   const [testFlightInspectorOpen, setTestFlightInspectorOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [fatalError, setFatalError] = useState<string | null>(null);
+  const [accountDialogOpen, setAccountDialogOpen] = useState(false);
+  const loadGeneration = useRef(0);
 
   const loadShell = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     setLoading(true);
     try {
-      const nextStatus = await api.status();
+      const [nextStatus, accountsResponse] = await Promise.all([api.status(), api.appleAccounts()]);
+      if (generation !== loadGeneration.current) return;
       setStatus(nextStatus);
+      const nextAccounts = nextStatus.mode === "live" ? accountsResponse.accounts : [];
+      setAccounts(nextAccounts);
       if (nextStatus.mode === "live" && !nextStatus.connected) {
         setApps([]);
         setSelectedAppId(null);
@@ -29,6 +37,7 @@ export const App = () => {
         return;
       }
       const appResponse = await api.apps({ limit: initialAppLimit, paginate: false });
+      if (generation !== loadGeneration.current) return;
       if (appResponse.apps.length === 0) throw new Error("The active App Store Connect connection does not contain any apps.");
       setApps(appResponse.apps);
       setSelectedAppId((current) => current && appResponse.apps.some((app) => app.id === current)
@@ -37,6 +46,7 @@ export const App = () => {
       setFatalError(null);
       void api.apps()
         .then((historyResponse) => {
+          if (generation !== loadGeneration.current) return;
           setApps(historyResponse.apps);
           setSelectedAppId((current) => current && historyResponse.apps.some((app) => app.id === current)
             ? current
@@ -44,9 +54,10 @@ export const App = () => {
         })
         .catch(() => undefined);
     } catch (error) {
+      if (generation !== loadGeneration.current) return;
       setFatalError(error instanceof Error ? error.message : "ASC Studio could not load the workspace.");
     } finally {
-      setLoading(false);
+      if (generation === loadGeneration.current) setLoading(false);
     }
   }, []);
 
@@ -56,20 +67,55 @@ export const App = () => {
 
   const app = apps.find((candidate) => candidate.id === selectedAppId) ?? null;
 
+  const refreshAfterAccountChange = async () => {
+    loadGeneration.current += 1;
+    setApps([]);
+    setSelectedAppId(null);
+    setFatalError(null);
+    await loadShell();
+  };
+
+  const switchAccount = async (connectionId: string) => {
+    if (connectionId === status?.connectionId) return;
+    loadGeneration.current += 1;
+    try {
+      await api.activateAppleAccount(connectionId);
+      await refreshAfterAccountChange();
+    } catch (error) {
+      setLoading(false);
+      throw error;
+    }
+  };
+
+  const removeAccount = async (connectionId: string) => {
+    loadGeneration.current += 1;
+    try {
+      await api.removeAppleAccount(connectionId);
+      await refreshAfterAccountChange();
+    } catch (error) {
+      setLoading(false);
+      throw error;
+    }
+  };
+
   return (
     <div className={section === "testflight" && testFlightInspectorOpen ? "app-frame with-inspector" : "app-frame"}>
       <Sidebar
         app={app}
         apps={apps}
+        accounts={accounts}
         status={status}
         activeSection={section}
         onAppChange={setSelectedAppId}
         onNavigate={setSection}
+        onAccountChange={switchAccount}
+        onAddAccount={() => setAccountDialogOpen(true)}
+        onRemoveAccount={removeAccount}
       />
       {status?.mode === "live" && !status.connected ? (
         <ConnectionSetup status={status} onConnected={(connectedStatus) => {
           setStatus(connectedStatus);
-          void loadShell();
+          void refreshAfterAccountChange();
         }} />
       ) : fatalError || !app ? (
         <main className="workspace shell-error-workspace">
@@ -80,10 +126,15 @@ export const App = () => {
           </div>
         </main>
       ) : section === "testflight" ? (
-        <TestFlightWorkspace app={app} status={status} onInspectorChange={setTestFlightInspectorOpen} key={`testflight-${app.id}`} />
+        <TestFlightWorkspace app={app} status={status} onInspectorChange={setTestFlightInspectorOpen} key={`testflight-${status?.connectionId ?? "none"}-${app.id}`} />
       ) : (
-        <ReleaseWorkspace app={app} status={status} key={`releases-${app.id}`} />
+        <ReleaseWorkspace app={app} status={status} key={`releases-${status?.connectionId ?? "none"}-${app.id}`} />
       )}
+      {accountDialogOpen ? <AppleAccountDialog onClose={() => setAccountDialogOpen(false)} onConnected={(connectedStatus) => {
+        setStatus(connectedStatus);
+        setAccountDialogOpen(false);
+        void refreshAfterAccountChange();
+      }} /> : null}
     </div>
   );
 };

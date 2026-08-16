@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, sign } from "node:crypto";
 import type { output, ZodTypeAny } from "zod";
 
 export interface AppStoreConnectCredentials {
+  connectionId?: string;
   profileName: string;
   issuerId: string;
   keyId: string;

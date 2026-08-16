@@ -67,6 +67,7 @@ class FakeAscProvider implements AscProvider {
   private submission: VersionSubmissionStatus | null = null;
   private validationBlocking = 0;
   private previewCalls = 0;
+  private connectionId = "core-test";
   private readonly versions: AppStoreVersion[] = [
     {
       id: "version-250",
@@ -127,10 +128,15 @@ class FakeAscProvider implements AscProvider {
       mode: "demo",
       connected: true,
       provider: "demo",
+      connectionId: this.connectionId,
       profile: null,
       authBackend: null,
       detail: "Core test provider",
     };
+  }
+
+  setConnectionId(connectionId: string) {
+    this.connectionId = connectionId;
   }
 
   async listApps() {
@@ -493,6 +499,20 @@ describe("AscStudioService mutation plans", () => {
 
     await expect(service.confirmAddBuildToGroupPlan(plan.id, "different-digest")).rejects.toMatchObject({
       code: "plan_changed",
+    });
+  });
+
+  it("rejects a reviewed plan after the active Apple account changes", async () => {
+    const { provider, service } = createHarness();
+    const plan = await service.createAddBuildToGroupPlan({
+      appId: "demo-app-orbit-notes",
+      buildId: "demo-build-204",
+      groupId: "demo-group-qa",
+    });
+    provider.setConnectionId("another-account");
+
+    await expect(service.confirmAddBuildToGroupPlan(plan.id, plan.digest)).rejects.toMatchObject({
+      code: "workspace_changed",
     });
   });
 

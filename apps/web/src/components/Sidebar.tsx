@@ -1,4 +1,4 @@
-import type { AgentStatus, AppSummary } from "@asc-studio/contracts";
+import type { AgentStatus, AppStoreConnectAccount, AppSummary } from "@asc-studio/contracts";
 import {
   Activity,
   AppWindow,
@@ -11,8 +11,11 @@ import {
   Gauge,
   Globe2,
   Orbit,
+  Plus,
   Send,
   Star,
+  Trash2,
+  UserRound,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -32,14 +35,59 @@ const navigation = [
 interface SidebarProps {
   app: AppSummary | null;
   apps: AppSummary[];
+  accounts: AppStoreConnectAccount[];
   status: AgentStatus | null;
   activeSection: WorkspaceSection;
   onAppChange: (appId: string) => void;
   onNavigate: (section: WorkspaceSection) => void;
+  onAccountChange: (connectionId: string) => Promise<void>;
+  onAddAccount: () => void;
+  onRemoveAccount: (connectionId: string) => Promise<void>;
 }
 
-export const Sidebar = ({ app, apps, status, activeSection, onAppChange, onNavigate }: SidebarProps) => {
+export const Sidebar = ({
+  app,
+  apps,
+  accounts,
+  status,
+  activeSection,
+  onAppChange,
+  onNavigate,
+  onAccountChange,
+  onAddAccount,
+  onRemoveAccount,
+}: SidebarProps) => {
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [accountBusy, setAccountBusy] = useState<string | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
+
+  const switchAccount = async (connectionId: string) => {
+    setAccountBusy(connectionId);
+    setAccountError(null);
+    try {
+      await onAccountChange(connectionId);
+      setAccountMenuOpen(false);
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : "ASC Studio could not switch accounts.");
+    } finally {
+      setAccountBusy(null);
+    }
+  };
+
+  const removeAccount = async (account: AppStoreConnectAccount) => {
+    if (!window.confirm(`Remove “${account.profileName}” from this Mac? The saved private key will be deleted.`)) return;
+    setAccountBusy(account.id);
+    setAccountError(null);
+    try {
+      await onRemoveAccount(account.id);
+      setAccountMenuOpen(false);
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : "ASC Studio could not remove the account.");
+    } finally {
+      setAccountBusy(null);
+    }
+  };
 
   return (
     <aside className="sidebar" aria-label="Primary navigation">
@@ -113,15 +161,68 @@ export const Sidebar = ({ app, apps, status, activeSection, onAppChange, onNavig
         })}
       </nav>
 
-      <div className="connection-block">
-        <div className="connection-icon"><BadgeDollarSign size={22} /></div>
-        <div>
-          <div className="connection-title">App Store Connect</div>
-          <div className={`connection-state ${status?.connected ? "online" : "offline"}`}>
-            <span className="state-dot" />
-            {status?.mode === "demo" ? "Demo workspace" : status?.connected ? status.profile ?? "Connected" : "Disconnected"}
+      <div className="account-switcher-wrap">
+        <button
+          className="connection-block"
+          type="button"
+          disabled={status?.mode !== "live" || accounts.length === 0}
+          aria-label={status?.mode === "live" ? "Choose Apple account" : "Demo workspace"}
+          aria-expanded={accountMenuOpen}
+          onClick={() => setAccountMenuOpen((open) => !open)}
+        >
+          <div className="connection-icon"><BadgeDollarSign size={22} /></div>
+          <div className="connection-copy">
+            <div className="connection-title">App Store Connect</div>
+            <div className={`connection-state ${status?.connected ? "online" : "offline"}`}>
+              <span className="state-dot" />
+              {status?.mode === "demo" ? "Demo workspace" : status?.connected ? status.profile ?? "Connected" : "Disconnected"}
+            </div>
           </div>
-        </div>
+          {status?.mode === "live" && accounts.length > 0
+            ? <ChevronDown className={accountMenuOpen ? "switcher-chevron open" : "switcher-chevron"} size={16} />
+            : null}
+        </button>
+        {accountMenuOpen && status?.mode === "live" ? (
+          <div className="account-menu" role="menu" aria-label="Apple accounts">
+            <div className="app-menu-label">Apple accounts</div>
+            {accounts.map((account) => (
+              <div className="account-menu-row" key={account.id}>
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={account.active}
+                  className={account.active ? "account-menu-item selected" : "account-menu-item"}
+                  disabled={accountBusy !== null}
+                  onClick={() => void switchAccount(account.id)}
+                >
+                  <span className="account-avatar"><UserRound size={16} /></span>
+                  <span><strong>{account.profileName}</strong><small>{account.source === "environment" ? "Environment variables" : `Key ${account.keyId}`}</small></span>
+                  {account.active ? <Check size={16} /> : null}
+                </button>
+                {account.source === "local" ? (
+                  <button
+                    className="account-remove"
+                    type="button"
+                    aria-label={`Remove ${account.profileName}`}
+                    disabled={accountBusy !== null}
+                    onClick={() => void removeAccount(account)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                ) : null}
+              </div>
+            ))}
+            {accountError ? <p className="account-menu-error" role="alert">{accountError}</p> : null}
+            {accounts.every((account) => account.source === "local") ? (
+              <button className="account-add" type="button" role="menuitem" onClick={() => {
+                setAccountMenuOpen(false);
+                onAddAccount();
+              }}>
+                <Plus size={16} /> Add Apple account
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </aside>
   );

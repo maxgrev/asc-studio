@@ -18,7 +18,7 @@ import { AscStudioService, DomainError } from "@asc-studio/core";
 import { AppStoreConnectApiError, AppStoreConnectProvider } from "@asc-studio/provider-app-store-connect";
 import { MockAscProvider } from "@asc-studio/provider-demo";
 import { z } from "zod";
-import { AppStoreConnectCredentialStore } from "./credentials.js";
+import { AppStoreConnectCredentialStore, CredentialStoreError } from "./credentials.js";
 import { handleMcpRequest } from "./mcp.js";
 import { SqlitePlanStore } from "./store.js";
 import { createReleaseCopyTranslator, TranslationProviderError } from "./translation.js";
@@ -50,6 +50,57 @@ class RequestError extends Error {
   constructor(readonly code: string, message: string, readonly status: number) {
     super(message);
     this.name = "RequestError";
+  }
+}
+
+class AsyncReadWriteLock {
+  private readers = 0;
+  private writer = false;
+  private readonly queue: Array<{ mode: "read" | "write"; resolve: (release: () => void) => void }> = [];
+
+  acquireRead() {
+    return this.acquire("read");
+  }
+
+  acquireWrite() {
+    return this.acquire("write");
+  }
+
+  private acquire(mode: "read" | "write"): Promise<() => void> {
+    return new Promise((resolve) => {
+      this.queue.push({ mode, resolve });
+      this.dispatch();
+    });
+  }
+
+  private dispatch() {
+    if (this.writer || this.readers > 0 && this.queue[0]?.mode === "write") return;
+    if (this.queue[0]?.mode === "write") {
+      const entry = this.queue.shift()!;
+      this.writer = true;
+      entry.resolve(this.releaseOnce(() => {
+        this.writer = false;
+        this.dispatch();
+      }));
+      return;
+    }
+    while (this.queue[0]?.mode === "read" && !this.writer) {
+      const entry = this.queue.shift()!;
+      this.readers += 1;
+      entry.resolve(this.releaseOnce(() => {
+        this.readers -= 1;
+        this.dispatch();
+      }));
+    }
+  }
+
+  private releaseOnce(release: () => void) {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      release();
+    };
   }
 }
 
@@ -315,6 +366,7 @@ const isTrustedOrigin = (value: string | undefined) => {
 };
 
 const credentialStore = new AppStoreConnectCredentialStore(dataDirectory);
+const accountLock = new AsyncReadWriteLock();
 
 const resolveProvider = () => {
   if (mode === "demo") return new MockAscProvider();
@@ -353,6 +405,7 @@ const main = async () => {
       return;
     }
 
+    let releaseAccountLock: (() => void) | null = null;
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
       const authorization = requestAuthorization(request);
@@ -366,6 +419,21 @@ const main = async () => {
       if ((isApiRequest && !authorization.gui) || (isMcpRequest && !authorization.mcp) || (acceptsEitherToken && !authorization.gui && !authorization.mcp)) {
         unauthorized(response);
         return;
+      }
+
+      if (mode === "live" && (isApiRequest || isMcpRequest)) {
+        const changesActiveAccount = (
+          request.method === "POST"
+          && (
+            url.pathname === "/api/connection/app-store-connect"
+            || url.pathname === "/api/connections/app-store-connect"
+            || /^\/api\/connections\/app-store-connect\/[^/]+\/activate$/.test(url.pathname)
+          )
+        ) || (
+          request.method === "DELETE"
+          && /^\/api\/connections\/app-store-connect\/[^/]+$/.test(url.pathname)
+        );
+        releaseAccountLock = await (changesActiveAccount ? accountLock.acquireWrite() : accountLock.acquireRead());
       }
 
       if (isApiRequest || isMcpRequest) {
@@ -401,17 +469,45 @@ const main = async () => {
         json(response, 200, await service.getStatus());
         return;
       }
-      if (request.method === "POST" && url.pathname === "/api/connection/app-store-connect") {
+      if (request.method === "GET" && url.pathname === "/api/connections/app-store-connect") {
+        json(response, 200, { accounts: mode === "live" ? await credentialStore.list() : [] });
+        return;
+      }
+      if (
+        request.method === "POST"
+        && ["/api/connection/app-store-connect", "/api/connections/app-store-connect"].includes(url.pathname)
+      ) {
         if (mode !== "live") throw new RequestError("demo_connection", "Demo mode cannot save a live connection.", 409);
         const input = AppStoreConnectCredentialsInputSchema.parse(await readBody(request));
         const candidate = new AppStoreConnectProvider({
-          credentials: { ...input, authBackend: "Pending local credential file" },
+          credentials: { ...input, connectionId: "pending", authBackend: "Pending local credential file" },
           uploadDirectory: screenshotUploadsDirectory,
         });
         const candidateStatus = await candidate.getStatus();
         if (!candidateStatus.connected) throw new RequestError("connection_failed", candidateStatus.detail, 422);
         await credentialStore.save(input);
-        json(response, 200, { status: await service.getStatus() });
+        json(response, 200, { status: await service.getStatus(), accounts: await credentialStore.list() });
+        return;
+      }
+      const activateConnectionMatch = url.pathname.match(/^\/api\/connections\/app-store-connect\/([^/]+)\/activate$/);
+      if (request.method === "POST" && activateConnectionMatch?.[1]) {
+        if (mode !== "live") throw new RequestError("demo_connection", "Demo mode has no Apple accounts to switch.", 409);
+        const connectionId = decodeURIComponent(activateConnectionMatch[1]);
+        const candidate = new AppStoreConnectProvider({
+          credentials: await credentialStore.loadConnection(connectionId),
+          uploadDirectory: screenshotUploadsDirectory,
+        });
+        const nextStatus = await candidate.getStatus();
+        if (!nextStatus.connected) throw new RequestError("connection_failed", nextStatus.detail, 422);
+        await credentialStore.activate(connectionId);
+        json(response, 200, { status: nextStatus, accounts: await credentialStore.list() });
+        return;
+      }
+      const removeConnectionMatch = url.pathname.match(/^\/api\/connections\/app-store-connect\/([^/]+)$/);
+      if (request.method === "DELETE" && removeConnectionMatch?.[1]) {
+        if (mode !== "live") throw new RequestError("demo_connection", "Demo mode has no Apple accounts to remove.", 409);
+        await credentialStore.remove(decodeURIComponent(removeConnectionMatch[1]));
+        json(response, 200, { status: await service.getStatus(), accounts: await credentialStore.list() });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/uploads/screenshots") {
@@ -632,6 +728,10 @@ const main = async () => {
         json(response, error.status, { error: { code: error.code, message: error.message } });
         return;
       }
+      if (error instanceof CredentialStoreError) {
+        json(response, error.status, { error: { code: error.code, message: error.message } });
+        return;
+      }
       if (error instanceof DomainError) {
         json(response, domainStatus(error.code), { error: { code: error.code, message: error.message } });
         return;
@@ -656,6 +756,8 @@ const main = async () => {
       }
       console.error(error);
       json(response, 500, { error: { code: "internal_error", message: "ASC Studio failed to complete the request." } });
+    } finally {
+      releaseAccountLock?.();
     }
   });
 

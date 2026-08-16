@@ -54,9 +54,9 @@ Open the `GUI session URL` printed in the terminal. On the first live launch, AS
 3. Copy its issuer ID and key ID.
 4. Choose the downloaded `AuthKey_….p8` file and press **Connect securely**.
 
-ASC Studio checks the key with Apple before saving it. The key and its small metadata file live under `.asc-studio/credentials/` with owner-only permissions. Plans and audit events live in SQLite under `.asc-studio/`; neither the database nor logs contain the private key.
+ASC Studio checks the key with Apple before saving it. To add another team, open the Apple account menu at the bottom of the sidebar and choose **Add Apple account**. The same menu switches accounts and removes saved keys. Switching accounts reloads the app list, and any write plan reviewed under another account fails closed.
 
-The saved connection remains available on later launches. You do not need to pass it again when building or starting the app.
+Saved keys and their small metadata file live under `.asc-studio/credentials/` with owner-only permissions. Plans and audit events live in SQLite under `.asc-studio/`; neither the database nor logs contain private keys. Saved accounts remain available on later launches.
 
 For unattended local runs, environment credentials override the saved GUI connection:
 
@@ -67,6 +67,8 @@ ASC_STUDIO_KEY_ID="KEY_ID" \
 ASC_STUDIO_PRIVATE_KEY_PATH="/absolute/path/to/AuthKey.p8" \
 npm run local
 ```
+
+While environment credentials are active, ASC Studio shows that account as environment-managed and disables adding or removing GUI accounts.
 
 `npm run local` builds the React app and serves it from the loopback-only agent at `http://127.0.0.1:8787`. Stop it with `Ctrl+C`.
 
@@ -181,4 +183,4 @@ The provider creates ten-minute ES256 JWTs, sends typed JSON:API requests only t
 
 ## Open source
 
-ASC Studio uses the Apache-2.0 license for its explicit patent grant. Contributions use Developer Certificate of Origin sign-off instead of a CLA. Read [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) before opening a change.
+ASC Studio is licensed under the GNU General Public License v3.0 only (`GPL-3.0-only`). Contributions use Developer Certificate of Origin sign-off instead of a CLA. Read [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) before opening a change.
