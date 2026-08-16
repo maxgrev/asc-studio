@@ -80,7 +80,9 @@ describe("AppStoreConnectProvider direct transport", () => {
             uploadedDate: "2026-08-16T10:00:00Z",
             processingState: "VALID",
             expired: false,
-            computedMinMacOsVersion: "15.0",
+            computedMinMacOsVersion: null,
+            computedMinVisionOsVersion: null,
+            lsMinimumSystemVersion: "15.0",
           },
           relationships: {
             preReleaseVersion: { data: { type: "preReleaseVersions", id: "pre-310" } },

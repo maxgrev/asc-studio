@@ -3,6 +3,7 @@ import { readFile, rmdir, stat, unlink } from "node:fs/promises";
 import { basename, join, relative, resolve, sep } from "node:path";
 import {
   AppStoreLocaleSchema,
+  AppStorePlatformSchema,
   type AddBuildToGroupInput,
   type AgentStatus,
   type AppStorePlatform,
@@ -178,12 +179,23 @@ const positiveIntegerValue = (value: unknown) => {
   return parsed !== null && parsed > 0 ? parsed : null;
 };
 
-const normalizeGroup = (resource: BetaGroupResource): TesterGroup => ({
-  id: resource.id,
-  name: resource.attributes.name,
-  testerCount: null,
-  internal: resource.attributes.isInternalGroup ?? false,
-});
+const booleanValue = (value: unknown) => typeof value === "boolean" ? value : null;
+
+const requiredStringValue = (value: unknown, field: string) => {
+  const parsed = stringValue(value);
+  if (parsed === null) throw new Error(`App Store Connect returned a resource without a valid ${field}.`);
+  return parsed;
+};
+
+const normalizeGroup = (resource: BetaGroupResource): TesterGroup => {
+  const attributes = resource.attributes ?? {};
+  return {
+    id: resource.id,
+    name: requiredStringValue(attributes.name, "beta group name"),
+    testerCount: null,
+    internal: booleanValue(attributes.isInternalGroup) ?? false,
+  };
+};
 
 const normalizeLocalization = (resource: LocalizationResource, versionId: string): VersionLocalization => {
   const locale = AppStoreLocaleSchema.safeParse(resource.attributes.locale);
@@ -870,32 +882,35 @@ export class AppStoreConnectProvider implements AscProvider {
     prereleases: Map<string, PreReleaseVersionResource>,
     groups: Map<string, TesterGroup>,
   ): BuildSummary {
+    const attributes = resource.attributes ?? {};
     const prereleaseId = relationshipId(resource, "preReleaseVersion");
     const prerelease = prereleaseId ? prereleases.get(prereleaseId) : null;
     if (!prerelease) throw new Error(`App Store Connect omitted pre-release version data for build ${resource.id}.`);
-    const expired = resource.attributes.expired ?? false;
-    const processing = processingFor(resource.attributes.processingState, expired);
+    const prereleaseAttributes = prerelease.attributes ?? {};
+    const platform = AppStorePlatformSchema.safeParse(prereleaseAttributes.platform);
+    if (!platform.success) throw new Error(`App Store Connect returned an unsupported platform for build ${resource.id}.`);
+    const expired = booleanValue(attributes.expired) ?? false;
+    const processing = processingFor(requiredStringValue(attributes.processingState, "build processing state"), expired);
     const assignedGroups = relationshipIds(resource, "betaGroups").flatMap((id) => groups.get(id) ?? []);
+    const encryption = booleanValue(attributes.usesNonExemptEncryption);
     return {
       id: resource.id,
       appId,
-      buildNumber: resource.attributes.version,
-      version: prerelease.attributes.version,
-      uploadedAt: resource.attributes.uploadedDate,
+      buildNumber: requiredStringValue(attributes.version, "build number"),
+      version: requiredStringValue(prereleaseAttributes.version, "pre-release version"),
+      uploadedAt: requiredStringValue(attributes.uploadedDate, "build upload date"),
       processingStatus: processing.status,
       processingTone: processing.tone,
       testingStatus: assignedGroups.some((group) => !group.internal) ? "External" : assignedGroups.length ? "Internal" : "Not assigned",
-      expiresAt: resource.attributes.expirationDate ?? null,
+      expiresAt: stringValue(attributes.expirationDate),
       expired,
-      platform: prerelease.attributes.platform,
+      platform: platform.data,
       sdk: null,
-      minimumOs: resource.attributes.minOsVersion
-        ?? resource.attributes.computedMinMacOsVersion
-        ?? resource.attributes.computedMinVisionOsVersion
-        ?? null,
-      encryption: resource.attributes.usesNonExemptEncryption === undefined
-        ? null
-        : resource.attributes.usesNonExemptEncryption ? "Yes" : "No",
+      minimumOs: stringValue(attributes.minOsVersion)
+        ?? stringValue(attributes.lsMinimumSystemVersion)
+        ?? stringValue(attributes.computedMinMacOsVersion)
+        ?? stringValue(attributes.computedMinVisionOsVersion),
+      encryption: encryption === null ? null : encryption ? "Yes" : "No",
       groups: assignedGroups,
     };
   }

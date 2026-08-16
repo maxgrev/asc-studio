@@ -95,22 +95,12 @@ export const ScreenshotResponseSchema = single(ScreenshotResourceSchema);
 export const PreReleaseVersionResourceSchema = z.object({
   ...resourceBase,
   type: z.literal("preReleaseVersions"),
-  attributes: z.object({ version: z.string().min(1), platform: PlatformSchema }).passthrough(),
+  attributes: z.record(z.unknown()).optional(),
 }).passthrough();
 export const BuildResourceSchema = z.object({
   ...resourceBase,
   type: z.literal("builds"),
-  attributes: z.object({
-    version: z.string().min(1),
-    uploadedDate: z.string().min(1),
-    expirationDate: z.string().optional(),
-    expired: z.boolean().optional(),
-    minOsVersion: z.string().optional(),
-    computedMinMacOsVersion: z.string().optional(),
-    computedMinVisionOsVersion: z.string().optional(),
-    processingState: z.string().min(1),
-    usesNonExemptEncryption: z.boolean().optional(),
-  }).passthrough(),
+  attributes: z.record(z.unknown()).optional(),
 }).passthrough();
 export const BuildsPageSchema = page(BuildResourceSchema);
 export const BuildResponseSchema = single(BuildResourceSchema);
@@ -118,10 +108,7 @@ export const BuildResponseSchema = single(BuildResourceSchema);
 export const BetaGroupResourceSchema = z.object({
   ...resourceBase,
   type: z.literal("betaGroups"),
-  attributes: z.object({
-    name: z.string().min(1),
-    isInternalGroup: z.boolean().optional(),
-  }).passthrough(),
+  attributes: z.record(z.unknown()).optional(),
 }).passthrough();
 export const BetaGroupsPageSchema = page(BetaGroupResourceSchema);
 
