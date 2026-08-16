@@ -255,10 +255,10 @@ export class AscStudioService {
     input: AddBuildToGroupInput,
     actor: AuditEvent["actor"],
   ): Promise<MutationPlan> {
-    const [build, groups, profile] = await Promise.all([
+    const [build, groups, context] = await Promise.all([
       this.dependencies.provider.getBuild(input.appId, input.buildId),
       this.dependencies.provider.listGroups(input.appId),
-      this.activeProfile(),
+      this.activeContext(),
     ]);
     const group = groups.find((candidate) => candidate.id === input.groupId);
     if (!group) {
@@ -281,7 +281,7 @@ export class AscStudioService {
     };
     const planWithoutDigest = {
       operation: "build.add_to_group" as const,
-      context: { profile },
+      context,
       target,
       before: { groupIds: beforeGroupIds },
       after: { groupIds: sortedUnique([...beforeGroupIds, group.id]) },
@@ -306,9 +306,9 @@ export class AscStudioService {
     input: CreateVersionInput,
     actor: AuditEvent["actor"],
   ): Promise<MutationPlan> {
-    const [versions, profile] = await Promise.all([
+    const [versions, context] = await Promise.all([
       this.dependencies.provider.listVersions(input.appId, input.platform),
-      this.activeProfile(),
+      this.activeContext(),
     ]);
     if (versions.some((version) => version.versionString === input.versionString)) {
       throw new DomainError("version_exists", `${input.versionString} already exists for ${input.platform}.`);
@@ -338,7 +338,7 @@ export class AscStudioService {
     };
     const planWithoutDigest = {
       operation: "version.create" as const,
-      context: { profile },
+      context,
       target,
       before: { versionId: null },
       after,
@@ -364,10 +364,10 @@ export class AscStudioService {
     input: UpdateVersionLocalizationsInput,
     actor: AuditEvent["actor"],
   ): Promise<MutationPlan> {
-    const [version, current, profile] = await Promise.all([
+    const [version, current, context] = await Promise.all([
       this.requireVersion(input.appId, input.versionId),
       this.dependencies.provider.listVersionLocalizations(input.versionId),
-      this.activeProfile(),
+      this.activeContext(),
     ]);
     if (!version.editable) {
       throw new DomainError("version_not_editable", `${version.versionString} is not editable in its current state.`);
@@ -401,7 +401,7 @@ export class AscStudioService {
     };
     const planWithoutDigest = {
       operation: "version.update_localizations" as const,
-      context: { profile },
+      context,
       target,
       before,
       after,
@@ -426,10 +426,10 @@ export class AscStudioService {
     input: SubmitVersionInput,
     actor: AuditEvent["actor"],
   ): Promise<MutationPlan> {
-    const [version, build, profile] = await Promise.all([
+    const [version, build, context] = await Promise.all([
       this.requireVersion(input.appId, input.versionId),
       this.dependencies.provider.getBuild(input.appId, input.buildId),
-      this.activeProfile(),
+      this.activeContext(),
     ]);
     if (!version.editable) {
       throw new DomainError("version_not_editable", `${version.versionString} is not editable in its current state.`);
@@ -477,7 +477,7 @@ export class AscStudioService {
     };
     const planWithoutDigest = {
       operation: "version.submit" as const,
-      context: { profile },
+      context,
       target,
       before,
       after,
@@ -503,10 +503,10 @@ export class AscStudioService {
     input: UpdateScreenshotSetInput,
     actor: AuditEvent["actor"],
   ): Promise<MutationPlan> {
-    const [version, localizations, profile] = await Promise.all([
+    const [version, localizations, context] = await Promise.all([
       this.requireVersion(input.appId, input.versionId),
       this.dependencies.provider.listVersionLocalizations(input.versionId),
-      this.activeProfile(),
+      this.activeContext(),
     ]);
     if (!version.editable) {
       throw new DomainError("version_not_editable", `${version.versionString} is not editable in its current state.`);
@@ -557,7 +557,7 @@ export class AscStudioService {
     const after = { strategy: input.strategy, uploads: input.uploads, deleteIds };
     const planWithoutDigest = {
       operation: "version.update_screenshots" as const,
-      context: { profile },
+      context,
       target,
       before,
       after,
@@ -790,10 +790,10 @@ export class AscStudioService {
     return version;
   }
 
-  private async activeProfile() {
+  private async activeContext() {
     const status = await this.dependencies.provider.getStatus();
     if (!status.connected) throw new DomainError("workspace_disconnected", status.detail);
-    return status.profile;
+    return { profile: status.profile, connectionId: status.connectionId };
   }
 
   private async loadConfirmablePlan(planId: string, expectedDigest: string) {
@@ -812,8 +812,8 @@ export class AscStudioService {
       if (!claimed) throw new DomainError("plan_not_confirmable", "Another request already claimed this plan.");
       throw new DomainError("plan_expired", "The confirmation window expired. Review the change again.");
     }
-    const profile = await this.activeProfile();
-    if (profile !== plan.context.profile) {
+    const context = await this.activeContext();
+    if (context.connectionId !== plan.context.connectionId || context.profile !== plan.context.profile) {
       throw new DomainError("workspace_changed", "The active App Store Connect connection changed. Review a fresh plan in this workspace.");
     }
     return plan;

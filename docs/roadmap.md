@@ -58,6 +58,7 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Remove the external `asc` CLI runtime and version pin
 - Sign short-lived Apple JWTs in the local agent
 - Connect and validate an API key inside the GUI
+- Save, switch, and remove multiple Apple accounts
 - Store imported credentials outside SQLite with owner-only permissions
 - Port apps, versions, localizations, builds, groups, screenshots, and review submissions
 - Follow Apple's signed screenshot upload operations and processed-state checks

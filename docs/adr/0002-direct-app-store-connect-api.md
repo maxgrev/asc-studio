@@ -21,7 +21,7 @@ The local agent calls Apple's public App Store Connect REST API directly.
 - Apple error codes and request IDs cross the provider boundary in a safe form.
 - The public GUI and MCP API expose product actions, never a generic Apple request method.
 
-The GUI can import a team API key. The local agent validates it with Apple before saving the key in an owner-only file under the local data folder. Environment credentials remain available for unattended runs. Credentials never enter SQLite, audit summaries, browser storage, or logs.
+The GUI can import and switch between team API keys. The local agent validates each key with Apple before saving it in an owner-only file under the local data folder. Account changes take an exclusive lock against in-flight Apple operations, and mutation plans bind to the account ID used during review. Environment credentials remain available for unattended runs and override GUI-managed accounts. Credentials never enter SQLite, audit summaries, browser storage, or logs.
 
 ## Consequences
 

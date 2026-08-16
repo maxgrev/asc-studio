@@ -105,6 +105,7 @@ describe("local-agent live connection setup", () => {
       mode: "live",
       connected: false,
       provider: "app-store-connect-api",
+      connectionId: null,
       profile: null,
       authBackend: null,
       detail: "Connect an App Store Connect API key before using live mode.",

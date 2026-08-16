@@ -277,6 +277,7 @@ export class MockAscProvider implements AscProvider {
       mode: "demo",
       connected: true,
       provider: "demo",
+      connectionId: "demo",
       profile: "Demo workspace",
       authBackend: "isolated demo data",
       detail: "Demo mode is isolated and never calls App Store Connect.",

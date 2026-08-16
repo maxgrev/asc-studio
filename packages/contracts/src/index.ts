@@ -43,6 +43,7 @@ export const AgentStatusSchema = z.object({
   mode: AgentModeSchema,
   connected: z.boolean(),
   provider: z.enum(["app-store-connect-api", "demo"]),
+  connectionId: z.string().nullable(),
   profile: z.string().nullable(),
   authBackend: z.string().nullable(),
   detail: z.string(),
@@ -57,8 +58,23 @@ export const AppStoreConnectCredentialsInputSchema = z.object({
 }).strict();
 export type AppStoreConnectCredentialsInput = z.infer<typeof AppStoreConnectCredentialsInputSchema>;
 
+export const AppStoreConnectAccountSchema = z.object({
+  id: z.string().min(1),
+  profileName: z.string().min(1).max(80),
+  keyId: z.string().regex(/^[A-Z0-9]{8,32}$/),
+  active: z.boolean(),
+  source: z.enum(["local", "environment"]),
+}).strict();
+export type AppStoreConnectAccount = z.infer<typeof AppStoreConnectAccountSchema>;
+
+export const AppStoreConnectAccountsResponseSchema = z.object({
+  accounts: z.array(AppStoreConnectAccountSchema),
+}).strict();
+export type AppStoreConnectAccountsResponse = z.infer<typeof AppStoreConnectAccountsResponseSchema>;
+
 export const AppStoreConnectConnectionResponseSchema = z.object({
   status: AgentStatusSchema,
+  accounts: z.array(AppStoreConnectAccountSchema),
 }).strict();
 export type AppStoreConnectConnectionResponse = z.infer<typeof AppStoreConnectConnectionResponseSchema>;
 
@@ -406,6 +422,7 @@ export type VersionSubmissionStatus = z.infer<typeof VersionSubmissionStatusSche
 
 const PlanContextSchema = z.object({
   profile: z.string().nullable(),
+  connectionId: z.string().nullable().default(null),
 });
 
 const PlanBaseSchema = z.object({
