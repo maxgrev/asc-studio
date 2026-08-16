@@ -9,6 +9,9 @@ import type {
   AppleAdsKeywordResearchInput,
   AppleAdsKeywordResearchResult,
   AppleAdsStatus,
+  AppleAdsCampaignSnapshot,
+  AppleAdsAdGroupSnapshot,
+  AppleAdsKeywordSnapshot,
   AppStoreLocale,
   AppStorePlatform,
   AppStoreVersion,
@@ -16,6 +19,9 @@ import type {
   AuditEvent,
   BuildSummary,
   CreateVersionInput,
+  CreateAppleAdsAdGroupInput,
+  CreateAppleAdsCampaignInput,
+  CreateAppleAdsKeywordInput,
   LocalizationSnapshot,
   MutationPlan,
   ScreenshotAsset,
@@ -23,6 +29,8 @@ import type {
   ScreenshotDisplayType,
   ScreenshotUploadReceipt,
   SubmitVersionInput,
+  UpdateAppleAdsCampaignInput,
+  UpdateAppleAdsKeywordInput,
   TesterGroup,
   UpdateVersionLocalizationsInput,
   UpdateScreenshotSetInput,
@@ -65,8 +73,16 @@ export interface AppleAdsProvider {
   getAppleAdsStatus(): Promise<AppleAdsStatus>;
   researchAppleAdsKeywords(input: AppleAdsKeywordResearchInput): Promise<AppleAdsKeywordResearchResult>;
   listAppleAdsCampaigns(appId?: string): Promise<AppleAdsCampaign[]>;
+  getAppleAdsCampaign(campaignId: string): Promise<AppleAdsCampaign>;
+  createAppleAdsCampaign(input: CreateAppleAdsCampaignInput): Promise<AppleAdsCampaign>;
+  updateAppleAdsCampaign(input: UpdateAppleAdsCampaignInput): Promise<AppleAdsCampaign>;
   listAppleAdsAdGroups(campaignId: string): Promise<AppleAdsAdGroup[]>;
+  getAppleAdsAdGroup(adGroupId: string): Promise<AppleAdsAdGroup>;
+  createAppleAdsAdGroup(input: CreateAppleAdsAdGroupInput): Promise<AppleAdsAdGroup>;
   listAppleAdsKeywords(input: { campaignId?: string; adGroupId?: string }): Promise<AppleAdsKeyword[]>;
+  getAppleAdsKeyword(keywordId: string): Promise<AppleAdsKeyword>;
+  createAppleAdsKeyword(input: CreateAppleAdsKeywordInput): Promise<AppleAdsKeyword>;
+  updateAppleAdsKeyword(input: UpdateAppleAdsKeywordInput): Promise<AppleAdsKeyword>;
   getAppleAdsCampaignReport(input: AppleAdsCampaignReportInput): Promise<AppleAdsCampaignMetrics>;
 }
 
@@ -98,6 +114,7 @@ export interface VersionListOptions {
 export interface PlanStore {
   savePlan(plan: MutationPlan): Promise<void>;
   getPlan(id: string): Promise<MutationPlan | null>;
+  listPlans(state: MutationPlan["state"], limit: number): Promise<MutationPlan[]>;
   claimPlan(id: string, expectedState: MutationPlan["state"], next: MutationPlan): Promise<boolean>;
   appendAudit(event: Omit<AuditEvent, "sequence">): Promise<AuditEvent>;
   listAudit(limit: number): Promise<AuditEvent[]>;
@@ -179,6 +196,44 @@ const screenshotSnapshot = (asset: ScreenshotAsset): ScreenshotAssetSnapshot => 
   checksum: asset.checksum,
   state: asset.state,
   sortOrder: asset.sortOrder,
+});
+
+const appleAdsCampaignSnapshot = (campaign: AppleAdsCampaign): AppleAdsCampaignSnapshot => ({
+  id: campaign.id,
+  adAccountId: campaign.adAccountId,
+  name: campaign.name,
+  promotedObjectId: campaign.promotedObjectId,
+  status: campaign.status,
+  startTime: campaign.startTime,
+  endTime: campaign.endTime,
+  dailyBudget: campaign.dailyBudget,
+  countriesOrRegions: sortedUnique(campaign.countriesOrRegions),
+  supplyPlacements: sortedUnique(campaign.supplyPlacements),
+  bidStrategyType: campaign.bidStrategyType,
+  deleted: campaign.deleted,
+});
+
+const appleAdsAdGroupSnapshot = (adGroup: AppleAdsAdGroup): AppleAdsAdGroupSnapshot => ({
+  id: adGroup.id,
+  campaignId: adGroup.campaignId,
+  name: adGroup.name,
+  status: adGroup.status,
+  automatedKeywordsOptIn: adGroup.automatedKeywordsOptIn,
+  bid: adGroup.bid,
+  startTime: adGroup.startTime,
+  endTime: adGroup.endTime,
+  deleted: adGroup.deleted,
+});
+
+const appleAdsKeywordSnapshot = (keyword: AppleAdsKeyword): AppleAdsKeywordSnapshot => ({
+  id: keyword.id,
+  campaignId: keyword.campaignId,
+  adGroupId: keyword.adGroupId,
+  text: keyword.text,
+  matchType: keyword.matchType,
+  bid: keyword.bid,
+  status: keyword.status,
+  deleted: keyword.deleted,
 });
 
 const screenshotTypesByPlatform: Record<AppStorePlatform, ScreenshotDisplayType[]> = {
@@ -294,6 +349,10 @@ export class AscStudioService {
 
   listAudit(limit = 50) {
     return this.dependencies.store.listAudit(Math.min(Math.max(limit, 1), 200));
+  }
+
+  listPendingPlans(limit = 50) {
+    return this.dependencies.store.listPlans("awaiting_confirmation", Math.min(Math.max(limit, 1), 200));
   }
 
   async createAddBuildToGroupPlan(
@@ -626,6 +685,208 @@ export class AscStudioService {
     return plan;
   }
 
+  async createAppleAdsCampaignPlan(input: CreateAppleAdsCampaignInput, actor: AuditEvent["actor"]): Promise<MutationPlan> {
+    const [campaigns, context] = await Promise.all([
+      this.appleAdsProvider().listAppleAdsCampaigns(),
+      this.activeAppleAdsContext(),
+    ]);
+    const matchingCampaignIds = campaigns
+      .filter((campaign) => campaign.name.toLocaleLowerCase("en-US") === input.name.toLocaleLowerCase("en-US") && !campaign.deleted)
+      .map((campaign) => campaign.id);
+    if (matchingCampaignIds.length) throw new DomainError("apple_ads_campaign_exists", `A campaign named ${input.name} already exists.`);
+
+    const createdAt = this.dependencies.now();
+    const expiresAt = new Date(createdAt.getTime() + 10 * 60 * 1000);
+    const after = { ...input, countriesOrRegions: sortedUnique(input.countriesOrRegions) };
+    const target = { promotedObjectId: input.promotedObjectId, name: input.name };
+    const planWithoutDigest = {
+      operation: "apple_ads.campaign.create" as const,
+      context,
+      target,
+      before: { matchingCampaignIds },
+      after,
+      expiresAt: expiresAt.toISOString(),
+    };
+    const plan: MutationPlan = {
+      id: this.dependencies.id(),
+      ...planWithoutDigest,
+      risk: "mutation",
+      state: "awaiting_confirmation",
+      createdAt: createdAt.toISOString(),
+      digest: this.dependencies.digest(stableJson(planWithoutDigest)),
+      summary: `Create paused Apple Ads campaign ${input.name} with a ${input.dailyBudget.amount} ${input.dailyBudget.currency} daily budget`,
+      error: null,
+    };
+    await this.savePlanned(plan, actor, input.promotedObjectId);
+    return plan;
+  }
+
+  async createUpdateAppleAdsCampaignPlan(input: UpdateAppleAdsCampaignInput, actor: AuditEvent["actor"]): Promise<MutationPlan> {
+    const [campaign, campaigns, context] = await Promise.all([
+      this.appleAdsProvider().getAppleAdsCampaign(input.campaignId),
+      this.appleAdsProvider().listAppleAdsCampaigns(),
+      this.activeAppleAdsContext(),
+    ]);
+    if (campaign.deleted) throw new DomainError("apple_ads_campaign_deleted", "The selected campaign is deleted.");
+    if (input.name && campaigns.some((candidate) => candidate.id !== campaign.id && !candidate.deleted
+      && candidate.name.toLocaleLowerCase("en-US") === input.name!.toLocaleLowerCase("en-US"))) {
+      throw new DomainError("apple_ads_campaign_exists", `A campaign named ${input.name} already exists.`);
+    }
+    const before = appleAdsCampaignSnapshot(campaign);
+    const after: AppleAdsCampaignSnapshot = {
+      ...before,
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.dailyBudget === undefined ? {} : { dailyBudget: input.dailyBudget }),
+      ...(input.countriesOrRegions === undefined ? {} : { countriesOrRegions: sortedUnique(input.countriesOrRegions) }),
+      ...(input.endTime === undefined ? {} : { endTime: input.endTime }),
+      ...(input.status === undefined ? {} : { status: input.status }),
+    };
+    if (stableJson(before) === stableJson(after)) throw new DomainError("no_changes", "The campaign already has these values.");
+
+    const createdAt = this.dependencies.now();
+    const expiresAt = new Date(createdAt.getTime() + 10 * 60 * 1000);
+    const target = { campaignId: campaign.id, campaignName: campaign.name };
+    const planWithoutDigest = {
+      operation: "apple_ads.campaign.update" as const,
+      context,
+      target,
+      before,
+      after,
+      expiresAt: expiresAt.toISOString(),
+    };
+    const plan: MutationPlan = {
+      id: this.dependencies.id(),
+      ...planWithoutDigest,
+      risk: "mutation",
+      state: "awaiting_confirmation",
+      createdAt: createdAt.toISOString(),
+      digest: this.dependencies.digest(stableJson(planWithoutDigest)),
+      summary: `Update Apple Ads campaign ${campaign.name}`,
+      error: null,
+    };
+    await this.savePlanned(plan, actor, campaign.id);
+    return plan;
+  }
+
+  async createAppleAdsAdGroupPlan(input: CreateAppleAdsAdGroupInput, actor: AuditEvent["actor"]): Promise<MutationPlan> {
+    const [campaign, adGroups, context] = await Promise.all([
+      this.appleAdsProvider().getAppleAdsCampaign(input.campaignId),
+      this.appleAdsProvider().listAppleAdsAdGroups(input.campaignId),
+      this.activeAppleAdsContext(),
+    ]);
+    if (campaign.deleted) throw new DomainError("apple_ads_campaign_deleted", "The selected campaign is deleted.");
+    if (campaign.bidStrategyType !== "MANUAL_CPT") {
+      throw new DomainError("apple_ads_bid_strategy_unsupported", "This ad-group flow supports manual CPT campaigns only.");
+    }
+    const matchingAdGroupIds = adGroups
+      .filter((adGroup) => !adGroup.deleted && adGroup.name.toLocaleLowerCase("en-US") === input.name.toLocaleLowerCase("en-US"))
+      .map((adGroup) => adGroup.id);
+    if (matchingAdGroupIds.length) throw new DomainError("apple_ads_ad_group_exists", `An ad group named ${input.name} already exists in this campaign.`);
+
+    const createdAt = this.dependencies.now();
+    const expiresAt = new Date(createdAt.getTime() + 10 * 60 * 1000);
+    const target = { campaignId: campaign.id, campaignName: campaign.name, name: input.name };
+    const planWithoutDigest = {
+      operation: "apple_ads.ad_group.create" as const,
+      context,
+      target,
+      before: { campaign: appleAdsCampaignSnapshot(campaign), matchingAdGroupIds },
+      after: input,
+      expiresAt: expiresAt.toISOString(),
+    };
+    const plan: MutationPlan = {
+      id: this.dependencies.id(),
+      ...planWithoutDigest,
+      risk: "mutation",
+      state: "awaiting_confirmation",
+      createdAt: createdAt.toISOString(),
+      digest: this.dependencies.digest(stableJson(planWithoutDigest)),
+      summary: `Create paused ad group ${input.name} in ${campaign.name}`,
+      error: null,
+    };
+    await this.savePlanned(plan, actor, campaign.id);
+    return plan;
+  }
+
+  async createAppleAdsKeywordPlan(input: CreateAppleAdsKeywordInput, actor: AuditEvent["actor"]): Promise<MutationPlan> {
+    const [adGroup, keywords, context] = await Promise.all([
+      this.appleAdsProvider().getAppleAdsAdGroup(input.adGroupId),
+      this.appleAdsProvider().listAppleAdsKeywords({ adGroupId: input.adGroupId }),
+      this.activeAppleAdsContext(),
+    ]);
+    if (adGroup.deleted || adGroup.campaignId !== input.campaignId) {
+      throw new DomainError("apple_ads_ad_group_changed", "The selected ad group no longer belongs to this campaign.");
+    }
+    const matchingKeywordIds = keywords
+      .filter((keyword) => !keyword.deleted && keyword.text.toLocaleLowerCase("en-US") === input.text.toLocaleLowerCase("en-US")
+        && keyword.matchType === input.matchType)
+      .map((keyword) => keyword.id);
+    if (matchingKeywordIds.length) throw new DomainError("apple_ads_keyword_exists", `${input.text} already exists as ${input.matchType.toLowerCase()} match.`);
+
+    const createdAt = this.dependencies.now();
+    const expiresAt = new Date(createdAt.getTime() + 10 * 60 * 1000);
+    const target = { campaignId: input.campaignId, adGroupId: adGroup.id, adGroupName: adGroup.name, text: input.text };
+    const planWithoutDigest = {
+      operation: "apple_ads.keyword.create" as const,
+      context,
+      target,
+      before: { adGroup: appleAdsAdGroupSnapshot(adGroup), matchingKeywordIds },
+      after: input,
+      expiresAt: expiresAt.toISOString(),
+    };
+    const plan: MutationPlan = {
+      id: this.dependencies.id(),
+      ...planWithoutDigest,
+      risk: "mutation",
+      state: "awaiting_confirmation",
+      createdAt: createdAt.toISOString(),
+      digest: this.dependencies.digest(stableJson(planWithoutDigest)),
+      summary: `Add paused ${input.matchType.toLowerCase()} keyword ${input.text} to ${adGroup.name}`,
+      error: null,
+    };
+    await this.savePlanned(plan, actor, adGroup.id);
+    return plan;
+  }
+
+  async createUpdateAppleAdsKeywordPlan(input: UpdateAppleAdsKeywordInput, actor: AuditEvent["actor"]): Promise<MutationPlan> {
+    const [keyword, context] = await Promise.all([
+      this.appleAdsProvider().getAppleAdsKeyword(input.keywordId),
+      this.activeAppleAdsContext(),
+    ]);
+    if (keyword.deleted) throw new DomainError("apple_ads_keyword_deleted", "The selected keyword is deleted.");
+    const before = appleAdsKeywordSnapshot(keyword);
+    const after: AppleAdsKeywordSnapshot = {
+      ...before,
+      ...(input.bid === undefined ? {} : { bid: input.bid }),
+      ...(input.status === undefined ? {} : { status: input.status }),
+    };
+    if (stableJson(before) === stableJson(after)) throw new DomainError("no_changes", "The keyword already has these values.");
+
+    const createdAt = this.dependencies.now();
+    const expiresAt = new Date(createdAt.getTime() + 10 * 60 * 1000);
+    const target = { keywordId: keyword.id, text: keyword.text };
+    const planWithoutDigest = {
+      operation: "apple_ads.keyword.update" as const,
+      context,
+      target,
+      before,
+      after,
+      expiresAt: expiresAt.toISOString(),
+    };
+    const plan: MutationPlan = {
+      id: this.dependencies.id(),
+      ...planWithoutDigest,
+      risk: "mutation",
+      state: "awaiting_confirmation",
+      createdAt: createdAt.toISOString(),
+      digest: this.dependencies.digest(stableJson(planWithoutDigest)),
+      summary: `Update Apple Ads keyword ${keyword.text}`,
+      error: null,
+    };
+    await this.savePlanned(plan, actor, keyword.id);
+    return plan;
+  }
+
   async confirmPlan(
     planId: string,
     expectedDigest: string,
@@ -643,6 +904,16 @@ export class AscStudioService {
         return this.confirmUpdateScreenshotsPlan(plan, actor);
       case "version.submit":
         return this.confirmSubmitVersionPlan(plan, actor);
+      case "apple_ads.campaign.create":
+        return this.confirmCreateAppleAdsCampaignPlan(plan, actor);
+      case "apple_ads.campaign.update":
+        return this.confirmUpdateAppleAdsCampaignPlan(plan, actor);
+      case "apple_ads.ad_group.create":
+        return this.confirmCreateAppleAdsAdGroupPlan(plan, actor);
+      case "apple_ads.keyword.create":
+        return this.confirmCreateAppleAdsKeywordPlan(plan, actor);
+      case "apple_ads.keyword.update":
+        return this.confirmUpdateAppleAdsKeywordPlan(plan, actor);
     }
   }
 
@@ -813,6 +1084,107 @@ export class AscStudioService {
     });
   }
 
+  private async confirmCreateAppleAdsCampaignPlan(
+    plan: Extract<MutationPlan, { operation: "apple_ads.campaign.create" }>,
+    actor: AuditEvent["actor"],
+  ) {
+    const campaigns = await this.appleAdsProvider().listAppleAdsCampaigns();
+    const matchingCampaignIds = campaigns
+      .filter((campaign) => !campaign.deleted && campaign.name.toLocaleLowerCase("en-US") === plan.target.name.toLocaleLowerCase("en-US"))
+      .map((campaign) => campaign.id);
+    if (stableJson(matchingCampaignIds) !== stableJson(plan.before.matchingCampaignIds)) {
+      await this.markStale(plan, actor, plan.target.promotedObjectId, "A campaign with this name appeared after planning.");
+    }
+    return this.runPlan(plan, actor, plan.target.promotedObjectId, async () => {
+      await this.appleAdsProvider().createAppleAdsCampaign(plan.after);
+    });
+  }
+
+  private async confirmUpdateAppleAdsCampaignPlan(
+    plan: Extract<MutationPlan, { operation: "apple_ads.campaign.update" }>,
+    actor: AuditEvent["actor"],
+  ) {
+    const current = await this.appleAdsProvider().getAppleAdsCampaign(plan.target.campaignId);
+    if (stableJson(appleAdsCampaignSnapshot(current)) !== stableJson(plan.before)) {
+      await this.markStale(plan, actor, current.id, "The campaign changed after planning.");
+    }
+    const input: UpdateAppleAdsCampaignInput = {
+      campaignId: current.id,
+      ...(plan.before.name === plan.after.name ? {} : { name: plan.after.name }),
+      ...(stableJson(plan.before.dailyBudget) === stableJson(plan.after.dailyBudget) ? {} : { dailyBudget: plan.after.dailyBudget }),
+      ...(stableJson(plan.before.countriesOrRegions) === stableJson(plan.after.countriesOrRegions) ? {} : { countriesOrRegions: plan.after.countriesOrRegions }),
+      ...(plan.before.endTime === plan.after.endTime ? {} : { endTime: plan.after.endTime }),
+      ...(plan.before.status === plan.after.status ? {} : { status: plan.after.status as "ENABLED" | "PAUSED" }),
+    };
+    return this.runPlan(plan, actor, current.id, async () => {
+      await this.appleAdsProvider().updateAppleAdsCampaign(input);
+    });
+  }
+
+  private async confirmCreateAppleAdsAdGroupPlan(
+    plan: Extract<MutationPlan, { operation: "apple_ads.ad_group.create" }>,
+    actor: AuditEvent["actor"],
+  ) {
+    const [campaign, adGroups] = await Promise.all([
+      this.appleAdsProvider().getAppleAdsCampaign(plan.target.campaignId),
+      this.appleAdsProvider().listAppleAdsAdGroups(plan.target.campaignId),
+    ]);
+    if (stableJson(appleAdsCampaignSnapshot(campaign)) !== stableJson(plan.before.campaign)) {
+      await this.markStale(plan, actor, campaign.id, "The parent campaign changed after planning.");
+    }
+    const matchingAdGroupIds = adGroups
+      .filter((adGroup) => !adGroup.deleted && adGroup.name.toLocaleLowerCase("en-US") === plan.target.name.toLocaleLowerCase("en-US"))
+      .map((adGroup) => adGroup.id);
+    if (stableJson(matchingAdGroupIds) !== stableJson(plan.before.matchingAdGroupIds)) {
+      await this.markStale(plan, actor, campaign.id, "An ad group with this name appeared after planning.");
+    }
+    return this.runPlan(plan, actor, campaign.id, async () => {
+      await this.appleAdsProvider().createAppleAdsAdGroup(plan.after);
+    });
+  }
+
+  private async confirmCreateAppleAdsKeywordPlan(
+    plan: Extract<MutationPlan, { operation: "apple_ads.keyword.create" }>,
+    actor: AuditEvent["actor"],
+  ) {
+    const [adGroup, keywords] = await Promise.all([
+      this.appleAdsProvider().getAppleAdsAdGroup(plan.target.adGroupId),
+      this.appleAdsProvider().listAppleAdsKeywords({ adGroupId: plan.target.adGroupId }),
+    ]);
+    if (stableJson(appleAdsAdGroupSnapshot(adGroup)) !== stableJson(plan.before.adGroup)) {
+      await this.markStale(plan, actor, adGroup.id, "The ad group changed after planning.");
+    }
+    const matchingKeywordIds = keywords
+      .filter((keyword) => !keyword.deleted
+        && keyword.text.toLocaleLowerCase("en-US") === plan.target.text.toLocaleLowerCase("en-US")
+        && keyword.matchType === plan.after.matchType)
+      .map((keyword) => keyword.id);
+    if (stableJson(matchingKeywordIds) !== stableJson(plan.before.matchingKeywordIds)) {
+      await this.markStale(plan, actor, adGroup.id, "This keyword appeared after planning.");
+    }
+    return this.runPlan(plan, actor, adGroup.id, async () => {
+      await this.appleAdsProvider().createAppleAdsKeyword(plan.after);
+    });
+  }
+
+  private async confirmUpdateAppleAdsKeywordPlan(
+    plan: Extract<MutationPlan, { operation: "apple_ads.keyword.update" }>,
+    actor: AuditEvent["actor"],
+  ) {
+    const current = await this.appleAdsProvider().getAppleAdsKeyword(plan.target.keywordId);
+    if (stableJson(appleAdsKeywordSnapshot(current)) !== stableJson(plan.before)) {
+      await this.markStale(plan, actor, current.id, "The keyword changed after planning.");
+    }
+    const input: UpdateAppleAdsKeywordInput = {
+      keywordId: current.id,
+      ...(stableJson(plan.before.bid) === stableJson(plan.after.bid) || plan.after.bid === null ? {} : { bid: plan.after.bid }),
+      ...(plan.before.status === plan.after.status ? {} : { status: plan.after.status as "ENABLED" | "PAUSED" }),
+    };
+    return this.runPlan(plan, actor, current.id, async () => {
+      await this.appleAdsProvider().updateAppleAdsKeyword(input);
+    });
+  }
+
   private requireSubmissionBuild(version: AppStoreVersion, build: BuildSummary) {
     if (build.appId !== version.appId) {
       throw new DomainError("build_app_mismatch", "The selected build does not belong to this app.");
@@ -845,7 +1217,27 @@ export class AscStudioService {
   private async activeContext() {
     const status = await this.dependencies.provider.getStatus();
     if (!status.connected) throw new DomainError("workspace_disconnected", status.detail);
-    return { profile: status.profile, connectionId: status.connectionId };
+    return {
+      profile: status.profile,
+      connectionId: status.connectionId,
+      appleAdsAdAccountId: null,
+      appleAdsMode: null,
+    };
+  }
+
+  private async activeAppleAdsContext() {
+    const [context, adsStatus] = await Promise.all([
+      this.activeContext(),
+      this.appleAdsProvider().getAppleAdsStatus(),
+    ]);
+    if (!adsStatus.connected || !adsStatus.adAccountId) {
+      throw new DomainError("apple_ads_disconnected", adsStatus.detail);
+    }
+    return {
+      ...context,
+      appleAdsAdAccountId: adsStatus.adAccountId,
+      appleAdsMode: adsStatus.mode,
+    };
   }
 
   private async loadConfirmablePlan(planId: string, expectedDigest: string) {
@@ -864,9 +1256,11 @@ export class AscStudioService {
       if (!claimed) throw new DomainError("plan_not_confirmable", "Another request already claimed this plan.");
       throw new DomainError("plan_expired", "The confirmation window expired. Review the change again.");
     }
-    const context = await this.activeContext();
-    if (context.connectionId !== plan.context.connectionId || context.profile !== plan.context.profile) {
-      throw new DomainError("workspace_changed", "The active App Store Connect connection changed. Review a fresh plan in this workspace.");
+    const context = plan.operation.startsWith("apple_ads.")
+      ? await this.activeAppleAdsContext()
+      : await this.activeContext();
+    if (stableJson(context) !== stableJson(plan.context)) {
+      throw new DomainError("workspace_changed", "The active Apple workspace changed. Review a fresh plan in this workspace.");
     }
     return plan;
   }

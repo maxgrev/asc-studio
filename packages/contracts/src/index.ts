@@ -184,6 +184,83 @@ export const AppleAdsCampaignMetricsSchema = z.object({
 }).strict();
 export type AppleAdsCampaignMetrics = z.infer<typeof AppleAdsCampaignMetricsSchema>;
 
+const AppleAdsTimestampSchema = z.string().regex(
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/,
+  "Use an Apple Ads UTC timestamp such as 2026-09-01T00:00:00.000.",
+);
+const AppleAdsRunStatusSchema = z.enum(["ENABLED", "PAUSED"]);
+const AppleAdsCountrySchema = z.string().regex(/^[A-Z]{2}$/, "Use an ISO 3166-1 alpha-2 country code.");
+
+export const CreateAppleAdsCampaignInputSchema = z.object({
+  promotedObjectId: z.string().min(1),
+  name: z.string().trim().min(1).max(200),
+  dailyBudget: AppleAdsMoneySchema,
+  countriesOrRegions: z.array(AppleAdsCountrySchema).min(1).max(50),
+  startTime: AppleAdsTimestampSchema.nullable().default(null),
+  endTime: AppleAdsTimestampSchema.nullable().default(null),
+  status: z.literal("PAUSED").default("PAUSED"),
+  bidStrategyType: z.enum(["MANUAL_CPT", "MAX_CONVERSIONS"]).default("MANUAL_CPT"),
+}).strict().superRefine((input, context) => {
+  if (input.startTime && input.endTime && input.startTime >= input.endTime) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "The end time must be after the start time.", path: ["endTime"] });
+  }
+  if (new Set(input.countriesOrRegions).size !== input.countriesOrRegions.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Countries or regions must be unique.", path: ["countriesOrRegions"] });
+  }
+});
+export type CreateAppleAdsCampaignInput = z.infer<typeof CreateAppleAdsCampaignInputSchema>;
+
+export const UpdateAppleAdsCampaignInputSchema = z.object({
+  campaignId: z.string().min(1),
+  name: z.string().trim().min(1).max(200).optional(),
+  dailyBudget: AppleAdsMoneySchema.optional(),
+  countriesOrRegions: z.array(AppleAdsCountrySchema).min(1).max(50).optional(),
+  endTime: AppleAdsTimestampSchema.nullable().optional(),
+  status: AppleAdsRunStatusSchema.optional(),
+}).strict().superRefine((input, context) => {
+  if (Object.keys(input).every((key) => key === "campaignId")) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Choose at least one campaign field to update." });
+  }
+  if (input.countriesOrRegions && new Set(input.countriesOrRegions).size !== input.countriesOrRegions.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Countries or regions must be unique.", path: ["countriesOrRegions"] });
+  }
+});
+export type UpdateAppleAdsCampaignInput = z.infer<typeof UpdateAppleAdsCampaignInputSchema>;
+
+export const CreateAppleAdsAdGroupInputSchema = z.object({
+  campaignId: z.string().min(1),
+  name: z.string().trim().min(1).max(200),
+  bid: AppleAdsMoneySchema,
+  automatedKeywordsOptIn: z.boolean().default(false),
+  startTime: AppleAdsTimestampSchema.nullable().default(null),
+  endTime: AppleAdsTimestampSchema.nullable().default(null),
+  status: z.literal("PAUSED").default("PAUSED"),
+}).strict().superRefine((input, context) => {
+  if (input.startTime && input.endTime && input.startTime >= input.endTime) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "The end time must be after the start time.", path: ["endTime"] });
+  }
+});
+export type CreateAppleAdsAdGroupInput = z.infer<typeof CreateAppleAdsAdGroupInputSchema>;
+
+export const CreateAppleAdsKeywordInputSchema = z.object({
+  campaignId: z.string().min(1),
+  adGroupId: z.string().min(1),
+  text: z.string().trim().min(1).max(80),
+  matchType: z.enum(["EXACT", "BROAD"]),
+  bid: AppleAdsMoneySchema.nullable().default(null),
+  status: z.literal("PAUSED").default("PAUSED"),
+}).strict();
+export type CreateAppleAdsKeywordInput = z.infer<typeof CreateAppleAdsKeywordInputSchema>;
+
+export const UpdateAppleAdsKeywordInputSchema = z.object({
+  keywordId: z.string().min(1),
+  bid: AppleAdsMoneySchema.optional(),
+  status: AppleAdsRunStatusSchema.optional(),
+}).strict().refine((input) => input.bid !== undefined || input.status !== undefined, {
+  message: "Choose a bid or status to update.",
+});
+export type UpdateAppleAdsKeywordInput = z.infer<typeof UpdateAppleAdsKeywordInputSchema>;
+
 export const AppStoreConnectCredentialsInputSchema = z.object({
   profileName: z.string().trim().min(1).max(80),
   issuerId: z.string().trim().min(1).max(128),
@@ -557,6 +634,8 @@ export type VersionSubmissionStatus = z.infer<typeof VersionSubmissionStatusSche
 const PlanContextSchema = z.object({
   profile: z.string().nullable(),
   connectionId: z.string().nullable().default(null),
+  appleAdsAdAccountId: z.string().nullable().default(null),
+  appleAdsMode: AgentModeSchema.nullable().default(null),
 });
 
 const PlanBaseSchema = z.object({
@@ -688,12 +767,122 @@ export const SubmitVersionMutationPlanSchema = PlanBaseSchema.extend({
 });
 export type SubmitVersionMutationPlan = z.infer<typeof SubmitVersionMutationPlanSchema>;
 
+export const AppleAdsCampaignSnapshotSchema = AppleAdsCampaignSchema.pick({
+  id: true,
+  adAccountId: true,
+  name: true,
+  promotedObjectId: true,
+  status: true,
+  startTime: true,
+  endTime: true,
+  dailyBudget: true,
+  countriesOrRegions: true,
+  supplyPlacements: true,
+  bidStrategyType: true,
+  deleted: true,
+});
+export type AppleAdsCampaignSnapshot = z.infer<typeof AppleAdsCampaignSnapshotSchema>;
+
+export const AppleAdsAdGroupSnapshotSchema = AppleAdsAdGroupSchema.pick({
+  id: true,
+  campaignId: true,
+  name: true,
+  status: true,
+  automatedKeywordsOptIn: true,
+  bid: true,
+  startTime: true,
+  endTime: true,
+  deleted: true,
+});
+export type AppleAdsAdGroupSnapshot = z.infer<typeof AppleAdsAdGroupSnapshotSchema>;
+
+export const AppleAdsKeywordSnapshotSchema = AppleAdsKeywordSchema.pick({
+  id: true,
+  campaignId: true,
+  adGroupId: true,
+  text: true,
+  matchType: true,
+  bid: true,
+  status: true,
+  deleted: true,
+});
+export type AppleAdsKeywordSnapshot = z.infer<typeof AppleAdsKeywordSnapshotSchema>;
+
+export const CreateAppleAdsCampaignMutationPlanSchema = PlanBaseSchema.extend({
+  operation: z.literal("apple_ads.campaign.create"),
+  target: z.object({
+    promotedObjectId: z.string().min(1),
+    name: z.string().min(1),
+  }),
+  before: z.object({ matchingCampaignIds: z.array(z.string()) }),
+  after: CreateAppleAdsCampaignInputSchema,
+});
+export type CreateAppleAdsCampaignMutationPlan = z.infer<typeof CreateAppleAdsCampaignMutationPlanSchema>;
+
+export const UpdateAppleAdsCampaignMutationPlanSchema = PlanBaseSchema.extend({
+  operation: z.literal("apple_ads.campaign.update"),
+  target: z.object({
+    campaignId: z.string().min(1),
+    campaignName: z.string().min(1),
+  }),
+  before: AppleAdsCampaignSnapshotSchema,
+  after: AppleAdsCampaignSnapshotSchema,
+});
+export type UpdateAppleAdsCampaignMutationPlan = z.infer<typeof UpdateAppleAdsCampaignMutationPlanSchema>;
+
+export const CreateAppleAdsAdGroupMutationPlanSchema = PlanBaseSchema.extend({
+  operation: z.literal("apple_ads.ad_group.create"),
+  target: z.object({
+    campaignId: z.string().min(1),
+    campaignName: z.string().min(1),
+    name: z.string().min(1),
+  }),
+  before: z.object({
+    campaign: AppleAdsCampaignSnapshotSchema,
+    matchingAdGroupIds: z.array(z.string()),
+  }),
+  after: CreateAppleAdsAdGroupInputSchema,
+});
+export type CreateAppleAdsAdGroupMutationPlan = z.infer<typeof CreateAppleAdsAdGroupMutationPlanSchema>;
+
+export const CreateAppleAdsKeywordMutationPlanSchema = PlanBaseSchema.extend({
+  operation: z.literal("apple_ads.keyword.create"),
+  target: z.object({
+    campaignId: z.string().min(1),
+    adGroupId: z.string().min(1),
+    adGroupName: z.string().min(1),
+    text: z.string().min(1),
+  }),
+  before: z.object({
+    adGroup: AppleAdsAdGroupSnapshotSchema,
+    matchingKeywordIds: z.array(z.string()),
+  }),
+  after: CreateAppleAdsKeywordInputSchema,
+});
+export type CreateAppleAdsKeywordMutationPlan = z.infer<typeof CreateAppleAdsKeywordMutationPlanSchema>;
+
+export const UpdateAppleAdsKeywordMutationPlanSchema = PlanBaseSchema.extend({
+  operation: z.literal("apple_ads.keyword.update"),
+  target: z.object({
+    keywordId: z.string().min(1),
+    text: z.string().min(1),
+  }),
+  before: AppleAdsKeywordSnapshotSchema,
+  after: AppleAdsKeywordSnapshotSchema,
+});
+export type UpdateAppleAdsKeywordMutationPlan = z.infer<typeof UpdateAppleAdsKeywordMutationPlanSchema>;
+
 export const MutationPlanSchema = z.discriminatedUnion("operation", [
   BuildGroupMutationPlanSchema,
   CreateVersionMutationPlanSchema,
   UpdateLocalizationsMutationPlanSchema,
   UpdateScreenshotsMutationPlanSchema,
   SubmitVersionMutationPlanSchema,
+  CreateAppleAdsCampaignMutationPlanSchema,
+  UpdateAppleAdsCampaignMutationPlanSchema,
+  CreateAppleAdsAdGroupMutationPlanSchema,
+  CreateAppleAdsKeywordMutationPlanSchema,
+  UpdateAppleAdsKeywordMutationPlanSchema,
 ]);
 export type MutationPlan = z.infer<typeof MutationPlanSchema>;
 
@@ -796,6 +985,11 @@ export const PlanResponseSchema = z.object({
   plan: MutationPlanSchema,
 });
 export type PlanResponse = z.infer<typeof PlanResponseSchema>;
+
+export const PlansResponseSchema = z.object({
+  plans: z.array(MutationPlanSchema),
+});
+export type PlansResponse = z.infer<typeof PlansResponseSchema>;
 
 export const ApiErrorSchema = z.object({
   error: z.object({

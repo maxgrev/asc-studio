@@ -115,7 +115,7 @@ export class AppleAdsClient {
   }
 
   async request<Schema extends ZodTypeAny>(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PUT",
     path: string,
     schema: Schema,
     options: RequestOptions = {},

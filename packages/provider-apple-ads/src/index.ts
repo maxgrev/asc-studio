@@ -8,6 +8,11 @@ import type {
   AppleAdsKeywordResearchItem,
   AppleAdsKeywordResearchResult,
   AppleAdsStatus,
+  CreateAppleAdsAdGroupInput,
+  CreateAppleAdsCampaignInput,
+  CreateAppleAdsKeywordInput,
+  UpdateAppleAdsCampaignInput,
+  UpdateAppleAdsKeywordInput,
 } from "@asc-studio/contracts";
 import type { AppleAdsProvider } from "@asc-studio/core";
 import type { z } from "zod";
@@ -21,11 +26,14 @@ import {
 import {
   AdGroupPayloadSchema,
   AdGroupQueryResponseSchema,
+  AdGroupResponseSchema,
   CampaignPayloadSchema,
   CampaignQueryResponseSchema,
+  CampaignResponseSchema,
   CampaignReportResponseSchema,
   KeywordPayloadSchema,
   KeywordQueryResponseSchema,
+  KeywordResponseSchema,
   KeywordSuggestionResponseSchema,
   SearchTermPopularityResponseSchema,
 } from "./schemas.js";
@@ -94,6 +102,13 @@ const mapKeyword = (keyword: KeywordPayload): AppleAdsKeyword => ({
 });
 
 const pagination = (offset: number, pageSize = 1000) => ({ offset, pageSize, fetchTotalCount: true });
+
+const numericId = (value: string, label: string) => {
+  if (!/^\d+$/.test(value)) throw new Error(`${label} must be a numeric Apple Ads identifier.`);
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) throw new Error(`${label} is outside the supported integer range.`);
+  return number;
+};
 
 const scoreKeyword = (item: {
   suggestionPopularity: number | null;
@@ -175,6 +190,50 @@ export class AppleAdsPlatformProvider implements AppleAdsProvider {
     return campaigns;
   }
 
+  async getAppleAdsCampaign(campaignId: string) {
+    const response = await this.client.request("GET", `/v1/campaigns/${encodeURIComponent(campaignId)}`, CampaignResponseSchema, { retry: true });
+    return mapCampaign(response.result);
+  }
+
+  async createAppleAdsCampaign(input: CreateAppleAdsCampaignInput) {
+    const credentials = await this.client.credentials();
+    const response = await this.client.request("POST", "/v1/campaigns", CampaignResponseSchema, {
+      body: {
+        name: input.name,
+        adAccountId: numericId(credentials.adAccountId, "Ad account ID"),
+        ...(input.startTime ? { startTime: input.startTime } : {}),
+        ...(input.endTime ? { endTime: input.endTime } : {}),
+        status: input.status,
+        billingEvent: "TAPS",
+        promotedObjectType: "APPSTORE_APP",
+        promotedObjectId: input.promotedObjectId,
+        dailyBudget: { value: input.dailyBudget },
+        targeting: {
+          countryOrRegion: { include: input.countriesOrRegions },
+          supplyPlacement: { include: ["APPSTORE_SEARCH_RESULTS"] },
+        },
+        bidStrategy: {
+          bidStrategyType: input.bidStrategyType,
+          bidStrategyGoal: input.bidStrategyType === "MAX_CONVERSIONS" ? "INSTALL" : "TAP",
+        },
+      },
+    });
+    return mapCampaign(response.result);
+  }
+
+  async updateAppleAdsCampaign(input: UpdateAppleAdsCampaignInput) {
+    const response = await this.client.request("PUT", `/v1/campaigns/${encodeURIComponent(input.campaignId)}`, CampaignResponseSchema, {
+      body: {
+        ...(input.name === undefined ? {} : { name: input.name }),
+        ...(input.dailyBudget === undefined ? {} : { dailyBudget: { value: input.dailyBudget } }),
+        ...(input.countriesOrRegions === undefined ? {} : { targeting: { countryOrRegion: { include: input.countriesOrRegions } } }),
+        ...(input.endTime === undefined ? {} : { endTime: input.endTime }),
+        ...(input.status === undefined ? {} : { status: input.status }),
+      },
+    });
+    return mapCampaign(response.result);
+  }
+
   async listAppleAdsAdGroups(campaignId: string) {
     const adGroups: AppleAdsAdGroup[] = [];
     for (let offset = 0; ; offset += 1000) {
@@ -190,6 +249,31 @@ export class AppleAdsPlatformProvider implements AppleAdsProvider {
       if (response.result.length < 1000 || adGroups.length >= (response.pagination?.totalCount ?? Number.POSITIVE_INFINITY)) break;
     }
     return adGroups;
+  }
+
+  async getAppleAdsAdGroup(adGroupId: string) {
+    const response = await this.client.request("GET", `/v1/adgroups/${encodeURIComponent(adGroupId)}`, AdGroupResponseSchema, { retry: true });
+    return mapAdGroup(response.result);
+  }
+
+  async createAppleAdsAdGroup(input: CreateAppleAdsAdGroupInput) {
+    const response = await this.client.request("POST", "/v1/adgroups", AdGroupResponseSchema, {
+      body: {
+        name: input.name,
+        campaignId: numericId(input.campaignId, "Campaign ID"),
+        pricingModel: "CPT",
+        automatedKeywordsOptIn: input.automatedKeywordsOptIn,
+        status: input.status,
+        ...(input.startTime ? { startTime: input.startTime } : {}),
+        ...(input.endTime ? { endTime: input.endTime } : {}),
+        bidStrategy: {
+          bidStrategyType: "MANUAL_CPT",
+          bidStrategyGoal: "TAP",
+          bid: input.bid,
+        },
+      },
+    });
+    return mapAdGroup(response.result);
   }
 
   async listAppleAdsKeywords(input: { campaignId?: string; adGroupId?: string }) {
@@ -212,6 +296,34 @@ export class AppleAdsPlatformProvider implements AppleAdsProvider {
       if (response.result.length < 1000 || keywords.length >= (response.pagination?.totalCount ?? Number.POSITIVE_INFINITY)) break;
     }
     return keywords;
+  }
+
+  async getAppleAdsKeyword(keywordId: string) {
+    const response = await this.client.request("GET", `/v1/keywords/${encodeURIComponent(keywordId)}`, KeywordResponseSchema, { retry: true });
+    return mapKeyword(response.result);
+  }
+
+  async createAppleAdsKeyword(input: CreateAppleAdsKeywordInput) {
+    const response = await this.client.request("POST", "/v1/keywords", KeywordResponseSchema, {
+      body: {
+        adGroupId: numericId(input.adGroupId, "Ad group ID"),
+        text: input.text,
+        matchType: input.matchType,
+        ...(input.bid ? { bid: input.bid } : {}),
+        status: input.status,
+      },
+    });
+    return mapKeyword(response.result);
+  }
+
+  async updateAppleAdsKeyword(input: UpdateAppleAdsKeywordInput) {
+    const response = await this.client.request("PUT", `/v1/keywords/${encodeURIComponent(input.keywordId)}`, KeywordResponseSchema, {
+      body: {
+        ...(input.bid === undefined ? {} : { bid: input.bid }),
+        ...(input.status === undefined ? {} : { status: input.status }),
+      },
+    });
+    return mapKeyword(response.result);
   }
 
   async researchAppleAdsKeywords(input: AppleAdsKeywordResearchInput): Promise<AppleAdsKeywordResearchResult> {

@@ -19,12 +19,13 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-export type WorkspaceSection = "testflight" | "releases";
+export type WorkspaceSection = "testflight" | "releases" | "apple-ads";
 
 const navigation = [
   { label: "Overview", icon: Gauge },
   { label: "TestFlight", icon: Send, section: "testflight" as const },
   { label: "Releases", icon: ClipboardList, section: "releases" as const },
+  { label: "Apple Ads", icon: BadgeDollarSign, section: "apple-ads" as const },
   { label: "Store Listing", icon: FileText },
   { label: "Monetization", icon: CircleDollarSign },
   { label: "Distribution", icon: Globe2 },

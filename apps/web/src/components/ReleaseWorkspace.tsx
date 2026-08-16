@@ -42,6 +42,8 @@ import {
 interface ReleaseWorkspaceProps {
   app: AppSummary;
   status: AgentStatus | null;
+  suggestedKeyword?: string | null;
+  onSuggestedKeywordUsed?: () => void;
 }
 
 const emptyDrafts = new Map<AppStoreLocale, VersionLocalizationDraft>();
@@ -58,7 +60,7 @@ const versionToSelect = (
   ?? versions[0]
   ?? null;
 
-export const ReleaseWorkspace = ({ app, status }: ReleaseWorkspaceProps) => {
+export const ReleaseWorkspace = ({ app, status, suggestedKeyword, onSuggestedKeywordUsed }: ReleaseWorkspaceProps) => {
   const [selectedPlatform, setSelectedPlatform] = useState<AppStorePlatform>(
     () => releasePlatforms.find((platform) => app.platforms.includes(platform)) ?? "IOS",
   );
@@ -337,6 +339,24 @@ export const ReleaseWorkspace = ({ app, status }: ReleaseWorkspaceProps) => {
       return next;
     });
   };
+
+  useEffect(() => {
+    if (!suggestedKeyword || !selectedDraft || !selectedVersion?.editable) return;
+    const terms = selectedDraft.keywords.split(",").map((value) => value.trim()).filter(Boolean);
+    if (terms.some((value) => value.toLocaleLowerCase("en-US") === suggestedKeyword.toLocaleLowerCase("en-US"))) {
+      onSuggestedKeywordUsed?.();
+      return;
+    }
+    const keywords = [...terms, suggestedKeyword].join(",");
+    if (keywords.length > 100) {
+      setFatalError(`“${suggestedKeyword}” would push ${selectedDraft.locale} keywords past Apple’s 100-character limit.`);
+      onSuggestedKeywordUsed?.();
+      return;
+    }
+    saveDraft({ ...selectedDraft, keywords });
+    setReleasePanel("metadata");
+    onSuggestedKeywordUsed?.();
+  }, [onSuggestedKeywordUsed, selectedDraft, selectedVersion?.editable, suggestedKeyword]);
 
   const revertDraft = (locale: AppStoreLocale) => {
     if (!selectedVersionId) return;

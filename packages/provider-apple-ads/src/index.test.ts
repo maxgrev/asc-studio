@@ -206,4 +206,85 @@ describe("AppleAdsPlatformProvider", () => {
       averageCostPerAcquisition: { amount: "0.55", currency: "USD" },
     });
   });
+
+  it("uses Apple Ads Platform API v1 create and narrow update payloads", async () => {
+    const requests: Array<{ method: string; path: string; body: unknown }> = [];
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.hostname === "appleid.apple.com") return json({ access_token: "token", token_type: "Bearer", expires_in: 3600, scope: "searchadsorg" });
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      requests.push({ method: String(init?.method), path: url.pathname, body });
+      if (url.pathname.startsWith("/v1/campaigns")) {
+        return json({ result: {
+          ...campaign,
+          name: typeof body?.name === "string" ? body.name : campaign.name,
+          status: typeof body?.status === "string" ? body.status : campaign.status,
+          dailyBudget: body?.dailyBudget ?? campaign.dailyBudget,
+        } });
+      }
+      if (url.pathname.startsWith("/v1/adgroups")) {
+        return json({ result: {
+          id: 555666777,
+          campaignId: 444555666,
+          name: "Category exact",
+          status: "PAUSED",
+          systemStatus: "NOT_RUNNING",
+          displayStatus: "PAUSED",
+          automatedKeywordsOptIn: false,
+          bidStrategy: { bid: { amount: "1.25", currency: "USD" } },
+          startTime: null,
+          endTime: null,
+          deleted: false,
+          modificationTime: "2026-08-16T08:00:00.000Z",
+        } });
+      }
+      if (url.pathname.startsWith("/v1/keywords")) {
+        return json({ result: {
+          id: 888999000,
+          campaignId: 444555666,
+          adGroupId: 555666777,
+          text: "task manager",
+          matchType: "EXACT",
+          bid: { amount: "1.10", currency: "USD" },
+          status: typeof body?.status === "string" ? body.status : "PAUSED",
+          displayStatus: "PAUSED",
+          deleted: false,
+          modificationTime: "2026-08-16T08:00:00.000Z",
+        } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }) as unknown as typeof fetch;
+    const provider = new AppleAdsPlatformProvider({ credentials, fetch: mockFetch });
+
+    await provider.createAppleAdsCampaign({
+      promotedObjectId: "987654321",
+      name: "Orbit Notes · Category",
+      dailyBudget: { amount: "20.00", currency: "USD" },
+      countriesOrRegions: ["US"],
+      startTime: null,
+      endTime: null,
+      status: "PAUSED",
+      bidStrategyType: "MANUAL_CPT",
+    });
+    await provider.updateAppleAdsCampaign({ campaignId: "444555666", status: "PAUSED", dailyBudget: { amount: "35.00", currency: "USD" } });
+    await provider.createAppleAdsAdGroup({ campaignId: "444555666", name: "Category exact", bid: { amount: "1.25", currency: "USD" }, automatedKeywordsOptIn: false, startTime: null, endTime: null, status: "PAUSED" });
+    await provider.createAppleAdsKeyword({ campaignId: "444555666", adGroupId: "555666777", text: "task manager", matchType: "EXACT", bid: { amount: "1.10", currency: "USD" }, status: "PAUSED" });
+    await provider.updateAppleAdsKeyword({ keywordId: "888999000", status: "ENABLED" });
+
+    expect(requests).toEqual([
+      expect.objectContaining({ method: "POST", path: "/v1/campaigns", body: expect.objectContaining({
+        adAccountId: 123456789,
+        status: "PAUSED",
+        dailyBudget: { value: { amount: "20.00", currency: "USD" } },
+        bidStrategy: { bidStrategyType: "MANUAL_CPT", bidStrategyGoal: "TAP" },
+      }) }),
+      expect.objectContaining({ method: "PUT", path: "/v1/campaigns/444555666", body: {
+        dailyBudget: { value: { amount: "35.00", currency: "USD" } },
+        status: "PAUSED",
+      } }),
+      expect.objectContaining({ method: "POST", path: "/v1/adgroups", body: expect.objectContaining({ campaignId: 444555666, pricingModel: "CPT" }) }),
+      expect.objectContaining({ method: "POST", path: "/v1/keywords", body: expect.objectContaining({ adGroupId: 555666777, text: "task manager", matchType: "EXACT" }) }),
+      expect.objectContaining({ method: "PUT", path: "/v1/keywords/888999000", body: { status: "ENABLED" } }),
+    ]);
+  });
 });

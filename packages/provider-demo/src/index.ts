@@ -13,12 +13,17 @@ import type {
   AppStoreVersion,
   AppSummary,
   BuildSummary,
+  CreateAppleAdsAdGroupInput,
+  CreateAppleAdsCampaignInput,
+  CreateAppleAdsKeywordInput,
   CreateVersionInput,
   LocalizationSnapshot,
   ScreenshotAsset,
   ScreenshotAssetSnapshot,
   ScreenshotDisplayType,
   SubmitVersionInput,
+  UpdateAppleAdsCampaignInput,
+  UpdateAppleAdsKeywordInput,
   TesterGroup,
   ValidationCheck,
   ValidationReport,
@@ -65,6 +70,40 @@ const demoCampaigns: AppleAdsCampaign[] = [
     modificationTime: "2026-08-15T18:00:00.000Z",
   },
   {
+    id: "demo-ads-campaign-category",
+    adAccountId: "demo-ads-account",
+    name: "Orbit Notes · Category",
+    promotedObjectId: orbitNotes.id,
+    status: "ENABLED",
+    systemStatus: "RUNNING",
+    displayStatus: "RUNNING",
+    startTime: "2026-07-01T00:00:00.000",
+    endTime: null,
+    dailyBudget: { amount: "25.00", currency: "USD" },
+    countriesOrRegions: ["US"],
+    supplyPlacements: ["APPSTORE_SEARCH_RESULTS"],
+    bidStrategyType: "MANUAL_CPT",
+    deleted: false,
+    modificationTime: "2026-08-15T16:00:00.000Z",
+  },
+  {
+    id: "demo-ads-campaign-competitor",
+    adAccountId: "demo-ads-account",
+    name: "Orbit Notes · Competitor",
+    promotedObjectId: orbitNotes.id,
+    status: "PAUSED",
+    systemStatus: "NOT_RUNNING",
+    displayStatus: "PAUSED",
+    startTime: "2026-07-01T00:00:00.000",
+    endTime: null,
+    dailyBudget: { amount: "12.00", currency: "USD" },
+    countriesOrRegions: ["US"],
+    supplyPlacements: ["APPSTORE_SEARCH_RESULTS"],
+    bidStrategyType: "MANUAL_CPT",
+    deleted: false,
+    modificationTime: "2026-08-15T14:00:00.000Z",
+  },
+  {
     id: "demo-ads-campaign-discovery",
     adAccountId: "demo-ads-account",
     name: "Orbit Notes · Discovery",
@@ -99,6 +138,34 @@ const demoAdGroups: AppleAdsAdGroup[] = [
     modificationTime: "2026-08-15T18:00:00.000Z",
   },
   {
+    id: "demo-ads-group-category-exact",
+    campaignId: "demo-ads-campaign-category",
+    name: "Category exact",
+    status: "ENABLED",
+    systemStatus: "RUNNING",
+    displayStatus: "RUNNING",
+    automatedKeywordsOptIn: false,
+    bid: { amount: "1.10", currency: "USD" },
+    startTime: "2026-07-01T00:00:00.000",
+    endTime: null,
+    deleted: false,
+    modificationTime: "2026-08-15T16:00:00.000Z",
+  },
+  {
+    id: "demo-ads-group-competitor-exact",
+    campaignId: "demo-ads-campaign-competitor",
+    name: "Competitor exact",
+    status: "PAUSED",
+    systemStatus: "NOT_RUNNING",
+    displayStatus: "PAUSED",
+    automatedKeywordsOptIn: false,
+    bid: { amount: "0.90", currency: "USD" },
+    startTime: "2026-07-01T00:00:00.000",
+    endTime: null,
+    deleted: false,
+    modificationTime: "2026-08-15T14:00:00.000Z",
+  },
+  {
     id: "demo-ads-group-search-match",
     campaignId: "demo-ads-campaign-discovery",
     name: "Search Match",
@@ -126,6 +193,18 @@ const demoKeywords: AppleAdsKeyword[] = [
     displayStatus: "RUNNING",
     deleted: false,
     modificationTime: "2026-08-15T18:00:00.000Z",
+  },
+  {
+    id: "demo-ads-keyword-task-manager",
+    campaignId: "demo-ads-campaign-category",
+    adGroupId: "demo-ads-group-category-exact",
+    text: "task manager",
+    matchType: "EXACT",
+    bid: { amount: "1.10", currency: "USD" },
+    status: "ENABLED",
+    displayStatus: "RUNNING",
+    deleted: false,
+    modificationTime: "2026-08-15T16:00:00.000Z",
   },
   {
     id: "demo-ads-keyword-notes-app",
@@ -374,6 +453,10 @@ const screenshotSnapshot = (asset: ScreenshotAsset): ScreenshotAssetSnapshot => 
 export class MockAscProvider implements AscProvider, AppleAdsProvider {
   private readonly attachedBuildIds = new Map<string, string>();
   private readonly submissions = new Map<string, VersionSubmissionStatus>();
+  private readonly adsCampaigns = structuredClone(demoCampaigns);
+  private readonly adsAdGroups = structuredClone(demoAdGroups);
+  private readonly adsKeywords = structuredClone(demoKeywords);
+  private adsSequence = 1000;
 
   async getStatus(): Promise<AgentStatus> {
     return {
@@ -441,22 +524,126 @@ export class MockAscProvider implements AscProvider, AppleAdsProvider {
   }
 
   async listAppleAdsCampaigns(appId?: string) {
-    return structuredClone(appId ? demoCampaigns.filter((campaign) => campaign.promotedObjectId === appId) : demoCampaigns);
+    return structuredClone(appId ? this.adsCampaigns.filter((campaign) => campaign.promotedObjectId === appId) : this.adsCampaigns);
+  }
+
+  async getAppleAdsCampaign(campaignId: string) {
+    const campaign = this.adsCampaigns.find((candidate) => candidate.id === campaignId);
+    if (!campaign) throw new Error(`Apple Ads campaign ${campaignId} was not found.`);
+    return structuredClone(campaign);
+  }
+
+  async createAppleAdsCampaign(input: CreateAppleAdsCampaignInput) {
+    const campaign: AppleAdsCampaign = {
+      id: `demo-ads-campaign-${this.adsSequence++}`,
+      adAccountId: "demo-ads-account",
+      name: input.name,
+      promotedObjectId: input.promotedObjectId,
+      status: input.status,
+      systemStatus: "NOT_RUNNING",
+      displayStatus: input.status === "PAUSED" ? "PAUSED" : "ON_HOLD",
+      startTime: input.startTime,
+      endTime: input.endTime,
+      dailyBudget: structuredClone(input.dailyBudget),
+      countriesOrRegions: [...input.countriesOrRegions],
+      supplyPlacements: ["APPSTORE_SEARCH_RESULTS"],
+      bidStrategyType: input.bidStrategyType,
+      deleted: false,
+      modificationTime: new Date().toISOString(),
+    };
+    this.adsCampaigns.unshift(campaign);
+    return structuredClone(campaign);
+  }
+
+  async updateAppleAdsCampaign(input: UpdateAppleAdsCampaignInput) {
+    const campaign = this.adsCampaigns.find((candidate) => candidate.id === input.campaignId);
+    if (!campaign) throw new Error(`Apple Ads campaign ${input.campaignId} was not found.`);
+    if (input.name !== undefined) campaign.name = input.name;
+    if (input.dailyBudget !== undefined) campaign.dailyBudget = structuredClone(input.dailyBudget);
+    if (input.countriesOrRegions !== undefined) campaign.countriesOrRegions = [...input.countriesOrRegions];
+    if (input.endTime !== undefined) campaign.endTime = input.endTime;
+    if (input.status !== undefined) {
+      campaign.status = input.status;
+      campaign.systemStatus = input.status === "ENABLED" ? "RUNNING" : "NOT_RUNNING";
+      campaign.displayStatus = input.status === "ENABLED" ? "RUNNING" : "PAUSED";
+    }
+    campaign.modificationTime = new Date().toISOString();
+    return structuredClone(campaign);
   }
 
   async listAppleAdsAdGroups(campaignId: string) {
-    return structuredClone(demoAdGroups.filter((adGroup) => adGroup.campaignId === campaignId));
+    return structuredClone(this.adsAdGroups.filter((adGroup) => adGroup.campaignId === campaignId));
+  }
+
+  async getAppleAdsAdGroup(adGroupId: string) {
+    const adGroup = this.adsAdGroups.find((candidate) => candidate.id === adGroupId);
+    if (!adGroup) throw new Error(`Apple Ads ad group ${adGroupId} was not found.`);
+    return structuredClone(adGroup);
+  }
+
+  async createAppleAdsAdGroup(input: CreateAppleAdsAdGroupInput) {
+    const adGroup: AppleAdsAdGroup = {
+      id: `demo-ads-group-${this.adsSequence++}`,
+      campaignId: input.campaignId,
+      name: input.name,
+      status: input.status,
+      systemStatus: "NOT_RUNNING",
+      displayStatus: "PAUSED",
+      automatedKeywordsOptIn: input.automatedKeywordsOptIn,
+      bid: structuredClone(input.bid),
+      startTime: input.startTime,
+      endTime: input.endTime,
+      deleted: false,
+      modificationTime: new Date().toISOString(),
+    };
+    this.adsAdGroups.unshift(adGroup);
+    return structuredClone(adGroup);
   }
 
   async listAppleAdsKeywords(input: { campaignId?: string; adGroupId?: string }) {
-    return structuredClone(demoKeywords.filter((keyword) => (
+    return structuredClone(this.adsKeywords.filter((keyword) => (
       (!input.campaignId || keyword.campaignId === input.campaignId)
       && (!input.adGroupId || keyword.adGroupId === input.adGroupId)
     )));
   }
 
+  async getAppleAdsKeyword(keywordId: string) {
+    const keyword = this.adsKeywords.find((candidate) => candidate.id === keywordId);
+    if (!keyword) throw new Error(`Apple Ads keyword ${keywordId} was not found.`);
+    return structuredClone(keyword);
+  }
+
+  async createAppleAdsKeyword(input: CreateAppleAdsKeywordInput) {
+    const keyword: AppleAdsKeyword = {
+      id: `demo-ads-keyword-${this.adsSequence++}`,
+      campaignId: input.campaignId,
+      adGroupId: input.adGroupId,
+      text: input.text,
+      matchType: input.matchType,
+      bid: input.bid ? structuredClone(input.bid) : null,
+      status: input.status,
+      displayStatus: "PAUSED",
+      deleted: false,
+      modificationTime: new Date().toISOString(),
+    };
+    this.adsKeywords.unshift(keyword);
+    return structuredClone(keyword);
+  }
+
+  async updateAppleAdsKeyword(input: UpdateAppleAdsKeywordInput) {
+    const keyword = this.adsKeywords.find((candidate) => candidate.id === input.keywordId);
+    if (!keyword) throw new Error(`Apple Ads keyword ${input.keywordId} was not found.`);
+    if (input.bid !== undefined) keyword.bid = structuredClone(input.bid);
+    if (input.status !== undefined) {
+      keyword.status = input.status;
+      keyword.displayStatus = input.status === "ENABLED" ? "RUNNING" : "PAUSED";
+    }
+    keyword.modificationTime = new Date().toISOString();
+    return structuredClone(keyword);
+  }
+
   async getAppleAdsCampaignReport(input: AppleAdsCampaignReportInput): Promise<AppleAdsCampaignMetrics> {
-    const campaign = demoCampaigns.find((candidate) => candidate.id === input.campaignId);
+    const campaign = this.adsCampaigns.find((candidate) => candidate.id === input.campaignId);
     if (!campaign) throw new Error(`Apple Ads campaign ${input.campaignId} was not found.`);
     return {
       campaignId: campaign.id,

@@ -220,6 +220,11 @@ describe("local-agent session boundary", () => {
       "list_apple_ads_ad_groups",
       "list_apple_ads_keywords",
       "get_apple_ads_campaign_report",
+      "plan_apple_ads_campaign_create",
+      "plan_apple_ads_campaign_update",
+      "plan_apple_ads_ad_group_create",
+      "plan_apple_ads_keyword_create",
+      "plan_apple_ads_keyword_update",
       "list_apps",
       "list_testflight_builds",
       "list_app_store_versions",
@@ -227,7 +232,8 @@ describe("local-agent session boundary", () => {
       "list_version_screenshots",
       "get_version_submission_status",
     ]);
-    expect(toolsBody.result.tools.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
+    expect(toolsBody.result.tools.filter((tool) => tool.name.startsWith("plan_apple_ads_")).every((tool) => tool.annotations?.readOnlyHint === false)).toBe(true);
+    expect(toolsBody.result.tools.filter((tool) => !tool.name.startsWith("plan_apple_ads_")).every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
 
     const call = await fetch(`${agent!.baseUrl}/mcp`, {
       method: "POST",
@@ -262,10 +268,10 @@ describe("local-agent session boundary", () => {
     expect(statusResponse.status).toBe(200);
     expect(await statusResponse.json()).toMatchObject({ provider: "demo", connected: true, adAccountId: "demo-ads-account" });
     expect(campaignsResponse.status).toBe(200);
-    expect(await campaignsResponse.json()).toMatchObject({ campaigns: [
+    expect(await campaignsResponse.json()).toMatchObject({ campaigns: expect.arrayContaining([
       expect.objectContaining({ id: "demo-ads-campaign-brand", promotedObjectId: "demo-app-orbit-notes" }),
       expect.objectContaining({ id: "demo-ads-campaign-discovery", promotedObjectId: "demo-app-orbit-notes" }),
-    ] });
+    ]) });
     expect(researchResponse.status).toBe(200);
     expect(await researchResponse.json()).toMatchObject({ research: {
       countryOrRegion: "US",
@@ -290,6 +296,50 @@ describe("local-agent session boundary", () => {
     expect(await adGroupsResponse.json()).toMatchObject({ adGroups: [expect.objectContaining({ id: "demo-ads-group-brand-exact" })] });
     expect(await keywordsResponse.json()).toMatchObject({ keywords: expect.arrayContaining([expect.objectContaining({ text: "orbit notes" })]) });
     expect(await reportResponse.json()).toMatchObject({ report: { campaignId: "demo-ads-campaign-brand", impressions: 48_320 } });
+  });
+
+  it("reviews and confirms a paused Apple Ads campaign, ad group, and keyword", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const createPlanResponse = await fetch(`${agent!.baseUrl}/api/plans/apple-ads/campaign-create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        promotedObjectId: "demo-app-orbit-notes",
+        name: "Orbit Notes · Growth Test",
+        dailyBudget: { amount: "20.00", currency: "USD" },
+        countriesOrRegions: ["US"],
+      }),
+    });
+    const createPlanBody = await createPlanResponse.json() as { plan: { id: string; digest: string } };
+    expect(createPlanResponse.status).toBe(201);
+    const pendingResponse = await fetch(`${agent!.baseUrl}/api/plans`, { headers: authorization(guiToken) });
+    expect(await pendingResponse.json()).toMatchObject({ plans: [expect.objectContaining({ id: createPlanBody.plan.id, operation: "apple_ads.campaign.create" })] });
+
+    const campaignConfirm = await fetch(`${agent!.baseUrl}/api/plans/${createPlanBody.plan.id}/confirm`, {
+      method: "POST", headers, body: JSON.stringify({ digest: createPlanBody.plan.digest }),
+    });
+    expect(campaignConfirm.status).toBe(200);
+    const campaignsResponse = await fetch(`${agent!.baseUrl}/api/apple-ads/campaigns?appId=demo-app-orbit-notes`, { headers: authorization(guiToken) });
+    const campaignsBody = await campaignsResponse.json() as { campaigns: Array<{ id: string; name: string; status: string }> };
+    const campaign = campaignsBody.campaigns.find((candidate) => candidate.name === "Orbit Notes · Growth Test")!;
+    expect(campaign).toMatchObject({ status: "PAUSED" });
+
+    const groupPlanResponse = await fetch(`${agent!.baseUrl}/api/plans/apple-ads/ad-group-create`, {
+      method: "POST", headers, body: JSON.stringify({ campaignId: campaign.id, name: "Category exact", bid: { amount: "1.25", currency: "USD" } }),
+    });
+    const groupPlan = await groupPlanResponse.json() as { plan: { id: string; digest: string } };
+    await fetch(`${agent!.baseUrl}/api/plans/${groupPlan.plan.id}/confirm`, { method: "POST", headers, body: JSON.stringify({ digest: groupPlan.plan.digest }) });
+    const groupsResponse = await fetch(`${agent!.baseUrl}/api/apple-ads/campaigns/${campaign.id}/adgroups`, { headers: authorization(guiToken) });
+    const groupsBody = await groupsResponse.json() as { adGroups: Array<{ id: string; name: string; status: string }> };
+    expect(groupsBody.adGroups[0]).toMatchObject({ name: "Category exact", status: "PAUSED" });
+
+    const keywordPlanResponse = await fetch(`${agent!.baseUrl}/api/plans/apple-ads/keyword-create`, {
+      method: "POST", headers, body: JSON.stringify({ campaignId: campaign.id, adGroupId: groupsBody.adGroups[0]!.id, text: "task manager", matchType: "EXACT", bid: { amount: "1.10", currency: "USD" } }),
+    });
+    const keywordPlan = await keywordPlanResponse.json() as { plan: { id: string; digest: string } };
+    await fetch(`${agent!.baseUrl}/api/plans/${keywordPlan.plan.id}/confirm`, { method: "POST", headers, body: JSON.stringify({ digest: keywordPlan.plan.digest }) });
+    const keywordsResponse = await fetch(`${agent!.baseUrl}/api/apple-ads/campaigns/${campaign.id}/keywords`, { headers: authorization(guiToken) });
+    expect(await keywordsResponse.json()).toMatchObject({ keywords: [expect.objectContaining({ text: "task manager", status: "PAUSED" })] });
   });
 
   it("generates only the requested release-copy fields in demo mode", async () => {

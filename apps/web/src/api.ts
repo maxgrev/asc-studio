@@ -1,6 +1,12 @@
 import {
   ActivityResponseSchema,
   AgentStatusSchema,
+  AppleAdsAdGroupsResponseSchema,
+  AppleAdsCampaignReportResponseSchema,
+  AppleAdsCampaignsResponseSchema,
+  AppleAdsKeywordResearchResponseSchema,
+  AppleAdsKeywordsResponseSchema,
+  AppleAdsStatusSchema,
   AppStoreConnectAccountsResponseSchema,
   AppStoreConnectConnectionResponseSchema,
   ApiErrorSchema,
@@ -10,6 +16,7 @@ import {
   GroupsResponseSchema,
   LocalizationsResponseSchema,
   PlanResponseSchema,
+  PlansResponseSchema,
   ScreenshotDiscardResponseSchema,
   ScreenshotsResponseSchema,
   ScreenshotUploadResponseSchema,
@@ -20,17 +27,29 @@ import {
 } from "@asc-studio/contracts";
 import type {
   AddBuildToGroupInput,
+  AppleAdsCampaignReportInput,
+  AppleAdsKeywordResearchInput,
   AppStoreConnectCredentialsInput,
   AppStorePlatform,
   ScreenshotDisplayType,
   ScreenshotUploadReceipt,
   BuildGroupMutationPlan,
+  CreateAppleAdsAdGroupInput,
+  CreateAppleAdsAdGroupMutationPlan,
+  CreateAppleAdsCampaignInput,
+  CreateAppleAdsCampaignMutationPlan,
+  CreateAppleAdsKeywordInput,
+  CreateAppleAdsKeywordMutationPlan,
   CreateVersionInput,
   CreateVersionMutationPlan,
   GenerateReleaseCopyTranslationsInput,
   MutationPlan,
   SubmitVersionInput,
   SubmitVersionMutationPlan,
+  UpdateAppleAdsCampaignInput,
+  UpdateAppleAdsCampaignMutationPlan,
+  UpdateAppleAdsKeywordInput,
+  UpdateAppleAdsKeywordMutationPlan,
   UpdateLocalizationsMutationPlan,
   UpdateScreenshotsMutationPlan,
   UpdateScreenshotSetInput,
@@ -102,6 +121,36 @@ const request = async <T>(path: string, schema: ResponseSchema<T>, options?: Req
 
 export const api = {
   status: () => request("/api/status", AgentStatusSchema),
+  appleAdsStatus: () => request("/api/apple-ads/status", AppleAdsStatusSchema),
+  appleAdsCampaigns: (appId?: string) => {
+    const query = appId ? `?${new URLSearchParams({ appId })}` : "";
+    return request(`/api/apple-ads/campaigns${query}`, AppleAdsCampaignsResponseSchema);
+  },
+  appleAdsAdGroups: (campaignId: string) => request(
+    `/api/apple-ads/campaigns/${encodeURIComponent(campaignId)}/adgroups`,
+    AppleAdsAdGroupsResponseSchema,
+  ),
+  appleAdsKeywords: (input: { campaignId?: string; adGroupId?: string }) => {
+    if (input.adGroupId) return request(
+      `/api/apple-ads/adgroups/${encodeURIComponent(input.adGroupId)}/keywords`,
+      AppleAdsKeywordsResponseSchema,
+    );
+    if (input.campaignId) return request(
+      `/api/apple-ads/campaigns/${encodeURIComponent(input.campaignId)}/keywords`,
+      AppleAdsKeywordsResponseSchema,
+    );
+    throw new ApiError("apple_ads_scope_required", "Choose a campaign or ad group before listing keywords.", 400);
+  },
+  researchAppleAdsKeywords: (input: AppleAdsKeywordResearchInput) => request(
+    "/api/apple-ads/keywords/research",
+    AppleAdsKeywordResearchResponseSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  ),
+  appleAdsCampaignReport: (input: AppleAdsCampaignReportInput) => request(
+    "/api/apple-ads/campaign-report",
+    AppleAdsCampaignReportResponseSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  ),
   appleAccounts: () => request("/api/connections/app-store-connect", AppStoreConnectAccountsResponseSchema),
   connectAppStoreConnect: (input: AppStoreConnectCredentialsInput) => request(
     "/api/connections/app-store-connect",
@@ -192,6 +241,7 @@ export const api = {
     ),
   sync: (appId: string) => request("/api/sync", BuildsResponseSchema, { method: "POST", body: JSON.stringify({ appId }) }),
   activity: () => request("/api/activity?limit=50", ActivityResponseSchema),
+  pendingPlans: () => request("/api/plans", PlansResponseSchema),
   planBuildGroup: async (input: AddBuildToGroupInput): Promise<{ plan: BuildGroupMutationPlan }> => {
     const response = await request("/api/plans/build-group", PlanResponseSchema, { method: "POST", body: JSON.stringify(input) });
     if (response.plan.operation !== "build.add_to_group") throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
@@ -215,6 +265,31 @@ export const api = {
   planSubmission: async (input: SubmitVersionInput): Promise<{ plan: SubmitVersionMutationPlan }> => {
     const response = await request("/api/plans/submission", PlanResponseSchema, { method: "POST", body: JSON.stringify(input) });
     if (response.plan.operation !== "version.submit") throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
+    return { plan: response.plan };
+  },
+  planAppleAdsCampaignCreate: async (input: CreateAppleAdsCampaignInput): Promise<{ plan: CreateAppleAdsCampaignMutationPlan }> => {
+    const response = await request("/api/plans/apple-ads/campaign-create", PlanResponseSchema, { method: "POST", body: JSON.stringify(input) });
+    if (response.plan.operation !== "apple_ads.campaign.create") throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
+    return { plan: response.plan };
+  },
+  planAppleAdsCampaignUpdate: async (input: UpdateAppleAdsCampaignInput): Promise<{ plan: UpdateAppleAdsCampaignMutationPlan }> => {
+    const response = await request("/api/plans/apple-ads/campaign-update", PlanResponseSchema, { method: "POST", body: JSON.stringify(input) });
+    if (response.plan.operation !== "apple_ads.campaign.update") throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
+    return { plan: response.plan };
+  },
+  planAppleAdsAdGroupCreate: async (input: CreateAppleAdsAdGroupInput): Promise<{ plan: CreateAppleAdsAdGroupMutationPlan }> => {
+    const response = await request("/api/plans/apple-ads/ad-group-create", PlanResponseSchema, { method: "POST", body: JSON.stringify(input) });
+    if (response.plan.operation !== "apple_ads.ad_group.create") throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
+    return { plan: response.plan };
+  },
+  planAppleAdsKeywordCreate: async (input: CreateAppleAdsKeywordInput): Promise<{ plan: CreateAppleAdsKeywordMutationPlan }> => {
+    const response = await request("/api/plans/apple-ads/keyword-create", PlanResponseSchema, { method: "POST", body: JSON.stringify(input) });
+    if (response.plan.operation !== "apple_ads.keyword.create") throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
+    return { plan: response.plan };
+  },
+  planAppleAdsKeywordUpdate: async (input: UpdateAppleAdsKeywordInput): Promise<{ plan: UpdateAppleAdsKeywordMutationPlan }> => {
+    const response = await request("/api/plans/apple-ads/keyword-update", PlanResponseSchema, { method: "POST", body: JSON.stringify(input) });
+    if (response.plan.operation !== "apple_ads.keyword.update") throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
     return { plan: response.plan };
   },
   confirmPlan: (plan: MutationPlan) =>

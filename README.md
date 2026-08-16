@@ -9,9 +9,9 @@ This repository now contains six complete vertical slices:
 - A guarded App Review path that selects a processed build, previews attachment and submission, checks for stale Apple data, confirms once, and reads the resulting submission state.
 - BYOK release-copy translation that turns one source locale into checked local drafts for selected locales without reading or changing keywords.
 - Per-locale, per-device screenshot sets with local file checks, add or replace modes, exact review plans, stale-data checks, and guarded upload or deletion.
-- Apple Ads Platform API v1 keyword research that combines app suggestions with country-and-genre search popularity, plus campaign, ad-group, keyword, and performance inspection tools.
+- An Apple Ads workspace that combines app suggestions with country-and-genre search popularity, reports on campaign performance, and manages paused-first campaigns, ad groups, keywords, status, budgets, and bids through reviewed plans.
 
-App Store writes use the same plan, review, stale-check, confirm, and audit path. Translation creates local drafts; it does not write to Apple. The rest of the product map lives in [the roadmap](docs/roadmap.md).
+App Store Connect and Apple Ads writes use the same plan, review, stale-check, confirm, and audit path. Translation creates local drafts; it does not write to Apple. The rest of the product map lives in [the roadmap](docs/roadmap.md).
 
 ![ASC Studio App Review submission](docs/design/asc-studio-submission-workspace-implementation.png)
 
@@ -125,13 +125,15 @@ The local agent signs the OAuth client secret and exchanges it for a one-hour ac
 
 Keyword research combines Apple's app-specific suggestions with weekly or monthly search-term popularity for an exact country and genre. Popularity is relative, not an estimated search count. Apple does not expose keyword difficulty, so ASC Studio does not invent that value.
 
+New campaigns, ad groups, and keywords start paused. The GUI can review campaign name, daily budget, countries, end date, and status changes; create manual-CPT ad groups; add exact or broad keywords; and review keyword bid or status changes. Every confirmation re-reads the Apple Ads object and stops if the account or reviewed state changed.
+
 `npm run dev` and `npm run dev:live` are development commands. They run the Vite server with hot reload. `npm run dev` always uses isolated sample data and cannot fall through to a real connection.
 
 Demo mode also uses a marked sample translator. It does not need an OpenAI key and never calls OpenAI.
 
 The one-time bearer secret stays in the URL fragment, moves into browser session storage, and is removed from the address bar after bootstrap. A plain tab without that session cannot call the agent API.
 
-The current live write paths can add a build to a TestFlight group; create an editable iOS, macOS, tvOS, or visionOS App Store version; apply selected locale changes; add, replace, or delete screenshots for one locale and device set; attach a processed build for the same platform; and submit a version to App Review. ASC Studio first creates a ten-minute plan, shows the exact before and after state, binds confirmation to that plan and active connection, re-reads Apple data, and stops if anything changed.
+The current live write paths can add a build to a TestFlight group; create an editable iOS, macOS, tvOS, or visionOS App Store version; apply selected locale changes; add, replace, or delete screenshots for one locale and device set; attach a processed build for the same platform; submit a version to App Review; and create or update the Apple Ads resources listed above. ASC Studio first creates a ten-minute plan, shows the exact before and after state, binds confirmation to that plan and active connection, re-reads Apple data, and stops if anything changed.
 
 ## Connect Codex through MCP
 
@@ -155,6 +157,11 @@ The MCP server exposes:
 - `list_apple_ads_ad_groups`
 - `list_apple_ads_keywords`
 - `get_apple_ads_campaign_report`
+- `plan_apple_ads_campaign_create`
+- `plan_apple_ads_campaign_update`
+- `plan_apple_ads_ad_group_create`
+- `plan_apple_ads_keyword_create`
+- `plan_apple_ads_keyword_update`
 - `list_apps`
 - `list_testflight_builds`
 - `list_app_store_versions`
@@ -162,7 +169,7 @@ The MCP server exposes:
 - `list_version_screenshots`
 - `get_version_submission_status`
 
-MCP stays read-only for now. Consequential actions go through the local GUI review screen. A public ChatGPT plugin will need a stable HTTPS endpoint, user OAuth, and the same core policy; local HTTP is for Codex and development only.
+Apple Ads plan tools can prepare a local, expiring change plan. They cannot confirm it or write to Apple; the user must inspect the exact diff in the local GUI. The other MCP tools stay read-only. A public ChatGPT plugin will need a stable HTTPS endpoint, user OAuth, and the same core policy; local HTTP is for Codex and development only.
 
 ## Commands
 
@@ -198,10 +205,10 @@ The App Store Connect provider creates ten-minute ES256 JWTs, sends typed JSON:A
 ## Current limits
 
 - The direct provider has fixture coverage for authentication, pagination, builds, localization writes, and screenshot uploads. It still needs read-only and guarded-write checks across several real accounts before a stable release.
-- Apple Ads campaign, ad-group, keyword, and report tools are read-only. Campaign writes still need typed plans, stale checks, and local GUI approval before they can join the MCP surface.
+- Apple Ads writes currently cover paused-first campaign creation, campaign updates, manual-CPT ad-group creation, and keyword creation or updates. Deletes, negative keywords, custom product page ads, audience targeting, recommendations, and shared budgets need separate reviewed slices.
 - Build attachment and review submission use Apple's public relationships and review-submission resources. Cancellation, phased release controls, App Review detail editing, and review attachments still need their own slices.
 - Translation currently uses BYOK through `OPENAI_API_KEY`; managed ChatGPT sign-in is not part of this slice.
-- The translation action covers What’s New and promotional text. Locale keyword research and suggestions need their own workflow and never reuse translation output.
+- The translation action covers What’s New and promotional text. Apple Ads research can hand one selected term to the active locale draft, but full locale-by-locale keyword research still needs its own workflow.
 - Long descriptions stay unchanged when metadata is copied. A full Store Listing editor comes after the frequent update fields.
 - Screenshot upload supports PNG and JPEG files up to 20 MB, validates known device-set dimensions and transparency before planning, and caps each set at ten files. App preview videos need a separate processed-media workflow.
 - Upload uses Apple's reserve, signed-chunk upload, commit, process, and reorder flow. Resumable job streams come later.

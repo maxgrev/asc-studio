@@ -55,6 +55,22 @@ export class SqlitePlanStore implements PlanStore {
     return MutationPlanSchema.parse(JSON.parse(row.plan_json));
   }
 
+  async listPlans(state: MutationPlan["state"], limit: number): Promise<MutationPlan[]> {
+    const rows = this.database
+      .prepare(`
+        SELECT plan_json
+        FROM mutation_plans
+        WHERE state = ?
+        ORDER BY updated_at DESC
+        LIMIT ?
+      `)
+      .all(state, limit);
+    return rows.map((row) => {
+      if (typeof row.plan_json !== "string") throw new TypeError("Stored mutation plan is not JSON text.");
+      return MutationPlanSchema.parse(JSON.parse(row.plan_json));
+    });
+  }
+
   async claimPlan(id: string, expectedState: MutationPlan["state"], next: MutationPlan) {
     const result = this.database
       .prepare(`

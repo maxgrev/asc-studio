@@ -6,12 +6,17 @@ import {
   AddBuildToGroupInputSchema,
   AppleAdsCampaignReportInputSchema,
   AppleAdsKeywordResearchInputSchema,
+  CreateAppleAdsAdGroupInputSchema,
+  CreateAppleAdsCampaignInputSchema,
+  CreateAppleAdsKeywordInputSchema,
   AppStoreConnectCredentialsInputSchema,
   AppStorePlatformSchema,
   CreateVersionInputSchema,
   GenerateReleaseCopyTranslationsInputSchema,
   ScreenshotDisplayTypeSchema,
   SubmitVersionInputSchema,
+  UpdateAppleAdsCampaignInputSchema,
+  UpdateAppleAdsKeywordInputSchema,
   UpdateScreenshotSetInputSchema,
   UpdateVersionLocalizationsInputSchema,
 } from "@asc-studio/contracts";
@@ -116,6 +121,13 @@ const domainStatus = (code: string) => {
   if (["group_not_found", "localization_not_found", "plan_not_found", "screenshot_not_found", "version_not_found", "source_version_not_found"].includes(code)) return 404;
   if ([
     "already_assigned",
+    "apple_ads_ad_group_changed",
+    "apple_ads_ad_group_exists",
+    "apple_ads_bid_strategy_unsupported",
+    "apple_ads_campaign_deleted",
+    "apple_ads_campaign_exists",
+    "apple_ads_keyword_deleted",
+    "apple_ads_keyword_exists",
     "build_app_mismatch",
     "build_not_ready",
     "build_version_mismatch",
@@ -766,6 +778,10 @@ const main = async () => {
         json(response, 201, { plan: await service.createAddBuildToGroupPlan(input, "gui") });
         return;
       }
+      if (request.method === "GET" && url.pathname === "/api/plans") {
+        json(response, 200, { plans: await service.listPendingPlans(50) });
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/api/plans/version") {
         const input = CreateVersionInputSchema.parse(await readBody(request));
         json(response, 201, { plan: await service.createVersionPlan(input, "gui") });
@@ -784,6 +800,31 @@ const main = async () => {
       if (request.method === "POST" && url.pathname === "/api/plans/submission") {
         const input = SubmitVersionInputSchema.parse(await readBody(request));
         json(response, 201, { plan: await service.createSubmitVersionPlan(input, "gui") });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/plans/apple-ads/campaign-create") {
+        const input = CreateAppleAdsCampaignInputSchema.parse(await readBody(request));
+        json(response, 201, { plan: await service.createAppleAdsCampaignPlan(input, "gui") });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/plans/apple-ads/campaign-update") {
+        const input = UpdateAppleAdsCampaignInputSchema.parse(await readBody(request));
+        json(response, 201, { plan: await service.createUpdateAppleAdsCampaignPlan(input, "gui") });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/plans/apple-ads/ad-group-create") {
+        const input = CreateAppleAdsAdGroupInputSchema.parse(await readBody(request));
+        json(response, 201, { plan: await service.createAppleAdsAdGroupPlan(input, "gui") });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/plans/apple-ads/keyword-create") {
+        const input = CreateAppleAdsKeywordInputSchema.parse(await readBody(request));
+        json(response, 201, { plan: await service.createAppleAdsKeywordPlan(input, "gui") });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/plans/apple-ads/keyword-update") {
+        const input = UpdateAppleAdsKeywordInputSchema.parse(await readBody(request));
+        json(response, 201, { plan: await service.createUpdateAppleAdsKeywordPlan(input, "gui") });
         return;
       }
       const confirmMatch = url.pathname.match(/^\/api\/plans\/([^/]+)\/confirm$/);

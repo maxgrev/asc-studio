@@ -15,7 +15,7 @@ const plan: MutationPlan = {
   expiresAt: "2026-07-31T19:10:00.000Z",
   digest: "digest-1",
   summary: "Add build 2.4.0 (204) to QA",
-  context: { profile: "Demo workspace", connectionId: "demo" },
+  context: { profile: "Demo workspace", connectionId: "demo", appleAdsAdAccountId: null, appleAdsMode: null },
   target: {
     appId: "app-1",
     buildId: "build-204",

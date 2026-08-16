@@ -2,6 +2,7 @@ import type { AgentStatus, AppStoreConnectAccount, AppSummary } from "@asc-studi
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { AppleAccountDialog } from "./components/AppleAccountDialog.js";
+import { AppleAdsWorkspace } from "./components/AppleAdsWorkspace.js";
 import { ConnectionSetup } from "./components/ConnectionSetup.js";
 import { ReleaseWorkspace } from "./components/ReleaseWorkspace.js";
 import { Sidebar, type WorkspaceSection } from "./components/Sidebar.js";
@@ -16,6 +17,7 @@ export const App = () => {
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [section, setSection] = useState<WorkspaceSection>("releases");
   const [testFlightInspectorOpen, setTestFlightInspectorOpen] = useState(false);
+  const [metadataKeywordSuggestion, setMetadataKeywordSuggestion] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
@@ -99,7 +101,7 @@ export const App = () => {
   };
 
   return (
-    <div className={section === "testflight" && testFlightInspectorOpen ? "app-frame with-inspector" : "app-frame"}>
+    <div className={section === "apple-ads" || section === "testflight" && testFlightInspectorOpen ? "app-frame with-inspector" : "app-frame"}>
       <Sidebar
         app={app}
         apps={apps}
@@ -127,8 +129,13 @@ export const App = () => {
         </main>
       ) : section === "testflight" ? (
         <TestFlightWorkspace app={app} status={status} onInspectorChange={setTestFlightInspectorOpen} key={`testflight-${status?.connectionId ?? "none"}-${app.id}`} />
+      ) : section === "apple-ads" ? (
+        <AppleAdsWorkspace app={app} status={status} onUseInMetadata={(keyword) => {
+          setMetadataKeywordSuggestion(keyword);
+          setSection("releases");
+        }} key={`apple-ads-${status?.connectionId ?? "none"}-${app.id}`} />
       ) : (
-        <ReleaseWorkspace app={app} status={status} key={`releases-${status?.connectionId ?? "none"}-${app.id}`} />
+        <ReleaseWorkspace app={app} status={status} suggestedKeyword={metadataKeywordSuggestion} onSuggestedKeywordUsed={() => setMetadataKeywordSuggestion(null)} key={`releases-${status?.connectionId ?? "none"}-${app.id}`} />
       )}
       {accountDialogOpen ? <AppleAccountDialog onClose={() => setAccountDialogOpen(false)} onConnected={(connectedStatus) => {
         setStatus(connectedStatus);

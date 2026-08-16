@@ -8,6 +8,12 @@ import {
   AppleAdsKeywordResearchResultSchema,
   AppleAdsKeywordSchema,
   AppleAdsStatusSchema,
+  CreateAppleAdsAdGroupInputSchema,
+  CreateAppleAdsAdGroupMutationPlanSchema,
+  CreateAppleAdsCampaignInputSchema,
+  CreateAppleAdsCampaignMutationPlanSchema,
+  CreateAppleAdsKeywordInputSchema,
+  CreateAppleAdsKeywordMutationPlanSchema,
   AppStorePlatformSchema,
   AppStoreVersionSchema,
   AppSummarySchema,
@@ -16,6 +22,10 @@ import {
   ScreenshotDisplayTypeSchema,
   VersionLocalizationSchema,
   VersionSubmissionStatusSchema,
+  UpdateAppleAdsCampaignInputSchema,
+  UpdateAppleAdsCampaignMutationPlanSchema,
+  UpdateAppleAdsKeywordInputSchema,
+  UpdateAppleAdsKeywordMutationPlanSchema,
 } from "@asc-studio/contracts";
 import type { AscStudioService } from "@asc-studio/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -33,7 +43,7 @@ const createMcpServer = (service: AscStudioService) => {
     { name: "asc-studio", version: "0.6.0" },
     {
       instructions:
-        "Use read tools to resolve exact App Store Connect and Apple Ads IDs before any action. Apple Ads popularity is a relative first-party signal, not an absolute search count. This release exposes reads only through MCP; consequential changes require review in the local ASC Studio GUI.",
+        "Use read tools to resolve exact App Store Connect and Apple Ads IDs before any action. Apple Ads popularity is a relative first-party signal, not an absolute search count. Apple Ads plan tools only prepare a local review plan; the user must inspect and confirm every external change in the ASC Studio GUI.",
     },
   );
 
@@ -195,6 +205,121 @@ const createMcpServer = (service: AscStudioService) => {
         return {
           structuredContent: { report },
           content: [{ type: "text", text: `${report.name}: ${report.impressions} impressions, ${report.taps} taps, ${report.totalInstalls} total installs.` }],
+        };
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "plan_apple_ads_campaign_create",
+    {
+      title: "Plan a new Apple Ads campaign",
+      description: "Prepare a paused App Store search-results campaign for GUI review. This tool does not create the campaign in Apple Ads.",
+      inputSchema: CreateAppleAdsCampaignInputSchema.innerType().shape,
+      outputSchema: { plan: CreateAppleAdsCampaignMutationPlanSchema },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const plan = await service.createAppleAdsCampaignPlan(CreateAppleAdsCampaignInputSchema.parse(input), "mcp");
+        if (plan.operation !== "apple_ads.campaign.create") throw new Error("ASC Studio returned the wrong plan type.");
+        return {
+          structuredContent: { plan },
+          content: [{ type: "text", text: `${plan.summary}. Review and confirm plan ${plan.id} in the ASC Studio GUI.` }],
+        };
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "plan_apple_ads_campaign_update",
+    {
+      title: "Plan Apple Ads campaign changes",
+      description: "Prepare campaign name, daily budget, countries, end date, or run-state changes for GUI review. This tool does not update Apple Ads.",
+      inputSchema: UpdateAppleAdsCampaignInputSchema.innerType().shape,
+      outputSchema: { plan: UpdateAppleAdsCampaignMutationPlanSchema },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const plan = await service.createUpdateAppleAdsCampaignPlan(UpdateAppleAdsCampaignInputSchema.parse(input), "mcp");
+        if (plan.operation !== "apple_ads.campaign.update") throw new Error("ASC Studio returned the wrong plan type.");
+        return {
+          structuredContent: { plan },
+          content: [{ type: "text", text: `${plan.summary}. Review and confirm plan ${plan.id} in the ASC Studio GUI.` }],
+        };
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "plan_apple_ads_ad_group_create",
+    {
+      title: "Plan a new Apple Ads ad group",
+      description: "Prepare a paused manual-CPT ad group for GUI review. This tool does not create the ad group in Apple Ads.",
+      inputSchema: CreateAppleAdsAdGroupInputSchema.innerType().shape,
+      outputSchema: { plan: CreateAppleAdsAdGroupMutationPlanSchema },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const plan = await service.createAppleAdsAdGroupPlan(CreateAppleAdsAdGroupInputSchema.parse(input), "mcp");
+        if (plan.operation !== "apple_ads.ad_group.create") throw new Error("ASC Studio returned the wrong plan type.");
+        return {
+          structuredContent: { plan },
+          content: [{ type: "text", text: `${plan.summary}. Review and confirm plan ${plan.id} in the ASC Studio GUI.` }],
+        };
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "plan_apple_ads_keyword_create",
+    {
+      title: "Plan a new Apple Ads keyword",
+      description: "Prepare one paused exact- or broad-match keyword for GUI review. This tool does not create the keyword in Apple Ads.",
+      inputSchema: CreateAppleAdsKeywordInputSchema.shape,
+      outputSchema: { plan: CreateAppleAdsKeywordMutationPlanSchema },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const plan = await service.createAppleAdsKeywordPlan(CreateAppleAdsKeywordInputSchema.parse(input), "mcp");
+        if (plan.operation !== "apple_ads.keyword.create") throw new Error("ASC Studio returned the wrong plan type.");
+        return {
+          structuredContent: { plan },
+          content: [{ type: "text", text: `${plan.summary}. Review and confirm plan ${plan.id} in the ASC Studio GUI.` }],
+        };
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "plan_apple_ads_keyword_update",
+    {
+      title: "Plan Apple Ads keyword changes",
+      description: "Prepare a keyword bid or run-state change for GUI review. This tool does not update Apple Ads.",
+      inputSchema: UpdateAppleAdsKeywordInputSchema.innerType().shape,
+      outputSchema: { plan: UpdateAppleAdsKeywordMutationPlanSchema },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const plan = await service.createUpdateAppleAdsKeywordPlan(UpdateAppleAdsKeywordInputSchema.parse(input), "mcp");
+        if (plan.operation !== "apple_ads.keyword.update") throw new Error("ASC Studio returned the wrong plan type.");
+        return {
+          structuredContent: { plan },
+          content: [{ type: "text", text: `${plan.summary}. Review and confirm plan ${plan.id} in the ASC Studio GUI.` }],
         };
       } catch (error) {
         return errorResult(error);

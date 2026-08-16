@@ -71,6 +71,9 @@ const queryResponse = <Schema extends z.ZodTypeAny>(schema: Schema) => z.object(
 export const CampaignQueryResponseSchema = queryResponse(CampaignPayloadSchema);
 export const AdGroupQueryResponseSchema = queryResponse(AdGroupPayloadSchema);
 export const KeywordQueryResponseSchema = queryResponse(KeywordPayloadSchema);
+export const CampaignResponseSchema = z.object({ result: CampaignPayloadSchema }).passthrough();
+export const AdGroupResponseSchema = z.object({ result: AdGroupPayloadSchema }).passthrough();
+export const KeywordResponseSchema = z.object({ result: KeywordPayloadSchema }).passthrough();
 
 export const KeywordSuggestionResponseSchema = z.object({
   result: z.array(z.object({
