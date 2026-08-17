@@ -34,7 +34,7 @@ flowchart LR
 - [ChatGPT subscriptions and API billing are separate](https://help.openai.com/en/articles/9039756-managing-billing-settings-on-chatgpt-web-and-platform), so ASC Studio does not claim that a ChatGPT or Codex subscription pays for GUI model calls.
 - The GUI and MCP server share the same App Store policy. There is no arbitrary `run_asc_command` escape hatch.
 - The local agent signs short-lived Apple JWTs. The browser never receives a saved private key, and audit records never contain credentials.
-- App Store Connect and Apple Ads use separate keys. An App Store Connect key is never sent to the Apple Ads API.
+- App Store Connect and Apple Ads can belong to the same Apple organization, but they use separate roles and API credentials. An App Store Connect key is never sent to the Apple Ads API.
 
 See [the architecture record](docs/adr/0001-local-control-plane.md) for the full decision.
 
@@ -107,9 +107,13 @@ To test the same built local app without touching Apple:
 npm run local:demo
 ```
 
-### Enable Apple Ads tools
+### Connect Apple Ads
 
-Apple Ads uses a separate OAuth client, private key, and ad-account ID. Create an API user and upload its public key in Apple Ads, then start ASC Studio with the credentials Apple gives you:
+Apple requires the same sign-in email when you link Apple Ads and App Store Connect, but each service keeps its own roles and API credentials. In ASC Studio, open **Apple services → Manage Apple services**, then choose **Connect Apple Ads**.
+
+ASC Studio can generate the P-256 key pair in the local agent. Copy the public key it shows into **Apple Ads → Account Settings → API**, then enter the client ID, team ID, key ID, and numeric ad-account ID Apple provides. The generated private key never enters the browser. You can also import an existing `private-key.pem` file.
+
+For unattended local runs, Apple Ads environment credentials override the GUI-managed connection:
 
 ```bash
 ASC_STUDIO_ADS_PROFILE_NAME="Growth" \
@@ -121,7 +125,7 @@ ASC_STUDIO_ADS_PRIVATE_KEY_PATH="/absolute/path/to/private-key.pem" \
 npm run local
 ```
 
-The local agent signs the OAuth client secret and exchanges it for a one-hour access token. It sends Apple Ads credentials only to `appleid.apple.com` and `api.ads.apple.com`. You can use `ASC_STUDIO_ADS_PRIVATE_KEY` instead of the file path, but not both. See Apple's [Platform API OAuth guide](https://developer.apple.com/documentation/apple-ads-platform-api/implementing-oauth-for-the-apple-ads-platform-api) for key setup.
+The local agent signs the OAuth client secret and exchanges it for a one-hour access token. It sends Apple Ads credentials only to `appleid.apple.com` and `api.ads.apple.com`. You can use `ASC_STUDIO_ADS_PRIVATE_KEY` instead of the file path, but not both. See Apple's [Apple Ads OAuth guide](https://developer.apple.com/documentation/apple_ads/implementing-oauth-for-the-apple-search-ads-api) and [account-linking guide](https://ads.apple.com/app-store/help/get-started/0012-link-app-store-connect-accounts).
 
 Keyword research combines Apple's app-specific suggestions with weekly or monthly search-term popularity for an exact country and genre. Popularity is relative, not an estimated search count. Apple does not expose keyword difficulty, so ASC Studio does not invent that value.
 

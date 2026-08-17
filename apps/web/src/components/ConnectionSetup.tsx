@@ -15,8 +15,8 @@ export const ConnectionSetup = ({ status, onConnected }: ConnectionSetupProps) =
           <span className="connection-setup-icon"><KeyRound size={24} /></span>
           <div>
             <p className="connection-setup-kicker">Direct Apple API connection</p>
-            <h1 id="connection-setup-title">Connect App Store Connect</h1>
-            <p>ASC Studio signs Apple API requests itself. No third-party CLI is installed or called.</p>
+            <h1 id="connection-setup-title">Connect your Apple organization</h1>
+            <p>Start with App Store Connect. You can add Apple Ads next with its separate API credentials.</p>
           </div>
         </header>
 

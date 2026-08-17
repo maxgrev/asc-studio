@@ -60,6 +60,43 @@ export const AppleAdsStatusSchema = z.object({
 }).strict();
 export type AppleAdsStatus = z.infer<typeof AppleAdsStatusSchema>;
 
+export const AppleAdsCredentialsInputSchema = z.object({
+  clientId: z.string().trim().regex(/^SEARCHADS\.[A-Za-z0-9-]+$/, "Use the SEARCHADS client ID shown in Apple Ads."),
+  teamId: z.string().trim().regex(/^SEARCHADS\.[A-Za-z0-9-]+$/, "Use the SEARCHADS team ID shown in Apple Ads."),
+  keyId: z.string().trim().regex(/^[A-Za-z0-9-]{1,128}$/, "Use the key ID shown in Apple Ads."),
+  adAccountId: z.string().trim().regex(/^\d+$/, "Use the numeric ad account ID."),
+  setupId: z.string().uuid().optional(),
+  privateKey: z.string().min(1).max(16_384).optional(),
+}).strict().superRefine((input, context) => {
+  if ((input.setupId ? 1 : 0) + (input.privateKey ? 1 : 0) !== 1) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Use a generated key or provide one private key." });
+  }
+});
+export type AppleAdsCredentialsInput = z.infer<typeof AppleAdsCredentialsInputSchema>;
+
+export const AppleAdsGeneratedKeyResponseSchema = z.object({
+  setupId: z.string().uuid(),
+  publicKey: z.string().min(1),
+  expiresAt: z.string().datetime(),
+}).strict();
+export type AppleAdsGeneratedKeyResponse = z.infer<typeof AppleAdsGeneratedKeyResponseSchema>;
+
+export const AppleAdsConnectionSchema = z.object({
+  configured: z.boolean(),
+  profileName: z.string().min(1).nullable(),
+  appStoreConnectConnectionId: z.string().min(1).nullable(),
+  adAccountId: z.string().min(1).nullable(),
+  keyId: z.string().min(1).nullable(),
+  source: z.enum(["local", "environment", "demo"]).nullable(),
+}).strict();
+export type AppleAdsConnection = z.infer<typeof AppleAdsConnectionSchema>;
+
+export const AppleAdsConnectionResponseSchema = z.object({
+  status: AppleAdsStatusSchema,
+  connection: AppleAdsConnectionSchema,
+}).strict();
+export type AppleAdsConnectionResponse = z.infer<typeof AppleAdsConnectionResponseSchema>;
+
 export const AppleAdsMoneySchema = z.object({
   amount: z.string().regex(/^\d+(?:\.\d+)?$/, "Use a non-negative decimal amount."),
   currency: z.string().regex(/^[A-Z]{3}$/, "Use an ISO 4217 currency code."),

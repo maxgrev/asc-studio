@@ -1,8 +1,9 @@
-import type { AgentStatus, AppStoreConnectAccount, AppSummary } from "@asc-studio/contracts";
+import type { AgentStatus, AppleAdsConnectionResponse, AppStoreConnectAccount, AppSummary } from "@asc-studio/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { AppleAccountDialog } from "./components/AppleAccountDialog.js";
 import { AppleAdsWorkspace } from "./components/AppleAdsWorkspace.js";
+import { AppleServicesDialog } from "./components/AppleServicesDialog.js";
 import { ConnectionSetup } from "./components/ConnectionSetup.js";
 import { ReleaseWorkspace } from "./components/ReleaseWorkspace.js";
 import { Sidebar, type WorkspaceSection } from "./components/Sidebar.js";
@@ -14,6 +15,7 @@ export const App = () => {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [apps, setApps] = useState<AppSummary[]>([]);
   const [accounts, setAccounts] = useState<AppStoreConnectAccount[]>([]);
+  const [appleAdsConnection, setAppleAdsConnection] = useState<AppleAdsConnectionResponse | null>(null);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [section, setSection] = useState<WorkspaceSection>("releases");
   const [testFlightInspectorOpen, setTestFlightInspectorOpen] = useState(false);
@@ -21,15 +23,21 @@ export const App = () => {
   const [loading, setLoading] = useState(true);
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
+  const [servicesDialogOpen, setServicesDialogOpen] = useState(false);
   const loadGeneration = useRef(0);
 
   const loadShell = useCallback(async () => {
     const generation = ++loadGeneration.current;
     setLoading(true);
     try {
-      const [nextStatus, accountsResponse] = await Promise.all([api.status(), api.appleAccounts()]);
+      const [nextStatus, accountsResponse, adsConnectionResponse] = await Promise.all([
+        api.status(),
+        api.appleAccounts(),
+        api.appleAdsConnection(),
+      ]);
       if (generation !== loadGeneration.current) return;
       setStatus(nextStatus);
+      setAppleAdsConnection(adsConnectionResponse);
       const nextAccounts = nextStatus.mode === "live" ? accountsResponse.accounts : [];
       setAccounts(nextAccounts);
       if (nextStatus.mode === "live" && !nextStatus.connected) {
@@ -113,6 +121,8 @@ export const App = () => {
         onAccountChange={switchAccount}
         onAddAccount={() => setAccountDialogOpen(true)}
         onRemoveAccount={removeAccount}
+        appleAdsStatus={appleAdsConnection?.status ?? null}
+        onManageAppleServices={() => setServicesDialogOpen(true)}
       />
       {status?.mode === "live" && !status.connected ? (
         <ConnectionSetup status={status} onConnected={(connectedStatus) => {
@@ -130,10 +140,10 @@ export const App = () => {
       ) : section === "testflight" ? (
         <TestFlightWorkspace app={app} status={status} onInspectorChange={setTestFlightInspectorOpen} key={`testflight-${status?.connectionId ?? "none"}-${app.id}`} />
       ) : section === "apple-ads" ? (
-        <AppleAdsWorkspace app={app} status={status} onUseInMetadata={(keyword) => {
+        <AppleAdsWorkspace app={app} status={status} onManageConnection={() => setServicesDialogOpen(true)} onUseInMetadata={(keyword) => {
           setMetadataKeywordSuggestion(keyword);
           setSection("releases");
-        }} key={`apple-ads-${status?.connectionId ?? "none"}-${app.id}`} />
+        }} key={`apple-ads-${status?.connectionId ?? "none"}-${appleAdsConnection?.connection.adAccountId ?? "none"}-${app.id}`} />
       ) : (
         <ReleaseWorkspace app={app} status={status} suggestedKeyword={metadataKeywordSuggestion} onSuggestedKeywordUsed={() => setMetadataKeywordSuggestion(null)} key={`releases-${status?.connectionId ?? "none"}-${app.id}`} />
       )}
@@ -142,6 +152,17 @@ export const App = () => {
         setAccountDialogOpen(false);
         void refreshAfterAccountChange();
       }} /> : null}
+      {servicesDialogOpen && status && appleAdsConnection ? <AppleServicesDialog
+        status={status}
+        account={accounts.find((account) => account.active) ?? null}
+        appleAds={appleAdsConnection}
+        onClose={() => setServicesDialogOpen(false)}
+        onAppleAdsChange={(connection) => setAppleAdsConnection(connection)}
+        onManageAppStoreConnect={() => {
+          setServicesDialogOpen(false);
+          setAccountDialogOpen(true);
+        }}
+      /> : null}
     </div>
   );
 };

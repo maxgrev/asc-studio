@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AppStoreConnectCredentialStore } from "./credentials.js";
+import { AppleAdsCredentialStore, AppStoreConnectCredentialStore } from "./credentials.js";
 
 const privateKey = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey
   .export({ type: "pkcs8", format: "pem" })
@@ -135,5 +135,73 @@ describe("AppStoreConnectCredentialStore", () => {
       source: "environment",
     }]);
     await expect(stat(join(root, "credentials"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("AppleAdsCredentialStore", () => {
+  it("generates a browser-safe public key and saves the private key in an owner-only file", async () => {
+    const root = await mkdtemp(join(tmpdir(), "asc-studio-ads-credentials-"));
+    directories.push(root);
+    const store = new AppleAdsCredentialStore(root);
+    const generated = store.createSetup("asc-account-1");
+    expect(generated.publicKey).toContain("BEGIN PUBLIC KEY");
+    expect(generated.publicKey).not.toContain("PRIVATE KEY");
+
+    const input = {
+      clientId: "SEARCHADS.client-1",
+      teamId: "SEARCHADS.team-1",
+      keyId: "ads-key-1",
+      adAccountId: "123456789",
+      setupId: generated.setupId,
+    };
+    await expect(store.candidateCredentials("asc-account-1", "Orbit Notes Team", input)).resolves.toMatchObject({
+      profileName: "Orbit Notes Team",
+      clientId: input.clientId,
+      adAccountId: input.adAccountId,
+    });
+    await store.save("asc-account-1", input);
+
+    await expect(store.load({ connectionId: "asc-account-1", profileName: "Orbit Notes Team" })).resolves.toMatchObject({
+      profileName: "Orbit Notes Team",
+      keyId: "ads-key-1",
+      adAccountId: "123456789",
+      authBackend: "Owner-only local credential file",
+    });
+    await expect(store.summary({ connectionId: "asc-account-1", profileName: "Orbit Notes Team" })).resolves.toEqual({
+      configured: true,
+      profileName: "Orbit Notes Team",
+      appStoreConnectConnectionId: "asc-account-1",
+      adAccountId: "123456789",
+      keyId: "ads-key-1",
+      source: "local",
+    });
+
+    const credentialDirectory = join(root, "credentials");
+    const metadataPath = join(credentialDirectory, "apple-ads.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as { connections: Array<{ privateKeyFile: string }> };
+    const keyPath = join(credentialDirectory, metadata.connections[0]!.privateKeyFile);
+    expect((await stat(metadataPath)).mode & 0o777).toBe(0o600);
+    expect((await stat(keyPath)).mode & 0o777).toBe(0o600);
+    expect(await readFile(metadataPath, "utf8")).not.toContain("PRIVATE KEY");
+
+    await store.remove("asc-account-1");
+    await expect(store.load({ connectionId: "asc-account-1", profileName: "Orbit Notes Team" })).resolves.toBeNull();
+  });
+
+  it("expires generated private keys without exposing them to the browser", async () => {
+    const root = await mkdtemp(join(tmpdir(), "asc-studio-ads-credentials-"));
+    directories.push(root);
+    let now = new Date("2026-08-16T12:00:00.000Z");
+    const store = new AppleAdsCredentialStore(root, () => now);
+    const generated = store.createSetup("asc-account-1");
+    now = new Date("2026-08-16T12:16:00.000Z");
+
+    await expect(store.candidateCredentials("asc-account-1", "Orbit Notes Team", {
+      clientId: "SEARCHADS.client-1",
+      teamId: "SEARCHADS.team-1",
+      keyId: "ads-key-1",
+      adAccountId: "123456789",
+      setupId: generated.setupId,
+    })).rejects.toMatchObject({ code: "apple_ads_setup_expired", status: 409 });
   });
 });

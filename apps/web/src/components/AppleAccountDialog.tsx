@@ -16,8 +16,8 @@ export const AppleAccountDialog = ({ onConnected, onClose }: AppleAccountDialogP
         <div className="account-dialog-title">
           <span className="connection-setup-icon"><KeyRound size={22} /></span>
           <div>
-            <h2 id="account-dialog-title">Add Apple account</h2>
-            <p>Save another App Store Connect team API key.</p>
+            <h2 id="account-dialog-title">Add App Store Connect account</h2>
+            <p>Save another organization team API key.</p>
           </div>
         </div>
         <button className="icon-button" type="button" onClick={onClose} aria-label="Close dialog"><X size={19} /></button>

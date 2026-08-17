@@ -1,4 +1,4 @@
-import type { AgentStatus, AppStoreConnectAccount, AppSummary } from "@asc-studio/contracts";
+import type { AgentStatus, AppleAdsStatus, AppStoreConnectAccount, AppSummary } from "@asc-studio/contracts";
 import {
   Activity,
   AppWindow,
@@ -13,6 +13,7 @@ import {
   Orbit,
   Plus,
   Send,
+  Settings2,
   Star,
   Trash2,
   UserRound,
@@ -44,6 +45,8 @@ interface SidebarProps {
   onAccountChange: (connectionId: string) => Promise<void>;
   onAddAccount: () => void;
   onRemoveAccount: (connectionId: string) => Promise<void>;
+  appleAdsStatus: AppleAdsStatus | null;
+  onManageAppleServices: () => void;
 }
 
 export const Sidebar = ({
@@ -57,11 +60,20 @@ export const Sidebar = ({
   onAccountChange,
   onAddAccount,
   onRemoveAccount,
+  appleAdsStatus,
+  onManageAppleServices,
 }: SidebarProps) => {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [accountBusy, setAccountBusy] = useState<string | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
+  const serviceState = status?.mode === "demo"
+    ? "Demo services"
+    : status?.connected && appleAdsStatus?.connected
+      ? "Both services connected"
+      : status?.connected
+        ? "App Store Connect connected"
+        : "Disconnected";
 
   const switchAccount = async (connectionId: string) => {
     setAccountBusy(connectionId);
@@ -166,17 +178,20 @@ export const Sidebar = ({
         <button
           className="connection-block"
           type="button"
-          disabled={status?.mode !== "live" || accounts.length === 0}
-          aria-label={status?.mode === "live" ? "Choose Apple account" : "Demo workspace"}
+          disabled={!status}
+          aria-label="Apple services"
           aria-expanded={accountMenuOpen}
-          onClick={() => setAccountMenuOpen((open) => !open)}
+          onClick={() => {
+            if (status?.mode === "live" && accounts.length > 0) setAccountMenuOpen((open) => !open);
+            else onManageAppleServices();
+          }}
         >
           <div className="connection-icon"><BadgeDollarSign size={22} /></div>
           <div className="connection-copy">
-            <div className="connection-title">App Store Connect</div>
+            <div className="connection-title">Apple services</div>
             <div className={`connection-state ${status?.connected ? "online" : "offline"}`}>
               <span className="state-dot" />
-              {status?.mode === "demo" ? "Demo workspace" : status?.connected ? status.profile ?? "Connected" : "Disconnected"}
+              {serviceState}
             </div>
           </div>
           {status?.mode === "live" && accounts.length > 0
@@ -184,8 +199,8 @@ export const Sidebar = ({
             : null}
         </button>
         {accountMenuOpen && status?.mode === "live" ? (
-          <div className="account-menu" role="menu" aria-label="Apple accounts">
-            <div className="app-menu-label">Apple accounts</div>
+          <div className="account-menu" role="menu" aria-label="Apple organizations">
+            <div className="app-menu-label">Apple organizations</div>
             {accounts.map((account) => (
               <div className="account-menu-row" key={account.id}>
                 <button
@@ -197,7 +212,7 @@ export const Sidebar = ({
                   onClick={() => void switchAccount(account.id)}
                 >
                   <span className="account-avatar"><UserRound size={16} /></span>
-                  <span><strong>{account.profileName}</strong><small>{account.source === "environment" ? "Environment variables" : `Key ${account.keyId}`}</small></span>
+                  <span><strong>{account.profileName}</strong><small>{account.source === "environment" ? "Environment variables" : `App Store Connect key ${account.keyId}`}</small></span>
                   {account.active ? <Check size={16} /> : null}
                 </button>
                 {account.source === "local" ? (
@@ -214,12 +229,18 @@ export const Sidebar = ({
               </div>
             ))}
             {accountError ? <p className="account-menu-error" role="alert">{accountError}</p> : null}
+            <button className="account-add" type="button" role="menuitem" onClick={() => {
+              setAccountMenuOpen(false);
+              onManageAppleServices();
+            }}>
+              <Settings2 size={16} /> Manage Apple services
+            </button>
             {accounts.every((account) => account.source === "local") ? (
               <button className="account-add" type="button" role="menuitem" onClick={() => {
                 setAccountMenuOpen(false);
                 onAddAccount();
               }}>
-                <Plus size={16} /> Add Apple account
+                <Plus size={16} /> Add App Store Connect account
               </button>
             ) : null}
           </div>

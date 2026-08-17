@@ -67,6 +67,8 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 ## Apple Ads intelligence and campaign management — complete
 
 - Keep Apple Ads OAuth credentials separate from App Store Connect keys
+- Group both service connections under the active Apple organization in the GUI
+- Generate Apple Ads P-256 keys in the local agent and finish setup without a CLI
 - Query Apple Ads Platform API v1 keyword suggestions and search-term popularity
 - Rank candidates with Apple-provided signals without inventing search counts or difficulty
 - Read campaigns, ad groups, keywords, and campaign performance through the local API and MCP

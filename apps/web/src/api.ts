@@ -4,6 +4,8 @@ import {
   AppleAdsAdGroupsResponseSchema,
   AppleAdsCampaignReportResponseSchema,
   AppleAdsCampaignsResponseSchema,
+  AppleAdsConnectionResponseSchema,
+  AppleAdsGeneratedKeyResponseSchema,
   AppleAdsKeywordResearchResponseSchema,
   AppleAdsKeywordsResponseSchema,
   AppleAdsStatusSchema,
@@ -28,6 +30,7 @@ import {
 import type {
   AddBuildToGroupInput,
   AppleAdsCampaignReportInput,
+  AppleAdsCredentialsInput,
   AppleAdsKeywordResearchInput,
   AppStoreConnectCredentialsInput,
   AppStorePlatform,
@@ -122,6 +125,22 @@ const request = async <T>(path: string, schema: ResponseSchema<T>, options?: Req
 export const api = {
   status: () => request("/api/status", AgentStatusSchema),
   appleAdsStatus: () => request("/api/apple-ads/status", AppleAdsStatusSchema),
+  appleAdsConnection: () => request("/api/connections/apple-ads", AppleAdsConnectionResponseSchema),
+  generateAppleAdsKeyPair: () => request(
+    "/api/connections/apple-ads/key-pair",
+    AppleAdsGeneratedKeyResponseSchema,
+    { method: "POST" },
+  ),
+  connectAppleAds: (input: AppleAdsCredentialsInput) => request(
+    "/api/connections/apple-ads",
+    AppleAdsConnectionResponseSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  ),
+  removeAppleAdsConnection: () => request(
+    "/api/connections/apple-ads",
+    AppleAdsConnectionResponseSchema,
+    { method: "DELETE" },
+  ),
   appleAdsCampaigns: (appId?: string) => {
     const query = appId ? `?${new URLSearchParams({ appId })}` : "";
     return request(`/api/apple-ads/campaigns${query}`, AppleAdsCampaignsResponseSchema);

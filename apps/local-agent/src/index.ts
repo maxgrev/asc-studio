@@ -5,6 +5,7 @@ import { basename, extname, isAbsolute, join, relative, resolve, sep } from "nod
 import {
   AddBuildToGroupInputSchema,
   AppleAdsCampaignReportInputSchema,
+  AppleAdsCredentialsInputSchema,
   AppleAdsKeywordResearchInputSchema,
   CreateAppleAdsAdGroupInputSchema,
   CreateAppleAdsCampaignInputSchema,
@@ -26,12 +27,11 @@ import {
   AppleAdsApiError,
   AppleAdsCredentialUnavailableError,
   AppleAdsPlatformProvider,
-  type AppleAdsCredentials,
 } from "@asc-studio/provider-apple-ads";
 import { AppStoreConnectApiError, AppStoreConnectProvider } from "@asc-studio/provider-app-store-connect";
 import { MockAscProvider } from "@asc-studio/provider-demo";
 import { z } from "zod";
-import { AppStoreConnectCredentialStore, CredentialStoreError } from "./credentials.js";
+import { AppleAdsCredentialStore, AppStoreConnectCredentialStore, CredentialStoreError } from "./credentials.js";
 import { handleMcpRequest } from "./mcp.js";
 import { SqlitePlanStore } from "./store.js";
 import { createReleaseCopyTranslator, TranslationProviderError } from "./translation.js";
@@ -386,47 +386,8 @@ const isTrustedOrigin = (value: string | undefined) => {
 };
 
 const credentialStore = new AppStoreConnectCredentialStore(dataDirectory);
+const appleAdsCredentialStore = new AppleAdsCredentialStore(dataDirectory);
 const accountLock = new AsyncReadWriteLock();
-
-const loadAppleAdsCredentials = async (): Promise<AppleAdsCredentials | null> => {
-  const values = {
-    profileName: process.env.ASC_STUDIO_ADS_PROFILE_NAME,
-    clientId: process.env.ASC_STUDIO_ADS_CLIENT_ID,
-    teamId: process.env.ASC_STUDIO_ADS_TEAM_ID,
-    keyId: process.env.ASC_STUDIO_ADS_KEY_ID,
-    privateKey: process.env.ASC_STUDIO_ADS_PRIVATE_KEY,
-    privateKeyPath: process.env.ASC_STUDIO_ADS_PRIVATE_KEY_PATH,
-    adAccountId: process.env.ASC_STUDIO_ADS_AD_ACCOUNT_ID,
-  };
-  const configured = Object.values(values).some((value) => value !== undefined);
-  if (!configured) return null;
-  if (!values.clientId || !values.teamId || !values.keyId || !values.adAccountId) {
-    throw new Error("Apple Ads requires ASC_STUDIO_ADS_CLIENT_ID, ASC_STUDIO_ADS_TEAM_ID, ASC_STUDIO_ADS_KEY_ID, and ASC_STUDIO_ADS_AD_ACCOUNT_ID.");
-  }
-  if ((values.privateKey ? 1 : 0) + (values.privateKeyPath ? 1 : 0) !== 1) {
-    throw new Error("Set exactly one of ASC_STUDIO_ADS_PRIVATE_KEY or ASC_STUDIO_ADS_PRIVATE_KEY_PATH.");
-  }
-  if (!/^\d+$/.test(values.adAccountId)) throw new Error("ASC_STUDIO_ADS_AD_ACCOUNT_ID must be numeric.");
-  if (!values.clientId.startsWith("SEARCHADS.") || !values.teamId.startsWith("SEARCHADS.")) {
-    throw new Error("Apple Ads client and team IDs must start with SEARCHADS.");
-  }
-  let privateKey = values.privateKey;
-  let authBackend = "environment variable";
-  if (values.privateKeyPath) {
-    if (!isAbsolute(values.privateKeyPath)) throw new Error("ASC_STUDIO_ADS_PRIVATE_KEY_PATH must be absolute.");
-    privateKey = await readFile(values.privateKeyPath, "utf8");
-    authBackend = `environment file ${basename(values.privateKeyPath)}`;
-  }
-  return {
-    profileName: values.profileName?.trim() || "Apple Ads",
-    clientId: values.clientId,
-    teamId: values.teamId,
-    keyId: values.keyId,
-    privateKey: privateKey!,
-    adAccountId: values.adAccountId,
-    authBackend,
-  };
-};
 
 const main = async () => {
   await mkdir(screenshotUploadsDirectory, { recursive: true, mode: 0o700 });
@@ -435,12 +396,19 @@ const main = async () => {
     if (!webStats?.isDirectory()) throw new Error(`ASC_STUDIO_WEB_DIR is not a readable directory: ${webDirectory}`);
   }
   const demoProvider = mode === "demo" ? new MockAscProvider() : null;
-  const adsCredentials = mode === "live" ? await loadAppleAdsCredentials() : null;
   const provider = demoProvider ?? new AppStoreConnectProvider({
     credentials: () => credentialStore.load(),
     uploadDirectory: screenshotUploadsDirectory,
   });
-  const adsProvider = demoProvider ?? new AppleAdsPlatformProvider({ credentials: async () => adsCredentials });
+  const activeAppleAccount = async () => {
+    const credentials = await credentialStore.load();
+    return credentials?.connectionId
+      ? { connectionId: credentials.connectionId, profileName: credentials.profileName }
+      : null;
+  };
+  const adsProvider = demoProvider ?? new AppleAdsPlatformProvider({
+    credentials: async () => appleAdsCredentialStore.load(await activeAppleAccount()),
+  });
   const status = await provider.getStatus();
   const databaseName = status.mode === "demo" ? "demo.sqlite" : "live.sqlite";
   const store = new SqlitePlanStore(join(dataDirectory, databaseName));
@@ -453,6 +421,19 @@ const main = async () => {
     digest: (value) => createHash("sha256").update(value).digest("hex"),
   });
   const translator = createReleaseCopyTranslator(mode);
+  const appleAdsConnectionResponse = async () => ({
+    status: await service.getAppleAdsStatus(),
+    connection: mode === "demo"
+      ? {
+          configured: true,
+          profileName: "Demo workspace",
+          appStoreConnectConnectionId: "demo",
+          adAccountId: "demo-ads-account",
+          keyId: "DEMO",
+          source: "demo" as const,
+        }
+      : await appleAdsCredentialStore.summary(await activeAppleAccount()),
+  });
 
   const server = createServer(async (request, response) => {
     response.setHeader("x-content-type-options", "nosniff");
@@ -486,11 +467,16 @@ const main = async () => {
           && (
             url.pathname === "/api/connection/app-store-connect"
             || url.pathname === "/api/connections/app-store-connect"
+            || url.pathname === "/api/connections/apple-ads"
+            || url.pathname === "/api/connections/apple-ads/key-pair"
             || /^\/api\/connections\/app-store-connect\/[^/]+\/activate$/.test(url.pathname)
           )
         ) || (
           request.method === "DELETE"
-          && /^\/api\/connections\/app-store-connect\/[^/]+$/.test(url.pathname)
+          && (
+            /^\/api\/connections\/app-store-connect\/[^/]+$/.test(url.pathname)
+            || url.pathname === "/api/connections/apple-ads"
+          )
         );
         releaseAccountLock = await (changesActiveAccount ? accountLock.acquireWrite() : accountLock.acquireRead());
       }
@@ -566,6 +552,42 @@ const main = async () => {
         json(response, 200, { accounts: mode === "live" ? await credentialStore.list() : [] });
         return;
       }
+      if (request.method === "GET" && url.pathname === "/api/connections/apple-ads") {
+        json(response, 200, await appleAdsConnectionResponse());
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/connections/apple-ads/key-pair") {
+        if (mode !== "live") throw new RequestError("demo_connection", "Demo mode cannot create live Apple Ads credentials.", 409);
+        const activeAccount = await activeAppleAccount();
+        if (!activeAccount) throw new RequestError("app_store_connect_required", "Connect App Store Connect before adding Apple Ads.", 409);
+        json(response, 201, appleAdsCredentialStore.createSetup(activeAccount.connectionId));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/connections/apple-ads") {
+        if (mode !== "live") throw new RequestError("demo_connection", "Demo mode cannot save a live Apple Ads connection.", 409);
+        const activeAccount = await activeAppleAccount();
+        if (!activeAccount) throw new RequestError("app_store_connect_required", "Connect App Store Connect before adding Apple Ads.", 409);
+        const input = AppleAdsCredentialsInputSchema.parse(await readBody(request));
+        const credentials = await appleAdsCredentialStore.candidateCredentials(
+          activeAccount.connectionId,
+          activeAccount.profileName,
+          input,
+        );
+        const candidate = new AppleAdsPlatformProvider({ credentials });
+        const candidateStatus = await candidate.getAppleAdsStatus();
+        if (!candidateStatus.connected) throw new RequestError("connection_failed", candidateStatus.detail, 422);
+        await appleAdsCredentialStore.save(activeAccount.connectionId, input);
+        json(response, 200, await appleAdsConnectionResponse());
+        return;
+      }
+      if (request.method === "DELETE" && url.pathname === "/api/connections/apple-ads") {
+        if (mode !== "live") throw new RequestError("demo_connection", "Demo mode cannot remove a live Apple Ads connection.", 409);
+        const activeAccount = await activeAppleAccount();
+        if (!activeAccount) throw new RequestError("app_store_connect_required", "Connect App Store Connect before changing Apple Ads.", 409);
+        await appleAdsCredentialStore.remove(activeAccount.connectionId);
+        json(response, 200, await appleAdsConnectionResponse());
+        return;
+      }
       if (
         request.method === "POST"
         && ["/api/connection/app-store-connect", "/api/connections/app-store-connect"].includes(url.pathname)
@@ -599,7 +621,9 @@ const main = async () => {
       const removeConnectionMatch = url.pathname.match(/^\/api\/connections\/app-store-connect\/([^/]+)$/);
       if (request.method === "DELETE" && removeConnectionMatch?.[1]) {
         if (mode !== "live") throw new RequestError("demo_connection", "Demo mode has no Apple accounts to remove.", 409);
-        await credentialStore.remove(decodeURIComponent(removeConnectionMatch[1]));
+        const connectionId = decodeURIComponent(removeConnectionMatch[1]);
+        await appleAdsCredentialStore.removeLinked(connectionId);
+        await credentialStore.remove(connectionId);
         json(response, 200, { status: await service.getStatus(), accounts: await credentialStore.list() });
         return;
       }

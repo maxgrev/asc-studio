@@ -120,9 +120,17 @@ describe("local-agent live connection setup", () => {
   });
 
   it("keeps Apple Ads optional and returns a clear error for unconfigured tools", async () => {
-    const status = await fetch(`${agent!.baseUrl}/api/apple-ads/status`, { headers: authorization(guiToken) });
+    const [status, connection, keyPair] = await Promise.all([
+      fetch(`${agent!.baseUrl}/api/apple-ads/status`, { headers: authorization(guiToken) }),
+      fetch(`${agent!.baseUrl}/api/connections/apple-ads`, { headers: authorization(guiToken) }),
+      fetch(`${agent!.baseUrl}/api/connections/apple-ads/key-pair`, { method: "POST", headers: authorization(guiToken) }),
+    ]);
     expect(status.status).toBe(200);
     expect(await status.json()).toMatchObject({ configured: false, connected: false, adAccountId: null });
+    expect(connection.status).toBe(200);
+    expect(await connection.json()).toMatchObject({ connection: { configured: false, source: null } });
+    expect(keyPair.status).toBe(409);
+    expect(await keyPair.json()).toMatchObject({ error: { code: "app_store_connect_required" } });
 
     const research = await fetch(`${agent!.baseUrl}/api/apple-ads/keywords/research`, {
       method: "POST",
