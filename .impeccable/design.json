@@ -1,0 +1,353 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-21T17:39:33Z",
+  "title": "Design System: ASC Studio",
+  "extensions": {
+    "colorMeta": {
+      "background-light": {
+        "role": "neutral",
+        "displayName": "Day Canvas",
+        "canonical": "#f7f8fa",
+        "tonalRamp": ["oklch(15% 0.0029 264.5)", "oklch(27% 0.0029 264.5)", "oklch(39% 0.0029 264.5)", "oklch(51% 0.0029 264.5)", "oklch(63% 0.0029 264.5)", "oklch(75% 0.0029 264.5)", "oklch(87% 0.0029 264.5)", "oklch(95% 0.0029 264.5)"]
+      },
+      "surface-light": {
+        "role": "neutral",
+        "displayName": "Day Surface",
+        "canonical": "#ffffff",
+        "tonalRamp": ["oklch(15% 0 0)", "oklch(27% 0 0)", "oklch(39% 0 0)", "oklch(51% 0 0)", "oklch(63% 0 0)", "oklch(75% 0 0)", "oklch(87% 0 0)", "oklch(95% 0 0)"]
+      },
+      "text-light": {
+        "role": "neutral",
+        "displayName": "Day Ink",
+        "canonical": "#15171b",
+        "tonalRamp": ["oklch(15% 0.0086 264.4)", "oklch(27% 0.0086 264.4)", "oklch(39% 0.0086 264.4)", "oklch(51% 0.0086 264.4)", "oklch(63% 0.0086 264.4)", "oklch(75% 0.0086 264.4)", "oklch(87% 0.0086 264.4)", "oklch(95% 0.0086 264.4)"]
+      },
+      "muted-light": {
+        "role": "neutral",
+        "displayName": "Day Muted Ink",
+        "canonical": "#656b76",
+        "tonalRamp": ["oklch(15% 0.0188 262.7)", "oklch(27% 0.0188 262.7)", "oklch(39% 0.0188 262.7)", "oklch(51% 0.0188 262.7)", "oklch(63% 0.0188 262.7)", "oklch(75% 0.0188 262.7)", "oklch(87% 0.0188 262.7)", "oklch(95% 0.0188 262.7)"]
+      },
+      "border-light": {
+        "role": "neutral",
+        "displayName": "Day Hairline",
+        "canonical": "#dfe3e8",
+        "tonalRamp": ["oklch(15% 0.0081 253.9)", "oklch(27% 0.0081 253.9)", "oklch(39% 0.0081 253.9)", "oklch(51% 0.0081 253.9)", "oklch(63% 0.0081 253.9)", "oklch(75% 0.0081 253.9)", "oklch(87% 0.0081 253.9)", "oklch(95% 0.0081 253.9)"]
+      },
+      "border-strong-light": {
+        "role": "neutral",
+        "displayName": "Day Strong Hairline",
+        "canonical": "#cfd5dd",
+        "tonalRamp": ["oklch(15% 0.0128 255.5)", "oklch(27% 0.0128 255.5)", "oklch(39% 0.0128 255.5)", "oklch(51% 0.0128 255.5)", "oklch(63% 0.0128 255.5)", "oklch(75% 0.0128 255.5)", "oklch(87% 0.0128 255.5)", "oklch(95% 0.0128 255.5)"]
+      },
+      "accent-light": {
+        "role": "primary",
+        "displayName": "Operator Blue",
+        "canonical": "#1464e8",
+        "tonalRamp": ["oklch(15% 0.2131 260.7)", "oklch(27% 0.2131 260.7)", "oklch(39% 0.2131 260.7)", "oklch(51% 0.2131 260.7)", "oklch(63% 0.2131 260.7)", "oklch(75% 0.2131 260.7)", "oklch(87% 0.2131 260.7)", "oklch(95% 0.2131 260.7)"]
+      },
+      "accent-soft-light": {
+        "role": "primary",
+        "displayName": "Selection Wash",
+        "canonical": "#ebf3ff",
+        "tonalRamp": ["oklch(15% 0.0183 258.4)", "oklch(27% 0.0183 258.4)", "oklch(39% 0.0183 258.4)", "oklch(51% 0.0183 258.4)", "oklch(63% 0.0183 258.4)", "oklch(75% 0.0183 258.4)", "oklch(87% 0.0183 258.4)", "oklch(95% 0.0183 258.4)"]
+      },
+      "success-light": {
+        "role": "tertiary",
+        "displayName": "Ready Green",
+        "canonical": "#42a348",
+        "tonalRamp": ["oklch(15% 0.1579 144.5)", "oklch(27% 0.1579 144.5)", "oklch(39% 0.1579 144.5)", "oklch(51% 0.1579 144.5)", "oklch(63% 0.1579 144.5)", "oklch(75% 0.1579 144.5)", "oklch(87% 0.1579 144.5)", "oklch(95% 0.1579 144.5)"]
+      },
+      "warning-light": {
+        "role": "secondary",
+        "displayName": "Attention Amber",
+        "canonical": "#e69512",
+        "tonalRamp": ["oklch(15% 0.1555 70.2)", "oklch(27% 0.1555 70.2)", "oklch(39% 0.1555 70.2)", "oklch(51% 0.1555 70.2)", "oklch(63% 0.1555 70.2)", "oklch(75% 0.1555 70.2)", "oklch(87% 0.1555 70.2)", "oklch(95% 0.1555 70.2)"]
+      },
+      "danger-light": {
+        "role": "tertiary",
+        "displayName": "Blocking Red",
+        "canonical": "#d84444",
+        "tonalRamp": ["oklch(15% 0.1849 24.7)", "oklch(27% 0.1849 24.7)", "oklch(39% 0.1849 24.7)", "oklch(51% 0.1849 24.7)", "oklch(63% 0.1849 24.7)", "oklch(75% 0.1849 24.7)", "oklch(87% 0.1849 24.7)", "oklch(95% 0.1849 24.7)"]
+      },
+      "background-dark": {
+        "role": "neutral",
+        "displayName": "Night Canvas",
+        "canonical": "#0d0f13",
+        "tonalRamp": ["oklch(15% 0.0090 264.3)", "oklch(27% 0.0090 264.3)", "oklch(39% 0.0090 264.3)", "oklch(51% 0.0090 264.3)", "oklch(63% 0.0090 264.3)", "oklch(75% 0.0090 264.3)", "oklch(87% 0.0090 264.3)", "oklch(95% 0.0090 264.3)"]
+      },
+      "surface-dark": {
+        "role": "neutral",
+        "displayName": "Night Surface",
+        "canonical": "#171a20",
+        "tonalRamp": ["oklch(15% 0.0127 264.3)", "oklch(27% 0.0127 264.3)", "oklch(39% 0.0127 264.3)", "oklch(51% 0.0127 264.3)", "oklch(63% 0.0127 264.3)", "oklch(75% 0.0127 264.3)", "oklch(87% 0.0127 264.3)", "oklch(95% 0.0127 264.3)"]
+      },
+      "text-dark": {
+        "role": "neutral",
+        "displayName": "Night Ink",
+        "canonical": "#f2f4f7",
+        "tonalRamp": ["oklch(15% 0.0045 258.3)", "oklch(27% 0.0045 258.3)", "oklch(39% 0.0045 258.3)", "oklch(51% 0.0045 258.3)", "oklch(63% 0.0045 258.3)", "oklch(75% 0.0045 258.3)", "oklch(87% 0.0045 258.3)", "oklch(95% 0.0045 258.3)"]
+      },
+      "muted-dark": {
+        "role": "neutral",
+        "displayName": "Night Muted Ink",
+        "canonical": "#a6adb8",
+        "tonalRamp": ["oklch(15% 0.0177 259.4)", "oklch(27% 0.0177 259.4)", "oklch(39% 0.0177 259.4)", "oklch(51% 0.0177 259.4)", "oklch(63% 0.0177 259.4)", "oklch(75% 0.0177 259.4)", "oklch(87% 0.0177 259.4)", "oklch(95% 0.0177 259.4)"]
+      },
+      "border-dark": {
+        "role": "neutral",
+        "displayName": "Night Hairline",
+        "canonical": "#2a2f38",
+        "tonalRamp": ["oklch(15% 0.0177 262.2)", "oklch(27% 0.0177 262.2)", "oklch(39% 0.0177 262.2)", "oklch(51% 0.0177 262.2)", "oklch(63% 0.0177 262.2)", "oklch(75% 0.0177 262.2)", "oklch(87% 0.0177 262.2)", "oklch(95% 0.0177 262.2)"]
+      },
+      "border-strong-dark": {
+        "role": "neutral",
+        "displayName": "Night Strong Hairline",
+        "canonical": "#3a414d",
+        "tonalRamp": ["oklch(15% 0.0226 261.2)", "oklch(27% 0.0226 261.2)", "oklch(39% 0.0226 261.2)", "oklch(51% 0.0226 261.2)", "oklch(63% 0.0226 261.2)", "oklch(75% 0.0226 261.2)", "oklch(87% 0.0226 261.2)", "oklch(95% 0.0226 261.2)"]
+      },
+      "accent-dark": {
+        "role": "primary",
+        "displayName": "Night Operator Blue",
+        "canonical": "#79adff",
+        "tonalRamp": ["oklch(15% 0.1316 259.2)", "oklch(27% 0.1316 259.2)", "oklch(39% 0.1316 259.2)", "oklch(51% 0.1316 259.2)", "oklch(63% 0.1316 259.2)", "oklch(75% 0.1316 259.2)", "oklch(87% 0.1316 259.2)", "oklch(95% 0.1316 259.2)"]
+      },
+      "accent-soft-dark": {
+        "role": "primary",
+        "displayName": "Night Selection Wash",
+        "canonical": "#182b48",
+        "tonalRamp": ["oklch(15% 0.0590 258.6)", "oklch(27% 0.0590 258.6)", "oklch(39% 0.0590 258.6)", "oklch(51% 0.0590 258.6)", "oklch(63% 0.0590 258.6)", "oklch(75% 0.0590 258.6)", "oklch(87% 0.0590 258.6)", "oklch(95% 0.0590 258.6)"]
+      },
+      "success-dark": {
+        "role": "tertiary",
+        "displayName": "Night Ready Green",
+        "canonical": "#65c970",
+        "tonalRamp": ["oklch(15% 0.1566 146.1)", "oklch(27% 0.1566 146.1)", "oklch(39% 0.1566 146.1)", "oklch(51% 0.1566 146.1)", "oklch(63% 0.1566 146.1)", "oklch(75% 0.1566 146.1)", "oklch(87% 0.1566 146.1)", "oklch(95% 0.1566 146.1)"]
+      },
+      "warning-dark": {
+        "role": "secondary",
+        "displayName": "Night Attention Amber",
+        "canonical": "#eeb245",
+        "tonalRamp": ["oklch(15% 0.1403 78.9)", "oklch(27% 0.1403 78.9)", "oklch(39% 0.1403 78.9)", "oklch(51% 0.1403 78.9)", "oklch(63% 0.1403 78.9)", "oklch(75% 0.1403 78.9)", "oklch(87% 0.1403 78.9)", "oklch(95% 0.1403 78.9)"]
+      },
+      "danger-dark": {
+        "role": "tertiary",
+        "displayName": "Night Blocking Red",
+        "canonical": "#ff747c",
+        "tonalRamp": ["oklch(15% 0.1696 18.8)", "oklch(27% 0.1696 18.8)", "oklch(39% 0.1696 18.8)", "oklch(51% 0.1696 18.8)", "oklch(63% 0.1696 18.8)", "oklch(75% 0.1696 18.8)", "oklch(87% 0.1696 18.8)", "oklch(95% 0.1696 18.8)"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Workspace Display",
+        "purpose": "Primary workspace titles in the topbar."
+      },
+      "headline": {
+        "displayName": "Region Headline",
+        "purpose": "Major regions and high-level task headings."
+      },
+      "title": {
+        "displayName": "Panel Title",
+        "purpose": "Panel, inspector, and dialog section titles."
+      },
+      "body": {
+        "displayName": "Operating Body",
+        "purpose": "Navigation, controls, tables, and factual operating copy."
+      },
+      "label": {
+        "displayName": "Compact Label",
+        "purpose": "Short structural labels and metadata."
+      },
+      "mono": {
+        "displayName": "Technical Mono",
+        "purpose": "Identifiers, timestamps, commands, and fixed-format values."
+      }
+    },
+    "shadows": [
+      {
+        "name": "dialog-light",
+        "value": "0 24px 80px rgba(24, 31, 42, 0.2)",
+        "purpose": "Separate a centered dialog from the light workspace."
+      },
+      {
+        "name": "dialog-dark",
+        "value": "0 24px 80px rgba(0, 0, 0, 0.55)",
+        "purpose": "Preserve modal separation against the dark workspace."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-fast",
+        "value": "100ms ease",
+        "purpose": "Row hover and other immediate tonal feedback."
+      },
+      {
+        "name": "control-standard",
+        "value": "140ms ease",
+        "purpose": "Background and border changes on controls."
+      },
+      {
+        "name": "control-out",
+        "value": "140ms cubic-bezier(0.23, 1, 0.32, 1)",
+        "purpose": "Restrained transform and opacity feedback."
+      },
+      {
+        "name": "panel-state",
+        "value": "180ms ease",
+        "purpose": "Compact expansion or state changes in persistent controls."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "0.01ms",
+        "purpose": "Effective transition and animation duration under reduced-motion preferences."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "desktop-tight",
+        "value": "1220px"
+      },
+      {
+        "name": "compact-navigation",
+        "value": "820px"
+      },
+      {
+        "name": "mobile",
+        "value": "620px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The committing or forward action in a control group.",
+      "html": "<button class=\"ds-button-primary\" type=\"button\">Save changes</button>",
+      "css": ".ds-button-primary { min-height: 44px; padding: 0 17px; color: #fff; border: 1px solid transparent; border-radius: 8px; background: var(--accent, #1464e8); font: 560 15px Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; cursor: pointer; transition: background-color 140ms ease, transform 140ms cubic-bezier(0.23, 1, 0.32, 1); } .ds-button-primary:hover { background: #0e55cc; } .ds-button-primary:focus-visible { outline: 2px solid rgba(20, 100, 232, 0.45); outline-offset: 2px; } .ds-button-primary:active { transform: scale(0.98); } @media (prefers-color-scheme: dark) { .ds-button-primary { background: #286edc; } .ds-button-primary:hover { background: #347bea; } .ds-button-primary:focus-visible { outline-color: rgba(121, 173, 255, 0.62); } }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A bordered read, cancel, or supporting action.",
+      "html": "<button class=\"ds-button-secondary\" type=\"button\">View details</button>",
+      "css": ".ds-button-secondary { min-height: 44px; padding: 0 17px; color: var(--text, #15171b); border: 1px solid var(--border-strong, #cfd5dd); border-radius: 8px; background: var(--surface, #fff); font: 560 15px Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; cursor: pointer; transition: background-color 140ms ease, border-color 140ms ease, transform 140ms cubic-bezier(0.23, 1, 0.32, 1); } .ds-button-secondary:hover { border-color: #b9c0c9; background: #f5f6f8; } .ds-button-secondary:focus-visible { outline: 2px solid rgba(20, 100, 232, 0.45); outline-offset: 2px; } .ds-button-secondary:active { transform: scale(0.98); } @media (prefers-color-scheme: dark) { .ds-button-secondary { color: #f2f4f7; border-color: #3a414d; background: #171a20; } .ds-button-secondary:hover { border-color: #525a67; background: #22262e; } .ds-button-secondary:focus-visible { outline-color: rgba(121, 173, 255, 0.62); } }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "A compact field for names, identifiers, filters, and metadata.",
+      "html": "<label class=\"ds-field\"><span>Profile name</span><input type=\"text\" value=\"Production\" /></label>",
+      "css": ".ds-field { display: grid; gap: 7px; color: #30353c; font: 620 11px Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; } .ds-field input { width: 100%; height: 40px; padding: 0 11px; color: var(--text, #15171b); border: 1px solid var(--border-strong, #cfd5dd); border-radius: 7px; outline: 0; background: var(--surface, #fff); font: 400 12px Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; } .ds-field input:focus { border-color: var(--accent, #1464e8); box-shadow: 0 0 0 3px rgba(20, 100, 232, 0.1); } @media (prefers-color-scheme: dark) { .ds-field { color: #d1d6dd; } .ds-field input { color: #f2f4f7; border-color: #3a414d; background: #171a20; } .ds-field input:focus { border-color: #79adff; box-shadow: 0 0 0 3px rgba(121, 173, 255, 0.15); } }"
+    },
+    {
+      "name": "Active Navigation Item",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "The current workspace destination in the primary rail.",
+      "html": "<button class=\"ds-nav-item\" type=\"button\" aria-current=\"page\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M4 14a8 8 0 0 1 16 0\"/><path d=\"m9 14 3-3 3 3\"/></svg><span>Releases</span></button>",
+      "css": ".ds-nav-item { display: flex; width: 100%; height: 49px; align-items: center; gap: 18px; padding: 0 17px; color: #075cde; border: 0; border-radius: 7px; background: var(--accent-soft, #ebf3ff); font: 620 16px Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; text-align: left; cursor: pointer; transition: background-color 140ms ease; } .ds-nav-item svg { width: 21px; height: 21px; fill: none; stroke: var(--accent, #1464e8); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; } .ds-nav-item:hover { background: #e2edff; } .ds-nav-item:focus-visible { outline: 2px solid rgba(20, 100, 232, 0.45); outline-offset: 2px; } @media (prefers-color-scheme: dark) { .ds-nav-item { color: #79adff; background: #182b48; } .ds-nav-item svg { stroke: #79adff; } .ds-nav-item:hover { background: #20385c; } .ds-nav-item:focus-visible { outline-color: rgba(121, 173, 255, 0.62); } }"
+    },
+    {
+      "name": "Segmented Control",
+      "kind": "custom",
+      "refersTo": "segmented-active",
+      "description": "A compact switch between a small set of peer views.",
+      "html": "<div class=\"ds-segmented\" role=\"group\" aria-label=\"Platform\"><button class=\"ds-active\" type=\"button\">All</button><button type=\"button\">iOS</button><button type=\"button\">macOS</button></div>",
+      "css": ".ds-segmented { display: inline-flex; height: 45px; align-items: center; padding: 3px; border: 1px solid var(--border-strong, #cfd5dd); border-radius: 8px; background: var(--surface, #fff); } .ds-segmented button { height: 37px; padding: 0 17px; color: var(--text, #15171b); border: 0; border-radius: 6px; background: transparent; font: 400 14px Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; cursor: pointer; transition: background-color 140ms ease; } .ds-segmented button:hover { background: #f4f5f7; } .ds-segmented button.ds-active { color: #075cde; background: var(--accent-soft, #ebf3ff); font-weight: 600; } .ds-segmented button:focus-visible { outline: 2px solid rgba(20, 100, 232, 0.45); outline-offset: 1px; } @media (prefers-color-scheme: dark) { .ds-segmented { border-color: #3a414d; background: #171a20; } .ds-segmented button { color: #f2f4f7; } .ds-segmented button:hover { background: #22262e; } .ds-segmented button.ds-active { color: #79adff; background: #182b48; } }"
+    },
+    {
+      "name": "Semantic Status Labels",
+      "kind": "chip",
+      "refersTo": "status-dot-success",
+      "description": "Text-backed status colors for success, warning, and danger.",
+      "html": "<div class=\"ds-status-set\"><span class=\"ds-status ds-success\"><i></i>Ready</span><span class=\"ds-status ds-warning\"><i></i>Needs review</span><span class=\"ds-status ds-danger\"><i></i>Blocked</span></div>",
+      "css": ".ds-status-set { display: flex; flex-wrap: wrap; gap: 14px; color: var(--text, #15171b); font: 400 13px Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; } .ds-status { display: inline-flex; align-items: center; gap: 9px; white-space: nowrap; } .ds-status i { width: 9px; height: 9px; border-radius: 50%; background: #8b919c; } .ds-status.ds-success i { background: var(--success, #42a348); } .ds-status.ds-warning i { background: var(--warning, #e69512); } .ds-status.ds-danger i { background: var(--danger, #d84444); } @media (prefers-color-scheme: dark) { .ds-status-set { color: #f2f4f7; } .ds-status.ds-success i { background: #65c970; } .ds-status.ds-warning i { background: #eeb245; } .ds-status.ds-danger i { background: #ff747c; } }"
+    },
+    {
+      "name": "Operational Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "A flat, bordered container for compact operating rows.",
+      "html": "<section class=\"ds-panel\"><header><strong>Connection</strong><span class=\"ds-status ds-success\"><i></i>Connected</span></header><dl><div><dt>Organization</dt><dd>Demo workspace</dd></div><div><dt>Last read</dt><dd>18 minutes ago</dd></div></dl></section>",
+      "css": ".ds-panel { overflow: hidden; color: var(--text, #15171b); border: 1px solid var(--border, #dfe3e8); border-radius: 8px; background: var(--surface, #fff); font: 400 13px Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; } .ds-panel header { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--border, #dfe3e8); } .ds-panel header strong { font-size: 15px; } .ds-panel dl { margin: 0; padding: 0 16px; } .ds-panel dl div { display: grid; min-height: 42px; grid-template-columns: 1fr auto; align-items: center; gap: 12px; border-bottom: 1px solid var(--border, #dfe3e8); } .ds-panel dl div:last-child { border-bottom: 0; } .ds-panel dt { color: var(--muted, #656b76); } .ds-panel dd { margin: 0; font-weight: 560; } .ds-panel .ds-status { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; } .ds-panel .ds-status i { width: 9px; height: 9px; border-radius: 50%; background: var(--success, #42a348); } @media (prefers-color-scheme: dark) { .ds-panel { color: #f2f4f7; border-color: #2a2f38; background: #171a20; } .ds-panel header, .ds-panel dl div { border-color: #2a2f38; } .ds-panel dt { color: #a6adb8; } .ds-panel .ds-status i { background: #65c970; } }"
+    },
+    {
+      "name": "Compact Table",
+      "kind": "custom",
+      "refersTo": "panel",
+      "description": "A hairline-separated table with quiet headers and blue selection.",
+      "html": "<div class=\"ds-table-wrap\"><table class=\"ds-table\"><thead><tr><th>Version</th><th>Status</th><th>Build</th></tr></thead><tbody><tr class=\"ds-selected\"><td>2.5.0</td><td><span class=\"ds-ready\"><i></i>Ready</span></td><td>211</td></tr><tr><td>2.4.0</td><td>Processing</td><td>204</td></tr></tbody></table></div>",
+      "css": ".ds-table-wrap { overflow: hidden; border: 1px solid var(--border, #dfe3e8); border-radius: 8px; background: var(--surface, #fff); } .ds-table { width: 100%; border-collapse: separate; border-spacing: 0; color: var(--text, #15171b); font: 400 13px Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; } .ds-table th { height: 42px; padding: 0 14px; color: #3e444d; background: #fff; font-size: 11px; font-weight: 550; text-align: left; } .ds-table td { height: 46px; padding: 0 14px; border-top: 1px solid var(--border, #dfe3e8); } .ds-table tbody tr { background: var(--surface, #fff); transition: background-color 100ms ease; } .ds-table tbody tr:hover { background: #f7f9fc; } .ds-table tbody tr.ds-selected { background: #eff5ff; box-shadow: inset 2px 0 0 var(--accent, #1464e8); } .ds-ready { display: inline-flex; align-items: center; gap: 7px; } .ds-ready i { width: 9px; height: 9px; border-radius: 50%; background: var(--success, #42a348); } @media (prefers-color-scheme: dark) { .ds-table-wrap { border-color: #2a2f38; background: #171a20; } .ds-table { color: #f2f4f7; } .ds-table th { color: #cbd0d8; background: #191c22; } .ds-table td { border-color: #2a2f38; } .ds-table tbody tr { background: #171a20; } .ds-table tbody tr:hover { background: #1d222a; } .ds-table tbody tr.ds-selected { background: #172945; box-shadow: inset 2px 0 0 #79adff; } .ds-ready i { background: #65c970; } }"
+    },
+    {
+      "name": "Review Dialog",
+      "kind": "custom",
+      "refersTo": "dialog",
+      "description": "The elevated layer for reviewing an exact decision before confirmation.",
+      "html": "<section class=\"ds-dialog\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Review changes\"><header><div><h2>Review changes</h2><p>Confirm the exact values before applying.</p></div></header><div class=\"ds-dialog-content\"><strong>One change is ready for review.</strong></div><footer><button class=\"ds-cancel\" type=\"button\">Cancel</button><button class=\"ds-confirm\" type=\"button\">Confirm</button></footer></section>",
+      "css": ".ds-dialog { width: min(540px, 100%); overflow: hidden; color: var(--text, #15171b); border: 1px solid rgba(255, 255, 255, 0.65); border-radius: 12px; background: var(--surface, #fff); box-shadow: 0 24px 80px rgba(24, 31, 42, 0.2); font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; } .ds-dialog header { padding: 23px 24px 18px; border-bottom: 1px solid var(--border, #dfe3e8); } .ds-dialog h2 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.025em; } .ds-dialog p { margin: 7px 0 0; color: var(--muted, #656b76); font-size: 13px; } .ds-dialog-content { padding: 22px 24px; font-size: 13px; } .ds-dialog footer { display: flex; justify-content: flex-end; gap: 9px; padding: 16px 24px; border-top: 1px solid var(--border, #dfe3e8); background: #fafbfc; } .ds-dialog button { min-height: 40px; padding: 0 15px; border-radius: 8px; font: 560 13px Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; cursor: pointer; transition: background-color 140ms ease, transform 140ms cubic-bezier(0.23, 1, 0.32, 1); } .ds-dialog button:active { transform: scale(0.98); } .ds-dialog button:focus-visible { outline: 2px solid rgba(20, 100, 232, 0.45); outline-offset: 2px; } .ds-cancel { color: var(--text, #15171b); border: 1px solid var(--border-strong, #cfd5dd); background: var(--surface, #fff); } .ds-confirm { color: #fff; border: 1px solid transparent; background: var(--accent, #1464e8); } @media (prefers-color-scheme: dark) { .ds-dialog { color: #f2f4f7; border-color: #3a414d; background: #191c22; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55); } .ds-dialog header, .ds-dialog footer { border-color: #2a2f38; } .ds-dialog p { color: #a6adb8; } .ds-dialog footer { background: #1e2229; } .ds-cancel { color: #f2f4f7; border-color: #3a414d; background: #171a20; } .ds-confirm { background: #286edc; } .ds-dialog button:focus-visible { outline-color: rgba(121, 173, 255, 0.62); } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Calm Operations Console",
+    "overview": "The Calm Operations Console treats ASC Studio as a working instrument: information leads, framing recedes, and the interface stays legible under operational density. Light and dark themes use paired neutrals, hairlines, and blue selection to make current context obvious without turning status into decoration.\n\nThe system is precise, calm, and operational. Persistent surfaces stay flat; compact tables and rows carry most workflow state; semantic color marks real status only. Identity comes from consistency in spacing, type, and interaction restraint.",
+    "keyCharacteristics": [
+      "Calm, desktop-grade operational density.",
+      "Paired light and dark theme roles.",
+      "Blue for action, focus, selection, and in-progress state.",
+      "Semantic dots and labels for success, warning, and danger.",
+      "Flat persistent surfaces divided by thin hairlines.",
+      "Compact system typography, controls, tables, and rows."
+    ],
+    "rules": [
+      {
+        "name": "The Theme Pair Rule",
+        "body": "Choose every role from one theme set; never combine daylight and night tokens on the same surface.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Semantic Meaning Rule",
+        "body": "Blue indicates action, focus, selection, or progress; green means ready or successful; amber means attention; red means blocked, failed, or destructive. Pair semantic color with text rather than relying on color alone.",
+        "section": "colors"
+      },
+      {
+        "name": "The Scan First Rule",
+        "body": "Keep headings short, labels compact, and values visually firmer than their descriptors so a workspace reads in vertical and tabular passes.",
+        "section": "typography"
+      },
+      {
+        "name": "The Preserve Context Rule",
+        "body": "Collapse navigation chrome and secondary labels before removing the status, scope, or units that make operational data trustworthy.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat-by-Default Rule",
+        "body": "If a surface persists in the workspace, separate it with tone and a hairline; reserve elevation for dialogs.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Tight Radius Rule",
+        "body": "Keep ordinary controls and panels within the established 7–9px range; use the larger overlay radius only for dialogs.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do choose the complete light or dark token set before styling a surface.",
+      "Do reserve blue for actions, focus, selection, and in-progress state.",
+      "Do pair every semantic dot or color with a text label.",
+      "Do use one-pixel hairlines and compact rows to organize operational data.",
+      "Do preserve the 1220px, 820px, and 620px responsive behaviors when extending the shell.",
+      "Do keep motion to short state changes in transform, opacity, background, or border."
+    ],
+    "donts": [
+      "Don't add shadows to persistent panels, tables, or docks.",
+      "Don't mix light-theme and dark-theme token roles on the same surface.",
+      "Don't replace factual status language with decorative scores, trends, or visual claims.",
+      "Don't enlarge controls or spacing until the operating density stops reading as a desktop tool.",
+      "Don't animate layout for decoration or ignore reduced-motion preferences."
+    ]
+  }
+}

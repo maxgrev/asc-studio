@@ -214,6 +214,18 @@ export const api = {
     if (options.paginate !== undefined) query.set("paginate", String(options.paginate));
     return request(`/api/apps/${encodeURIComponent(appId)}/versions?${query}`, VersionsResponseSchema);
   },
+  versionsAllPlatforms: (
+    appId: string,
+    options: { limit?: number; paginate?: boolean } = {},
+  ) => {
+    const query = new URLSearchParams();
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    if (options.paginate !== undefined) query.set("paginate", String(options.paginate));
+    return request(
+      `/api/apps/${encodeURIComponent(appId)}/versions${query.size ? `?${query}` : ""}`,
+      VersionsResponseSchema,
+    );
+  },
   localizations: (appId: string, versionId: string) =>
     request(
       `/api/apps/${encodeURIComponent(appId)}/versions/${encodeURIComponent(versionId)}/localizations`,

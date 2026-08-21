@@ -20,10 +20,10 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-export type WorkspaceSection = "testflight" | "releases" | "apple-ads";
+export type WorkspaceSection = "overview" | "testflight" | "releases" | "apple-ads";
 
 const navigation = [
-  { label: "Overview", icon: Gauge },
+  { label: "Overview", icon: Gauge, section: "overview" as const },
   { label: "TestFlight", icon: Send, section: "testflight" as const },
   { label: "Releases", icon: ClipboardList, section: "releases" as const },
   { label: "Apple Ads", icon: BadgeDollarSign, section: "apple-ads" as const },
@@ -60,7 +60,6 @@ export const Sidebar = ({
   onAccountChange,
   onAddAccount,
   onRemoveAccount,
-  appleAdsStatus,
   onManageAppleServices,
 }: SidebarProps) => {
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -68,12 +67,10 @@ export const Sidebar = ({
   const [accountBusy, setAccountBusy] = useState<string | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
   const serviceState = status?.mode === "demo"
-    ? "Demo services"
-    : status?.connected && appleAdsStatus?.connected
-      ? "Both services connected"
-      : status?.connected
-        ? "App Store Connect connected"
-        : "Disconnected";
+    ? "Demo"
+    : status?.connected
+      ? "Connected"
+      : "Disconnected";
 
   const switchAccount = async (connectionId: string) => {
     setAccountBusy(connectionId);
@@ -156,6 +153,7 @@ export const Sidebar = ({
               <button
                 type="button"
                 className={active ? "nav-item active" : "nav-item"}
+                aria-label={label}
                 aria-current={active ? "page" : undefined}
                 onClick={() => onNavigate(section)}
                 key={label}

@@ -5,6 +5,7 @@ import { AppleAccountDialog } from "./components/AppleAccountDialog.js";
 import { AppleAdsWorkspace } from "./components/AppleAdsWorkspace.js";
 import { AppleServicesDialog } from "./components/AppleServicesDialog.js";
 import { ConnectionSetup } from "./components/ConnectionSetup.js";
+import { OverviewWorkspace } from "./components/OverviewWorkspace.js";
 import { ReleaseWorkspace } from "./components/ReleaseWorkspace.js";
 import { Sidebar, type WorkspaceSection } from "./components/Sidebar.js";
 import { TestFlightWorkspace } from "./components/TestFlightWorkspace.js";
@@ -129,7 +130,7 @@ export const App = () => {
           setStatus(connectedStatus);
           void refreshAfterAccountChange();
         }} />
-      ) : fatalError || !app ? (
+      ) : fatalError || !app || !status || !appleAdsConnection ? (
         <main className="workspace shell-error-workspace">
           <div className="shell-error" role="alert">
             <h1>{loading ? "Loading ASC Studio" : "Could not open ASC Studio"}</h1>
@@ -137,6 +138,15 @@ export const App = () => {
             {!loading ? <button className="button primary" type="button" onClick={() => void loadShell()}>Try again</button> : null}
           </div>
         </main>
+      ) : section === "overview" ? (
+        <OverviewWorkspace
+          app={app}
+          status={status}
+          appleAdsConnection={appleAdsConnection}
+          onNavigate={setSection}
+          onManageAppleServices={() => setServicesDialogOpen(true)}
+          key={`overview-${status.connectionId ?? "none"}-${appleAdsConnection.connection.adAccountId ?? "none"}-${app.id}`}
+        />
       ) : section === "testflight" ? (
         <TestFlightWorkspace app={app} status={status} onInspectorChange={setTestFlightInspectorOpen} key={`testflight-${status?.connectionId ?? "none"}-${app.id}`} />
       ) : section === "apple-ads" ? (

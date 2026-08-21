@@ -1,0 +1,49 @@
+{
+  "title": "Choose the Overview structure",
+  "question": "Which composition should become ASC Studio’s Overview? Each option keeps the current interface language and uses only data the product can read today.",
+  "options": [
+    {
+      "id": "operations-matrix",
+      "label": "Operations Matrix",
+      "kicker": "THE ROLL",
+      "lineage": "Four live operating lanes",
+      "thesis": "See Ship, Test, Grow, and Activity as one live operating matrix for the selected app.",
+      "palette": ["#0d0f13", "#171a20", "#f2f4f7", "#79adff", "#65c970"],
+      "materials": ["flat dark surfaces", "hairline dividers", "status dots", "compact tables"],
+      "viewport": "A concise header gives way to four asymmetric workflow lanes; each lane pairs one truthful state summary with the next available action, and recent activity anchors the lower edge.",
+      "risk": "The matrix must preserve clear priority so four equally useful lanes do not become four equally loud panels.",
+      "comp": ".impeccable/mocks/decision/overview-operations-matrix.webp"
+    },
+    {
+      "id": "release-train",
+      "label": "Release Train",
+      "kicker": "ALTERNATE",
+      "lineage": "One product lifecycle from build to growth",
+      "thesis": "Make the current release the spine, with TestFlight, App Review, store readiness, and Apple Ads arranged around its progress.",
+      "palette": ["#0d0f13", "#171a20", "#f2f4f7", "#79adff", "#eeb245"],
+      "materials": ["flat dark surfaces", "stage rails", "key-value rows", "precise warning states"],
+      "viewport": "A wide lifecycle rail dominates the first view, a narrow attention column explains blockers and next actions, and supporting performance and activity sit below.",
+      "risk": "It is strongest during an active release and must still feel useful between release cycles.",
+      "comp": ".impeccable/mocks/decision/overview-release-train.webp"
+    },
+    {
+      "id": "command-center",
+      "label": "Command Center",
+      "kicker": "ALTERNATE",
+      "lineage": "Prioritized work queue with context",
+      "thesis": "Lead with what needs attention now, then show the live evidence that explains each recommendation.",
+      "palette": ["#0d0f13", "#171a20", "#f2f4f7", "#79adff", "#ff747c"],
+      "materials": ["flat dark surfaces", "ranked action rows", "quiet metric strips", "audit timestamps"],
+      "viewport": "A large ordered attention queue owns the left side; service health, current release, TestFlight, and Ads evidence stack on the right; activity runs across the foot.",
+      "risk": "A recommendation-first page needs careful empty states so a healthy app never looks unfinished.",
+      "comp": ".impeccable/mocks/decision/overview-command-center.webp"
+    }
+  ],
+  "reroll": true,
+  "steer": true,
+  "canon": false,
+  "buildPath": {
+    "value": "comp",
+    "toggle": true
+  }
+}

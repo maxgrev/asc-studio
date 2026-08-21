@@ -1,0 +1,4 @@
+{
+  "prompt": "Use case: precise-object-edit\nAsset type: correction pass on the ASC Studio Command Center UI mockup\nPrimary request: Correct only two labels while preserving the entire layout, dark visual system, typography, spacing, sidebar, rows, icons, proportions, and all other content unchanged.\nRequired edits:\n1. Under “Recent workspace activity”, change “Latest changes across your app.” to exactly “Latest changes across this workspace.”\n2. In the bottom status strip, retain “Apple services connected”, change “All systems operational” to “Demo workspace”, and change the button label “View system status” to “Manage services”.\nConstraints: change only these text labels; do not alter structure, color, alignment, hierarchy, or any other UI; no new content, no watermark.\n",
+  "createdAt": "2026-08-21T17:08:35.320Z"
+}
