@@ -10,6 +10,8 @@ import type {
   AuditEvent,
   BuildSummary,
   CreateVersionInput,
+  CustomerReview,
+  CustomerReviewResponse,
   LocalizationSnapshot,
   MutationPlan,
   ScreenshotAsset,
@@ -64,13 +66,27 @@ const submissionBuild: BuildSummary = {
   groups: [],
 };
 
+const initialReview: CustomerReview = {
+  id: "review-1",
+  appId: app.id,
+  rating: 5,
+  title: "Exactly what I needed",
+  body: "Fast, focused, and reliable.",
+  reviewerNickname: "MapleWriter",
+  createdAt: "2026-07-30T18:00:00.000Z",
+  territory: "USA",
+  response: null,
+};
+
 class FakeAscProvider implements AscProvider, AppleAdsProvider {
   private readonly builds = [structuredClone(submissionBuild), structuredClone(initialBuild)];
+  private readonly reviews = [structuredClone(initialReview)];
   private attachedBuildId: string | null = null;
   private submission: VersionSubmissionStatus | null = null;
   private validationBlocking = 0;
   private previewCalls = 0;
   private connectionId = "core-test";
+  private lastReviewCursor: string | undefined;
   private readonly adsCampaigns: AppleAdsCampaign[] = [{
     id: "ads-campaign-1",
     adAccountId: "ads-account-1",
@@ -163,6 +179,37 @@ class FakeAscProvider implements AscProvider, AppleAdsProvider {
 
   async listApps() {
     return [structuredClone(app)];
+  }
+
+  async listCustomerReviews(appId: string, options?: Parameters<AscProvider["listCustomerReviews"]>[1]) {
+    this.assertApp(appId);
+    this.lastReviewCursor = options?.cursor;
+    return {
+      reviews: structuredClone(this.reviews),
+      total: this.reviews.length,
+      nextCursor: null,
+    };
+  }
+
+  async getCustomerReview(appId: string, reviewId: string) {
+    this.assertApp(appId);
+    const review = this.reviews.find((candidate) => candidate.id === reviewId);
+    if (!review) throw new Error(`Review ${reviewId} was not found.`);
+    return structuredClone(review);
+  }
+
+  async upsertCustomerReviewResponse(reviewId: string, responseBody: string): Promise<CustomerReviewResponse> {
+    const review = this.reviews.find((candidate) => candidate.id === reviewId);
+    if (!review) throw new Error(`Review ${reviewId} was not found.`);
+    const response: CustomerReviewResponse = {
+      id: review.response?.id ?? "response-1",
+      reviewId,
+      responseBody,
+      lastModifiedAt: "2026-07-31T19:00:00.000Z",
+      state: "PENDING_PUBLISH",
+    };
+    review.response = response;
+    return structuredClone(response);
   }
 
   async listBuilds(appId: string) {
@@ -481,6 +528,22 @@ class FakeAscProvider implements AscProvider, AppleAdsProvider {
     this.adsCampaigns[0]!.dailyBudget.amount = amount;
   }
 
+  setReviewTitle(title: string) {
+    this.reviews[0]!.title = title;
+  }
+
+  setReviewResponse(response: CustomerReviewResponse | null) {
+    this.reviews[0]!.response = structuredClone(response);
+  }
+
+  removeReview() {
+    this.reviews.splice(0, this.reviews.length);
+  }
+
+  getLastReviewCursor() {
+    return this.lastReviewCursor;
+  }
+
   setWhatsNew(value: string) {
     const localization = this.localizations.find((item) => item.id === "localization-en-US");
     if (localization) localization.whatsNew = value;
@@ -573,6 +636,12 @@ const createHarness = () => {
     digest: (value) => `digest:${value}`,
   });
   const service = {
+    listCustomerReviews: (appId: string, options?: Parameters<AscStudioService["listCustomerReviews"]>[1]) =>
+      coreService.listCustomerReviews(appId, options),
+    getCustomerReview: (appId: string, reviewId: string) => coreService.getCustomerReview(appId, reviewId),
+    createUpsertCustomerReviewResponsePlan: (
+      input: Parameters<AscStudioService["createUpsertCustomerReviewResponsePlan"]>[0],
+    ) => coreService.createUpsertCustomerReviewResponsePlan(input, "gui"),
     createAddBuildToGroupPlan: (input: AddBuildToGroupInput) => coreService.createAddBuildToGroupPlan(input, "gui"),
     confirmAddBuildToGroupPlan: (planId: string, digest: string) => coreService.confirmAddBuildToGroupPlan(planId, digest, "gui"),
     listBuilds: (appId: string) => coreService.listBuilds(appId),
@@ -615,6 +684,177 @@ describe("stableJson", () => {
 });
 
 describe("AscStudioService mutation plans", () => {
+  it("plans an exact first customer-review response with a stable digest", async () => {
+    const { service } = createHarness();
+    const responseBody = "  Thanks for the thoughtful review.\nWe appreciate it.  ";
+    const plan = await service.createUpsertCustomerReviewResponsePlan({
+      appId: app.id,
+      reviewId: initialReview.id,
+      responseBody,
+    });
+
+    expect(plan.operation).toBe("customer_review.response.upsert");
+    if (plan.operation !== "customer_review.response.upsert") throw new Error("Expected customer-review response plan.");
+    expect(plan.target).toEqual({
+      appId: app.id,
+      reviewId: initialReview.id,
+      reviewTitle: initialReview.title,
+      reviewerNickname: initialReview.reviewerNickname,
+    });
+    expect(plan.before).toEqual(initialReview);
+    expect(plan.after).toEqual({ responseBody });
+    expect(plan.summary).toBe("Respond to review from MapleWriter");
+    expect(plan.digest).toBe(`digest:${stableJson({
+      operation: plan.operation,
+      context: plan.context,
+      target: plan.target,
+      before: plan.before,
+      after: plan.after,
+      expiresAt: plan.expiresAt,
+    })}`);
+  });
+
+  it("publishes a first customer-review response only after confirmation", async () => {
+    const { service, store } = createHarness();
+    const responseBody = "  Thank you for taking the time to review us.  ";
+    const plan = await service.createUpsertCustomerReviewResponsePlan({
+      appId: app.id,
+      reviewId: initialReview.id,
+      responseBody,
+    });
+
+    await expect(service.confirmPlan(plan.id, plan.digest)).resolves.toMatchObject({ state: "succeeded" });
+    await expect(service.getCustomerReview(app.id, initialReview.id)).resolves.toMatchObject({
+      response: { responseBody, state: "PENDING_PUBLISH" },
+    });
+    expect(store.events.map((event) => `${event.operation}:${event.phase}`)).toEqual([
+      "customer_review.response.upsert:succeeded",
+      "customer_review.response.upsert:running",
+      "customer_review.response.upsert:planned",
+    ]);
+  });
+
+  it("distinguishes and applies a replacement customer-review response", async () => {
+    const { provider, service } = createHarness();
+    provider.setReviewResponse({
+      id: "response-1",
+      reviewId: initialReview.id,
+      responseBody: "Original response",
+      lastModifiedAt: "2026-07-30T20:00:00.000Z",
+      state: "PUBLISHED",
+    });
+    const plan = await service.createUpsertCustomerReviewResponsePlan({
+      appId: app.id,
+      reviewId: initialReview.id,
+      responseBody: "Replacement response",
+    });
+
+    expect(plan.summary).toBe("Replace response to review from MapleWriter");
+    await service.confirmPlan(plan.id, plan.digest);
+    await expect(service.getCustomerReview(app.id, initialReview.id)).resolves.toMatchObject({
+      response: { id: "response-1", responseBody: "Replacement response", state: "PENDING_PUBLISH" },
+    });
+  });
+
+  it("rejects empty and exactly unchanged customer-review responses", async () => {
+    const { provider, service } = createHarness();
+    await expect(service.createUpsertCustomerReviewResponsePlan({
+      appId: app.id,
+      reviewId: initialReview.id,
+      responseBody: " \n\t ",
+    })).rejects.toMatchObject({ code: "invalid_response_body" });
+
+    provider.setReviewResponse({
+      id: "response-1",
+      reviewId: initialReview.id,
+      responseBody: "Keep this exact response",
+      lastModifiedAt: null,
+      state: "PENDING_PUBLISH",
+    });
+    await expect(service.createUpsertCustomerReviewResponsePlan({
+      appId: app.id,
+      reviewId: initialReview.id,
+      responseBody: "Keep this exact response",
+    })).rejects.toMatchObject({ code: "no_changes" });
+  });
+
+  it("maps a missing customer review to a domain error during planning", async () => {
+    const { service } = createHarness();
+    await expect(service.createUpsertCustomerReviewResponsePlan({
+      appId: app.id,
+      reviewId: "missing-review",
+      responseBody: "Thanks for your feedback.",
+    })).rejects.toMatchObject({ code: "review_not_found" });
+  });
+
+  it("fails closed when customer-review content changes after planning", async () => {
+    const { provider, service, store } = createHarness();
+    const plan = await service.createUpsertCustomerReviewResponsePlan({
+      appId: app.id,
+      reviewId: initialReview.id,
+      responseBody: "Thanks for the review.",
+    });
+    provider.setReviewTitle("Edited remotely");
+
+    await expect(service.confirmPlan(plan.id, plan.digest)).rejects.toMatchObject({ code: "stale_plan" });
+    expect(store.plans.get(plan.id)?.state).toBe("stale");
+  });
+
+  it("marks a customer-review response plan stale when the review disappears", async () => {
+    const { provider, service, store } = createHarness();
+    const plan = await service.createUpsertCustomerReviewResponsePlan({
+      appId: app.id,
+      reviewId: initialReview.id,
+      responseBody: "Thanks for the review.",
+    });
+    provider.removeReview();
+
+    await expect(service.confirmPlan(plan.id, plan.digest)).rejects.toMatchObject({ code: "stale_plan" });
+    expect(store.plans.get(plan.id)?.state).toBe("stale");
+  });
+
+  it("fails closed when a pending customer-review response becomes published", async () => {
+    const { provider, service, store } = createHarness();
+    const pending: CustomerReviewResponse = {
+      id: "response-1",
+      reviewId: initialReview.id,
+      responseBody: "Original response",
+      lastModifiedAt: "2026-07-30T20:00:00.000Z",
+      state: "PENDING_PUBLISH",
+    };
+    provider.setReviewResponse(pending);
+    const plan = await service.createUpsertCustomerReviewResponsePlan({
+      appId: app.id,
+      reviewId: initialReview.id,
+      responseBody: "Replacement response",
+    });
+    provider.setReviewResponse({ ...pending, state: "PUBLISHED" });
+
+    await expect(service.confirmPlan(plan.id, plan.digest)).rejects.toMatchObject({ code: "stale_plan" });
+    expect(store.plans.get(plan.id)?.state).toBe("stale");
+  });
+
+  it("rejects a customer-review response plan after the active Apple account changes", async () => {
+    const { provider, service } = createHarness();
+    const plan = await service.createUpsertCustomerReviewResponsePlan({
+      appId: app.id,
+      reviewId: initialReview.id,
+      responseBody: "Thanks for the review.",
+    });
+    provider.setConnectionId("another-account");
+
+    await expect(service.confirmPlan(plan.id, plan.digest)).rejects.toMatchObject({ code: "workspace_changed" });
+  });
+
+  it("treats customer-review cursors as opaque and rejects overlong cursors", async () => {
+    const { provider, service } = createHarness();
+    await expect(service.listCustomerReviews(app.id, { cursor: "opaque+/=cursor" })).resolves.toMatchObject({ total: 1 });
+    expect(provider.getLastReviewCursor()).toBe("opaque+/=cursor");
+    await expect(service.listCustomerReviews(app.id, { cursor: "x".repeat(2_049) })).rejects.toMatchObject({
+      code: "invalid_cursor",
+    });
+  });
+
   it("plans, confirms, applies, and audits a group assignment", async () => {
     const { service, store } = createHarness();
     const plan = await service.createAddBuildToGroupPlan({

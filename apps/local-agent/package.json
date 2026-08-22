@@ -13,6 +13,12 @@
     "zod": "^3.25.76"
   },
   "scripts": {
+    "build": "node scripts/build-keychain-helper.mjs",
+    "build:keychain": "node scripts/build-keychain-helper.mjs",
+    "predev": "npm run build:keychain",
+    "predev:live": "npm run build:keychain",
+    "prestart": "npm run build:keychain",
+    "prestart:live": "npm run build:keychain",
     "dev": "ASC_STUDIO_PORT=8787 ASC_STUDIO_MODE=demo tsx src/index.ts",
     "dev:live": "ASC_STUDIO_PORT=8787 ASC_STUDIO_MODE=live tsx src/index.ts",
     "start": "ASC_STUDIO_MODE=demo tsx src/index.ts",

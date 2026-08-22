@@ -1,0 +1,48 @@
+{
+  "title": "Choose the Reviews workspace",
+  "question": "Each option uses the existing ASC Studio visual system and the same truthful review-response workflow. Choose the structure that should organize the work.",
+  "options": [
+    {
+      "id": "response-status-board",
+      "label": "Response Status Board",
+      "kicker": "THE ROLL",
+      "lineage": "ASC Studio status lanes",
+      "thesis": "Two factual queues expose what needs an answer without turning ratings into a scorecard.",
+      "palette": ["#f7f8fa", "#ffffff", "#1464e8", "#42a348", "#e69512"],
+      "materials": ["flat work surfaces", "hairline-separated review rows", "semantic response dots"],
+      "viewport": "The 121px topbar leads into filters, side-by-side Needs response and Responded queues, and a selected-review response panel.",
+      "risk": "The board makes response state immediate but weakens chronology as review volume grows.",
+      "comp": ".impeccable/mocks/decision/reviews-response-status-board.webp"
+    },
+    {
+      "id": "review-inbox-inspector",
+      "label": "Review Inbox + Inspector",
+      "lineage": "ASC Studio master-detail workspaces",
+      "thesis": "One chronological inbox turns scanning, selection, and response review into a continuous workflow.",
+      "palette": ["#f7f8fa", "#ffffff", "#1464e8", "#42a348", "#e69512"],
+      "materials": ["dense operating table", "soft-blue selection", "persistent response inspector"],
+      "viewport": "A filter toolbar sits above compact review rows while a 400px inspector shows the full review, Apple response state, and composer.",
+      "risk": "The inspector must become an overlay at medium widths so the inbox never collapses.",
+      "comp": ".impeccable/mocks/decision/reviews-inbox-inspector.webp"
+    },
+    {
+      "id": "rating-bands",
+      "label": "Rating Bands",
+      "lineage": "ASC Studio segmented operating queues",
+      "thesis": "Five rating bands let operators enter the exact rating range they want to triage.",
+      "palette": ["#f7f8fa", "#ffffff", "#1464e8", "#42a348", "#e69512"],
+      "materials": ["five compact rating lanes", "chronological row stacks", "selected-review sheet"],
+      "viewport": "The topbar and filters lead into five rating lanes with unanswered counts, with selection opening a response sheet at right.",
+      "risk": "Rating becomes the dominant organizing idea and can obscure the content and chronology of reviews.",
+      "comp": ".impeccable/mocks/decision/reviews-rating-bands.webp"
+    }
+  ],
+  "reroll": {
+    "registers": ["safer", "bolder"]
+  },
+  "buildPath": {
+    "value": "comp",
+    "toggle": true
+  },
+  "steer": true
+}

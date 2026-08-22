@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +16,15 @@ interface RunningAgent {
   dataDirectory: string;
 }
 
-const startAgent = async (options: { serveWeb?: boolean; mode?: "demo" | "live" } = {}): Promise<RunningAgent> => {
+interface StartAgentOptions {
+  serveWeb?: boolean;
+  mode?: "demo" | "live";
+  environment?: Record<string, string>;
+  mockOpenAiValidation?: boolean;
+  prepareDataDirectory?: (dataDirectory: string) => Promise<void>;
+}
+
+const startAgent = async (options: StartAgentOptions = {}): Promise<RunningAgent> => {
   const dataDirectory = await mkdtemp(join(tmpdir(), "asc-studio-agent-test-"));
   const webDirectory = join(dataDirectory, "web");
   if (options.serveWeb) {
@@ -24,6 +32,7 @@ const startAgent = async (options: { serveWeb?: boolean; mode?: "demo" | "live" 
     await writeFile(join(webDirectory, "index.html"), '<!doctype html><div id="root">ASC Studio built GUI</div>', "utf8");
     await writeFile(join(webDirectory, "assets", "app.js"), 'document.title = "ASC Studio";', "utf8");
   }
+  await options.prepareDataDirectory?.(dataDirectory);
   const environment = { ...process.env };
   for (const name of [
     "ASC_STUDIO_PROFILE_NAME",
@@ -38,8 +47,27 @@ const startAgent = async (options: { serveWeb?: boolean; mode?: "demo" | "live" 
     "ASC_STUDIO_ADS_PRIVATE_KEY",
     "ASC_STUDIO_ADS_PRIVATE_KEY_PATH",
     "ASC_STUDIO_ADS_AD_ACCOUNT_ID",
+    "OPENAI_API_KEY",
+    "ASC_STUDIO_OPENAI_MODEL",
   ]) delete environment[name];
-  const child = spawn(process.execPath, launchArguments, {
+  let childArguments = launchArguments;
+  if (options.mockOpenAiValidation) {
+    const preloadPath = join(dataDirectory, "mock-openai-fetch.mjs");
+    await writeFile(preloadPath, [
+      "const originalFetch = globalThis.fetch;",
+      "globalThis.fetch = async (input, init) => {",
+      "  if (String(input) === 'https://api.openai.com/v1/responses') {",
+      "    const authorization = new Headers(init?.headers).get('authorization') ?? '';",
+      "    const status = authorization.includes('rejected') ? 401 : 200;",
+      "    const body = status === 200 ? JSON.stringify({ output_text: JSON.stringify({ ok: true }) }) : 'rejected';",
+      "    return new Response(body, { status, headers: { 'content-type': 'application/json' } });",
+      "  }",
+      "  return originalFetch(input, init);",
+      "};",
+    ].join("\n"), "utf8");
+    childArguments = ["--import", preloadPath, ...launchArguments];
+  }
+  const child = spawn(process.execPath, childArguments, {
     cwd: appRoot,
     env: {
       ...environment,
@@ -48,7 +76,10 @@ const startAgent = async (options: { serveWeb?: boolean; mode?: "demo" | "live" 
       ASC_STUDIO_DATA_DIR: dataDirectory,
       ASC_STUDIO_GUI_TOKEN: guiToken,
       ASC_STUDIO_MCP_TOKEN: mcpToken,
+      NODE_ENV: "test",
+      ASC_STUDIO_TEST_IN_MEMORY_KEYCHAIN: "1",
       ...(options.serveWeb ? { ASC_STUDIO_WEB_DIR: webDirectory } : {}),
+      ...options.environment,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -146,6 +177,254 @@ describe("local-agent live connection setup", () => {
     });
     expect(research.status).toBe(409);
     expect(await research.json()).toMatchObject({ error: { code: "apple_ads_not_configured" } });
+  });
+
+  it("reports unconfigured OpenAI metadata and rejects invalid connection input without a provider call", async () => {
+    const status = await fetch(`${agent!.baseUrl}/api/connections/openai`, {
+      headers: authorization(guiToken),
+    });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toEqual({
+      connection: {
+        configured: false,
+        source: null,
+        model: "gpt-5.6-luna",
+        modelSource: "default",
+      },
+    });
+
+    const invalid = await fetch(`${agent!.baseUrl}/api/connections/openai`, {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: JSON.stringify({ apiKey: "contains whitespace", extra: true }),
+    });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ error: { code: "invalid_input" } });
+    await expect(stat(join(agent!.dataDirectory, "credentials", "openai.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps explicit vault recovery inside the GUI boundary and requires exact scope confirmation", async () => {
+    const jsonHeaders = { ...authorization(guiToken), "content-type": "application/json" };
+    const wrongConfirmation = await fetch(`${agent!.baseUrl}/api/connections/openai/reset-vault`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ confirmation: "reset" }),
+    });
+    const wrongScope = await fetch(`${agent!.baseUrl}/api/connections/openai/reset-vault`, {
+      method: "POST",
+      headers: { ...authorization(mcpToken), "content-type": "application/json" },
+      body: JSON.stringify({ confirmation: "RESET OPENAI CONNECTION" }),
+    });
+    expect(wrongConfirmation.status).toBe(400);
+    expect(wrongScope.status).toBe(401);
+
+    const [openAi, appleAds, apple] = await Promise.all([
+      fetch(`${agent!.baseUrl}/api/connections/openai/reset-vault`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ confirmation: "RESET OPENAI CONNECTION" }),
+      }),
+      fetch(`${agent!.baseUrl}/api/connections/apple-ads/reset-vault`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ confirmation: "RESET APPLE ADS CONNECTIONS" }),
+      }),
+      fetch(`${agent!.baseUrl}/api/connections/app-store-connect/reset-vault`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ confirmation: "RESET APPLE CONNECTIONS" }),
+      }),
+    ]);
+    expect([openAi.status, appleAds.status, apple.status]).toEqual([200, 200, 200]);
+    expect(await openAi.json()).toMatchObject({ connection: { configured: false, source: null } });
+    expect(await appleAds.json()).toMatchObject({ connection: { configured: false, source: null } });
+    expect(await apple.json()).toMatchObject({ status: { connected: false }, accounts: [] });
+  });
+});
+
+describe("local-agent OpenAI connection setup", () => {
+  let localAgent: RunningAgent | undefined;
+  let environmentAgent: RunningAgent | undefined;
+
+  beforeAll(async () => {
+    [localAgent, environmentAgent] = await Promise.all([
+      startAgent({ mode: "live", mockOpenAiValidation: true }),
+      startAgent({
+        mode: "live",
+        environment: {
+          OPENAI_API_KEY: "sk-environment-secret",
+          ASC_STUDIO_OPENAI_MODEL: "gpt-environment-model",
+        },
+      }),
+    ]);
+  });
+  afterAll(async () => {
+    await Promise.all([stopAgent(localAgent), stopAgent(environmentAgent)]);
+  });
+
+  it("keeps connection reads and mutations inside the GUI bearer boundary", async () => {
+    const [missing, wrongScope, saveMissing, removeWrongScope] = await Promise.all([
+      fetch(`${localAgent!.baseUrl}/api/connections/openai`),
+      fetch(`${localAgent!.baseUrl}/api/connections/openai`, { headers: authorization(mcpToken) }),
+      fetch(`${localAgent!.baseUrl}/api/connections/openai`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ apiKey: "sk-not-saved" }),
+      }),
+      fetch(`${localAgent!.baseUrl}/api/connections/openai`, {
+        method: "DELETE",
+        headers: authorization(mcpToken),
+      }),
+    ]);
+    expect([missing.status, wrongScope.status, saveMissing.status, removeWrongScope.status]).toEqual([401, 401, 401, 401]);
+    await expect(stat(join(localAgent!.dataDirectory, "credentials", "openai.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("validates before saving, supports replacement without restart, and never returns the key", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const credentialDirectory = join(localAgent!.dataDirectory, "credentials");
+    const initialKey = "sk-initial-secret";
+    const initial = await fetch(`${localAgent!.baseUrl}/api/connections/openai`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ apiKey: initialKey, model: "gpt-local-model" }),
+    });
+    const initialText = await initial.text();
+    expect(initial.status).toBe(200);
+    expect(initialText).not.toContain(initialKey);
+    expect(JSON.parse(initialText)).toEqual({
+      connection: {
+        configured: true,
+        source: "local",
+        model: "gpt-local-model",
+        modelSource: "local",
+      },
+    });
+    await expect(stat(credentialDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const translationStatus = await fetch(`${localAgent!.baseUrl}/api/translations/status`, {
+      headers: authorization(guiToken),
+    });
+    expect(await translationStatus.json()).toMatchObject({
+      provider: "openai",
+      configured: true,
+      model: "gpt-local-model",
+    });
+
+    const rejectedKey = "sk-rejected-replacement";
+    const rejected = await fetch(`${localAgent!.baseUrl}/api/connections/openai`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ apiKey: rejectedKey, model: "gpt-other-model" }),
+    });
+    const rejectedText = await rejected.text();
+    expect(rejected.status).toBe(422);
+    expect(rejectedText).not.toContain(rejectedKey);
+    expect(JSON.parse(rejectedText)).toMatchObject({ error: { code: "openai_invalid_api_key" } });
+    const afterRejectedReplacement = await fetch(`${localAgent!.baseUrl}/api/connections/openai`, {
+      headers: authorization(guiToken),
+    });
+    expect(await afterRejectedReplacement.json()).toMatchObject({
+      connection: { configured: true, source: "local", model: "gpt-local-model", modelSource: "local" },
+    });
+
+    const replacementKey = "sk-final-secret";
+    const replacement = await fetch(`${localAgent!.baseUrl}/api/connections/openai`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ apiKey: replacementKey, model: "" }),
+    });
+    const replacementText = await replacement.text();
+    expect(replacement.status).toBe(200);
+    expect(replacementText).not.toContain(replacementKey);
+    expect(JSON.parse(replacementText)).toMatchObject({
+      connection: { configured: true, source: "local", model: "gpt-5.6-luna", modelSource: "default" },
+    });
+    await expect(stat(credentialDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+    const databaseBody = (await readFile(join(localAgent!.dataDirectory, "live.sqlite"))).toString("utf8");
+    expect(databaseBody).not.toContain(initialKey);
+    expect(databaseBody).not.toContain(replacementKey);
+
+    const removed = await fetch(`${localAgent!.baseUrl}/api/connections/openai`, {
+      method: "DELETE",
+      headers: authorization(guiToken),
+    });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toMatchObject({
+      connection: { configured: false, source: null, modelSource: "default" },
+    });
+    await expect(stat(credentialDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("gives environment configuration precedence and makes GUI mutation unavailable", async () => {
+    const status = await fetch(`${environmentAgent!.baseUrl}/api/connections/openai`, {
+      headers: authorization(guiToken),
+    });
+    const statusText = await status.text();
+    expect(status.status).toBe(200);
+    expect(statusText).not.toContain("sk-environment-secret");
+    expect(JSON.parse(statusText)).toEqual({
+      connection: {
+        configured: true,
+        source: "environment",
+        model: "gpt-environment-model",
+        modelSource: "environment",
+      },
+    });
+
+    const save = await fetch(`${environmentAgent!.baseUrl}/api/connections/openai`, {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: JSON.stringify({ apiKey: "sk-local-candidate", model: "gpt-local" }),
+    });
+    const remove = await fetch(`${environmentAgent!.baseUrl}/api/connections/openai`, {
+      method: "DELETE",
+      headers: authorization(guiToken),
+    });
+    expect(save.status).toBe(409);
+    expect(await save.json()).toMatchObject({ error: { code: "environment_credentials_active" } });
+    expect(remove.status).toBe(409);
+    expect(await remove.json()).toMatchObject({ error: { code: "environment_credentials_active" } });
+    await expect(stat(join(environmentAgent!.dataDirectory, "credentials", "openai.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("local-agent damaged credential recovery", () => {
+  let agent: RunningAgent | undefined;
+
+  beforeAll(async () => {
+    agent = await startAgent({
+      mode: "live",
+      prepareDataDirectory: async (dataDirectory) => {
+        const credentials = join(dataDirectory, "credentials");
+        await mkdir(credentials, { mode: 0o700 });
+        await writeFile(join(credentials, "app-store-connect.json"), "not-json", { mode: 0o600 });
+      },
+    });
+  });
+  afterAll(async () => { await stopAgent(agent); });
+
+  it("keeps the agent reachable and removes a damaged Apple vault only after exact confirmation", async () => {
+    const before = await fetch(`${agent!.baseUrl}/api/connections/app-store-connect`, {
+      headers: authorization(guiToken),
+    });
+    expect(before.status).toBe(500);
+    expect(await before.json()).toMatchObject({ error: { code: "credential_store_damaged" } });
+
+    const reset = await fetch(`${agent!.baseUrl}/api/connections/app-store-connect/reset-vault`, {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: JSON.stringify({ confirmation: "RESET APPLE CONNECTIONS" }),
+    });
+    expect(reset.status).toBe(200);
+    expect(await reset.json()).toMatchObject({ status: { connected: false }, accounts: [] });
+    await expect(stat(join(agent!.dataDirectory, "credentials"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    const after = await fetch(`${agent!.baseUrl}/api/connections/app-store-connect`, {
+      headers: authorization(guiToken),
+    });
+    expect(after.status).toBe(200);
+    expect(await after.json()).toEqual({ accounts: [] });
   });
 });
 
@@ -380,6 +659,36 @@ describe("local-agent session boundary", () => {
     expect(body.translations[0]).not.toHaveProperty("keywords");
   });
 
+  it("keeps OpenAI storage and provider calls disabled in demo mode", async () => {
+    const status = await fetch(`${agent!.baseUrl}/api/connections/openai`, {
+      headers: authorization(guiToken),
+    });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toEqual({
+      connection: {
+        configured: true,
+        source: "demo",
+        model: null,
+        modelSource: "demo",
+      },
+    });
+
+    const save = await fetch(`${agent!.baseUrl}/api/connections/openai`, {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: JSON.stringify({ apiKey: "sk-must-not-be-stored", model: "gpt-live" }),
+    });
+    const remove = await fetch(`${agent!.baseUrl}/api/connections/openai`, {
+      method: "DELETE",
+      headers: authorization(guiToken),
+    });
+    expect(save.status).toBe(409);
+    expect(await save.json()).toMatchObject({ error: { code: "demo_connection" } });
+    expect(remove.status).toBe(409);
+    expect(await remove.json()).toMatchObject({ error: { code: "demo_connection" } });
+    await expect(stat(join(agent!.dataDirectory, "credentials", "openai.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("rejects duplicate translation targets", async () => {
     const response = await fetch(`${agent!.baseUrl}/api/translations/release-copy`, {
       method: "POST",
@@ -607,6 +916,313 @@ describe("local-agent session boundary", () => {
     expect(await statusResponse.json()).toMatchObject({
       submission: { id: "demo-submission-demo-field-version-180", state: "WAITING_FOR_REVIEW" },
     });
+  });
+
+  it("keeps customer reviews and reply drafts inside the GUI bearer boundary", async () => {
+    const [missing, wrongScope, planWithoutToken, replyWithoutToken, replyWithWrongScope] = await Promise.all([
+      fetch(`${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews`),
+      fetch(`${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews`, {
+        headers: authorization(mcpToken),
+      }),
+      fetch(`${agent!.baseUrl}/api/plans/customer-review-response`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          appId: "demo-app-orbit-notes",
+          reviewId: "demo-review-orbit-001",
+          responseBody: "Thank you for the feedback.",
+        }),
+      }),
+      fetch(`${agent!.baseUrl}/api/replies/customer-review`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ appId: "demo-app-orbit-notes", reviewId: "demo-review-orbit-002" }),
+      }),
+      fetch(`${agent!.baseUrl}/api/replies/customer-review`, {
+        method: "POST",
+        headers: { ...authorization(mcpToken), "content-type": "application/json" },
+        body: JSON.stringify({ appId: "demo-app-orbit-notes", reviewId: "demo-review-orbit-002" }),
+      }),
+    ]);
+
+    expect(missing.status).toBe(401);
+    expect(wrongScope.status).toBe(401);
+    expect(planWithoutToken.status).toBe(401);
+    expect(replyWithoutToken.status).toBe(401);
+    expect(replyWithWrongScope.status).toBe(401);
+  });
+
+  it("lists, filters, sorts, and paginates demo customer reviews", async () => {
+    const firstPageResponse = await fetch(
+      `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews?limit=2`,
+      { headers: authorization(guiToken) },
+    );
+    const firstPage = await firstPageResponse.json() as {
+      reviews: Array<{
+        id: string;
+        rating: number;
+        createdAt: string;
+        territory: string;
+        response: { state: string } | null;
+      }>;
+      total: number | null;
+      nextCursor: string | null;
+    };
+
+    expect(firstPageResponse.status).toBe(200);
+    expect(firstPage.reviews).toHaveLength(2);
+    expect(firstPage.total).toBe(8);
+    expect(firstPage.nextCursor).toEqual(expect.any(String));
+    expect(firstPage.reviews.map((review) => review.createdAt)).toEqual(
+      [...firstPage.reviews].map((review) => review.createdAt).sort().reverse(),
+    );
+
+    const secondPageResponse = await fetch(
+      `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews?limit=2&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
+      { headers: authorization(guiToken) },
+    );
+    const secondPage = await secondPageResponse.json() as typeof firstPage;
+    expect(secondPageResponse.status).toBe(200);
+    expect(secondPage.reviews).toHaveLength(2);
+    expect(secondPage.reviews.map((review) => review.id)).not.toEqual(firstPage.reviews.map((review) => review.id));
+
+    const [ratingsResponse, territoriesResponse, publishedResponse, emptyResponse] = await Promise.all([
+      fetch(
+        `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews?ratings=1,5&sort=rating&limit=50`,
+        { headers: authorization(guiToken) },
+      ),
+      fetch(
+        `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews?territories=USA,GBR&sort=createdDate`,
+        { headers: authorization(guiToken) },
+      ),
+      fetch(
+        `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews?publishedResponse=true`,
+        { headers: authorization(guiToken) },
+      ),
+      fetch(
+        `${agent!.baseUrl}/api/apps/demo-app-field-log/customer-reviews`,
+        { headers: authorization(guiToken) },
+      ),
+    ]);
+    const ratings = await ratingsResponse.json() as typeof firstPage;
+    const territories = await territoriesResponse.json() as typeof firstPage;
+    const published = await publishedResponse.json() as typeof firstPage;
+
+    expect(ratingsResponse.status).toBe(200);
+    expect(ratings.reviews.length).toBeGreaterThan(0);
+    expect(ratings.reviews.every((review) => [1, 5].includes(review.rating))).toBe(true);
+    expect(ratings.reviews.map((review) => review.rating)).toEqual(
+      [...ratings.reviews].map((review) => review.rating).sort((left, right) => left - right),
+    );
+    expect(territoriesResponse.status).toBe(200);
+    expect(territories.reviews.length).toBeGreaterThan(0);
+    expect(territories.reviews.every((review) => ["USA", "GBR"].includes(review.territory))).toBe(true);
+    expect(territories.reviews.map((review) => review.createdAt)).toEqual(
+      [...territories.reviews].map((review) => review.createdAt).sort(),
+    );
+    expect(publishedResponse.status).toBe(200);
+    expect(published.reviews.length).toBeGreaterThan(0);
+    expect(published.reviews.every((review) => review.response?.state === "PUBLISHED")).toBe(true);
+    expect(emptyResponse.status).toBe(200);
+    expect(await emptyResponse.json()).toEqual({ reviews: [], total: 0, nextCursor: null });
+  });
+
+  it("generates an isolated customer-review reply draft without creating a plan or changing review state", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const readState = async () => {
+      const [reviewsResponse, plansResponse, activityResponse] = await Promise.all([
+        fetch(`${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews`, {
+          headers: authorization(guiToken),
+        }),
+        fetch(`${agent!.baseUrl}/api/plans`, { headers: authorization(guiToken) }),
+        fetch(`${agent!.baseUrl}/api/activity`, { headers: authorization(guiToken) }),
+      ]);
+      const reviews = await reviewsResponse.json() as {
+        reviews: Array<{ id: string; response: unknown }>;
+      };
+      return {
+        response: reviews.reviews.find((review) => review.id === "demo-review-orbit-002")?.response,
+        plans: await plansResponse.json(),
+        activity: await activityResponse.json(),
+      };
+    };
+    const before = await readState();
+
+    const first = await fetch(`${agent!.baseUrl}/api/replies/customer-review`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        appId: "demo-app-orbit-notes",
+        reviewId: "demo-review-orbit-002",
+      }),
+    });
+    const second = await fetch(`${agent!.baseUrl}/api/replies/customer-review`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        appId: "demo-app-orbit-notes",
+        reviewId: "demo-review-orbit-002",
+      }),
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const firstBody = await first.json() as { responseBody: string };
+    expect(firstBody.responseBody).toContain("[Demo reply]");
+    expect(firstBody.responseBody).toContain("Nearly perfect for research");
+    expect(await second.json()).toEqual(firstBody);
+    expect(await readState()).toEqual(before);
+  });
+
+  it("strictly validates customer-review reply draft targets and maps a missing review to 404", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const invalidInputs = [
+      { appId: "", reviewId: "demo-review-orbit-002" },
+      { appId: "demo-app-orbit-notes", reviewId: "" },
+      { appId: "demo-app-orbit-notes", reviewId: "demo-review-orbit-002", body: "Use this instead" },
+    ];
+    const invalidResponses = await Promise.all(invalidInputs.map((body) => fetch(
+      `${agent!.baseUrl}/api/replies/customer-review`,
+      { method: "POST", headers, body: JSON.stringify(body) },
+    )));
+    expect(invalidResponses.map((response) => response.status)).toEqual([400, 400, 400]);
+
+    const missing = await fetch(`${agent!.baseUrl}/api/replies/customer-review`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ appId: "demo-app-orbit-notes", reviewId: "missing-review" }),
+    });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ error: { code: "review_not_found" } });
+  });
+
+  it("strictly validates customer-review query parameters", async () => {
+    const paths = [
+      "?ratings=0",
+      "?ratings=5,5",
+      "?ratings=1,,2",
+      "?territories=us",
+      "?territories=USA,USA",
+      "?territories=US",
+      "?cursor=",
+      `?cursor=${"x".repeat(2_049)}`,
+      "?sort=newest",
+      "?limit=0",
+      "?limit=01",
+      "?publishedResponse=yes",
+      "?unexpected=value",
+      "?__proto__=value",
+      "?limit=1&limit=2",
+    ];
+    const responses = await Promise.all(paths.map((path) => fetch(
+      `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews${path}`,
+      { headers: authorization(guiToken) },
+    )));
+
+    expect(responses.map((response) => response.status)).toEqual(paths.map(() => 400));
+  });
+
+  it("reviews, confirms, refreshes, and replaces a customer-review response", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const listResponse = await fetch(
+      `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews`,
+      { headers: authorization(guiToken) },
+    );
+    const list = await listResponse.json() as {
+      reviews: Array<{ id: string; response: { responseBody: string; state: string } | null }>;
+    };
+    const review = list.reviews[0]!;
+    const responseBody = "Thanks for taking the time to share this. We are looking into it.";
+    const planResponse = await fetch(`${agent!.baseUrl}/api/plans/customer-review-response`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ appId: "demo-app-orbit-notes", reviewId: review.id, responseBody }),
+    });
+    const planBody = await planResponse.json() as { plan: { id: string; digest: string } };
+
+    expect(planResponse.status).toBe(201);
+    expect(planBody).toMatchObject({
+      plan: {
+        operation: "customer_review.response.upsert",
+        state: "awaiting_confirmation",
+        target: { appId: "demo-app-orbit-notes", reviewId: review.id },
+        after: { responseBody },
+      },
+    });
+
+    const confirmResponse = await fetch(`${agent!.baseUrl}/api/plans/${planBody.plan.id}/confirm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ digest: planBody.plan.digest }),
+    });
+    expect(confirmResponse.status).toBe(200);
+    expect(await confirmResponse.json()).toMatchObject({
+      plan: { operation: "customer_review.response.upsert", state: "succeeded" },
+    });
+
+    const refreshedResponse = await fetch(
+      `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews`,
+      { headers: authorization(guiToken) },
+    );
+    const refreshed = await refreshedResponse.json() as typeof list;
+    expect(refreshed.reviews.find((candidate) => candidate.id === review.id)?.response).toMatchObject({
+      responseBody,
+      state: "PENDING_PUBLISH",
+    });
+
+    const replacementBody = "Thank you again. We have passed this detail to the product team.";
+    const replacementPlanResponse = await fetch(`${agent!.baseUrl}/api/plans/customer-review-response`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ appId: "demo-app-orbit-notes", reviewId: review.id, responseBody: replacementBody }),
+    });
+    const replacementPlan = await replacementPlanResponse.json() as typeof planBody;
+    expect(replacementPlanResponse.status).toBe(201);
+    const replacementConfirm = await fetch(`${agent!.baseUrl}/api/plans/${replacementPlan.plan.id}/confirm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ digest: replacementPlan.plan.digest }),
+    });
+    expect(replacementConfirm.status).toBe(200);
+
+    const replacedResponse = await fetch(
+      `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/customer-reviews`,
+      { headers: authorization(guiToken) },
+    );
+    const replaced = await replacedResponse.json() as typeof list;
+    expect(replaced.reviews.find((candidate) => candidate.id === review.id)?.response).toMatchObject({
+      responseBody: replacementBody,
+      state: "PENDING_PUBLISH",
+    });
+  });
+
+  it("rejects empty customer-review responses and maps missing reviews to 404", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const [emptyBody, missingReview] = await Promise.all([
+      fetch(`${agent!.baseUrl}/api/plans/customer-review-response`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          appId: "demo-app-orbit-notes",
+          reviewId: "demo-review-orbit-001",
+          responseBody: " \n\t ",
+        }),
+      }),
+      fetch(`${agent!.baseUrl}/api/plans/customer-review-response`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          appId: "demo-app-orbit-notes",
+          reviewId: "missing-review",
+          responseBody: "Thank you for your feedback.",
+        }),
+      }),
+    ]);
+
+    expect(emptyBody.status).toBe(400);
+    expect(await emptyBody.json()).toMatchObject({ error: { code: "invalid_input" } });
+    expect(missingReview.status).toBe(404);
+    expect(await missingReview.json()).toMatchObject({ error: { code: "review_not_found" } });
   });
 
   it("rejects oversized MCP bodies", async () => {

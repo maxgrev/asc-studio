@@ -9,8 +9,8 @@ import type {
   CreateVersionInput,
   CreateVersionMutationPlan,
   GenerateReleaseCopyTranslationsInput,
+  OpenAiConnection,
   SubmitVersionMutationPlan,
-  TranslationProviderStatus,
   UpdateLocalizationsMutationPlan,
   ValidationReport,
   VersionLocalization,
@@ -18,7 +18,7 @@ import type {
   VersionSubmissionStatus,
 } from "@asc-studio/contracts";
 import { CheckSquare2, ChevronDown, FilePlus2, Images, Languages, RefreshCw, Send } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api.js";
 import {
   draftFrom,
@@ -42,6 +42,12 @@ import {
 interface ReleaseWorkspaceProps {
   app: AppSummary;
   status: AgentStatus | null;
+  openAiConnection: OpenAiConnection | null;
+  openAiConnectionLoading: boolean;
+  openAiConnectionError: string | null;
+  openAiSetupOpen: boolean;
+  onReloadOpenAiConnection: () => Promise<void>;
+  onManageOpenAi: () => void;
   suggestedKeyword?: string | null;
   onSuggestedKeywordUsed?: () => void;
 }
@@ -60,7 +66,18 @@ const versionToSelect = (
   ?? versions[0]
   ?? null;
 
-export const ReleaseWorkspace = ({ app, status, suggestedKeyword, onSuggestedKeywordUsed }: ReleaseWorkspaceProps) => {
+export const ReleaseWorkspace = ({
+  app,
+  status,
+  openAiConnection,
+  openAiConnectionLoading,
+  openAiConnectionError,
+  openAiSetupOpen,
+  onReloadOpenAiConnection,
+  onManageOpenAi,
+  suggestedKeyword,
+  onSuggestedKeywordUsed,
+}: ReleaseWorkspaceProps) => {
   const [selectedPlatform, setSelectedPlatform] = useState<AppStorePlatform>(
     () => releasePlatforms.find((platform) => app.platforms.includes(platform)) ?? "IOS",
   );
@@ -85,7 +102,6 @@ export const ReleaseWorkspace = ({ app, status, suggestedKeyword, onSuggestedKey
   const [submissionPlan, setSubmissionPlan] = useState<SubmitVersionMutationPlan | null>(null);
   const [submissionStatus, setSubmissionStatus] = useState<VersionSubmissionStatus | null>(null);
   const [translationOpen, setTranslationOpen] = useState(false);
-  const [translationStatus, setTranslationStatus] = useState<TranslationProviderStatus | null>(null);
   const [readinessOpen, setReadinessOpen] = useState(false);
   const [readiness, setReadiness] = useState<ValidationReport | null>(null);
   const [activityOpen, setActivityOpen] = useState(false);
@@ -95,6 +111,8 @@ export const ReleaseWorkspace = ({ app, status, suggestedKeyword, onSuggestedKey
   const [readinessError, setReadinessError] = useState<string | null>(null);
   const [releasePanel, setReleasePanel] = useState<"metadata" | "screenshots">("metadata");
   const [screenshotPending, setScreenshotPending] = useState(false);
+  const translateButtonRef = useRef<HTMLButtonElement>(null);
+  const openAiSetupWasOpen = useRef(false);
 
   const selectedVersion = versions.find((version) => version.id === selectedVersionId) ?? null;
   const drafts = selectedVersionId ? draftsByVersion.get(selectedVersionId) ?? emptyDrafts : emptyDrafts;
@@ -115,30 +133,19 @@ export const ReleaseWorkspace = ({ app, status, suggestedKeyword, onSuggestedKey
   const selectedBuild = compatibleBuilds.find((build) => build.id === selectedBuildId) ?? null;
 
   useEffect(() => {
-    let cancelled = false;
-    void api.translationStatus()
-      .then((nextStatus) => {
-        if (!cancelled) setTranslationStatus(nextStatus);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setTranslationStatus({
-          provider: "openai",
-          configured: false,
-          model: null,
-          detail: error instanceof Error ? error.message : "ASC Studio could not read the translation provider.",
-        });
-      });
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
     setSelectedBuildId((current) => (
       current && compatibleBuilds.some((build) => build.id === current)
         ? current
         : compatibleBuilds[0]?.id ?? null
     ));
   }, [compatibleBuilds]);
+
+  useEffect(() => {
+    if (openAiSetupWasOpen.current && !openAiSetupOpen) {
+      window.requestAnimationFrame(() => translateButtonRef.current?.focus());
+    }
+    openAiSetupWasOpen.current = openAiSetupOpen;
+  }, [openAiSetupOpen]);
 
   const refreshEvents = useCallback(async () => {
     const response = await api.activity();
@@ -589,7 +596,7 @@ export const ReleaseWorkspace = ({ app, status, suggestedKeyword, onSuggestedKey
                   <div><h2>Localizations</h2><p>{localizations.length} {localizations.length === 1 ? "locale" : "locales"} · {drafts.size} edited</p></div>
                   <div className="localization-actions">
                     <label><span>Source:</span><select value={sourceLocale ?? ""} onChange={(event) => setSourceLocale(event.target.value as AppStoreLocale)}>{localizations.map((localization) => <option value={localization.locale} key={localization.id}>{localeNames[localization.locale]}</option>)}</select><ChevronDown size={15} /></label>
-                    <button className="button secondary" type="button" disabled={!source || translationTargets.length === 0} onClick={() => setTranslationOpen(true)} aria-label="Translate release copy"><Languages size={16} />Translate</button>
+                    <button ref={translateButtonRef} className="button secondary" type="button" disabled={!source || translationTargets.length === 0} onClick={() => setTranslationOpen(true)} aria-label="Translate release copy"><Languages size={16} />Translate</button>
                   </div>
                 </header>
                 <LocalizationTable localizations={localizations} drafts={drafts} selectedLocale={selectedLocale} loading={loadingLocalizations} onSelect={setSelectedLocale} />
@@ -653,7 +660,20 @@ export const ReleaseWorkspace = ({ app, status, suggestedKeyword, onSuggestedKey
         setSubmissionPlan(null);
         setMutationError(null);
       }} /> : null}
-      {translationOpen && source ? <TranslationDialog source={source} targets={translationTargets} status={translationStatus} onGenerate={generateTranslations} onClose={() => setTranslationOpen(false)} /> : null}
+      {translationOpen && source ? <TranslationDialog
+        source={source}
+        targets={translationTargets}
+        connection={openAiConnection}
+        connectionLoading={openAiConnectionLoading}
+        connectionError={openAiConnectionError}
+        onRetryConnection={onReloadOpenAiConnection}
+        onManageOpenAi={() => {
+          setTranslationOpen(false);
+          onManageOpenAi();
+        }}
+        onGenerate={generateTranslations}
+        onClose={() => setTranslationOpen(false)}
+      /> : null}
       {readinessOpen ? <ReadinessDialog report={readiness} demo={status?.mode === "demo"} busy={readinessBusy} error={readinessError} onRetry={() => void validate()} onClose={() => setReadinessOpen(false)} /> : null}
     </>
   );

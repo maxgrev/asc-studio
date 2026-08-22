@@ -10,6 +10,7 @@ import {
   FileText,
   Gauge,
   Globe2,
+  KeyRound,
   Orbit,
   Plus,
   Send,
@@ -20,7 +21,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-export type WorkspaceSection = "overview" | "testflight" | "releases" | "apple-ads";
+export type WorkspaceSection = "overview" | "testflight" | "releases" | "apple-ads" | "reviews";
 
 const navigation = [
   { label: "Overview", icon: Gauge, section: "overview" as const },
@@ -30,7 +31,7 @@ const navigation = [
   { label: "Store Listing", icon: FileText },
   { label: "Monetization", icon: CircleDollarSign },
   { label: "Distribution", icon: Globe2 },
-  { label: "Reviews", icon: Star },
+  { label: "Reviews", icon: Star, section: "reviews" as const },
   { label: "Activity", icon: Activity },
 ];
 
@@ -46,7 +47,7 @@ interface SidebarProps {
   onAddAccount: () => void;
   onRemoveAccount: (connectionId: string) => Promise<void>;
   appleAdsStatus: AppleAdsStatus | null;
-  onManageAppleServices: () => void;
+  onManageConnections: () => void;
 }
 
 export const Sidebar = ({
@@ -60,7 +61,7 @@ export const Sidebar = ({
   onAccountChange,
   onAddAccount,
   onRemoveAccount,
-  onManageAppleServices,
+  onManageConnections,
 }: SidebarProps) => {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -69,8 +70,8 @@ export const Sidebar = ({
   const serviceState = status?.mode === "demo"
     ? "Demo"
     : status?.connected
-      ? "Connected"
-      : "Disconnected";
+      ? "Apple connected"
+      : "Apple disconnected";
 
   const switchAccount = async (connectionId: string) => {
     setAccountBusy(connectionId);
@@ -86,7 +87,7 @@ export const Sidebar = ({
   };
 
   const removeAccount = async (account: AppStoreConnectAccount) => {
-    if (!window.confirm(`Remove “${account.profileName}” from this Mac? The saved private key will be deleted.`)) return;
+    if (!window.confirm(`Remove “${account.profileName}”? ASC Studio will remove its private key from the macOS Keychain bundle, delete matching legacy plaintext credential files in this data directory, and remove any Apple Ads credential linked to this account first. If either provider bundle becomes empty, ASC Studio leaves a vault-wide reset tombstone so stale copied directories cannot re-import it. This does not revoke Apple keys or erase other copies and backups.`)) return;
     setAccountBusy(account.id);
     setAccountError(null);
     try {
@@ -177,16 +178,17 @@ export const Sidebar = ({
           className="connection-block"
           type="button"
           disabled={!status}
-          aria-label="Apple services"
+          aria-label="Manage connections"
+          title="Manage connections"
           aria-expanded={accountMenuOpen}
           onClick={() => {
             if (status?.mode === "live" && accounts.length > 0) setAccountMenuOpen((open) => !open);
-            else onManageAppleServices();
+            else onManageConnections();
           }}
         >
-          <div className="connection-icon"><BadgeDollarSign size={22} /></div>
+          <div className="connection-icon"><KeyRound size={22} /></div>
           <div className="connection-copy">
-            <div className="connection-title">Apple services</div>
+            <div className="connection-title">Connections</div>
             <div className={`connection-state ${status?.connected ? "online" : "offline"}`}>
               <span className="state-dot" />
               {serviceState}
@@ -229,9 +231,9 @@ export const Sidebar = ({
             {accountError ? <p className="account-menu-error" role="alert">{accountError}</p> : null}
             <button className="account-add" type="button" role="menuitem" onClick={() => {
               setAccountMenuOpen(false);
-              onManageAppleServices();
+              onManageConnections();
             }}>
-              <Settings2 size={16} /> Manage Apple services
+              <Settings2 size={16} /> Manage connections
             </button>
             {accounts.every((account) => account.source === "local") ? (
               <button className="account-add" type="button" role="menuitem" onClick={() => {

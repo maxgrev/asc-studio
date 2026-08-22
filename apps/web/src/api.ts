@@ -14,7 +14,10 @@ import {
   ApiErrorSchema,
   AppsResponseSchema,
   BuildsResponseSchema,
+  CustomerReviewsResponseSchema,
+  GeneratedCustomerReviewReplyResponseSchema,
   GeneratedReleaseCopyTranslationsResponseSchema,
+  OpenAiConnectionResponseSchema,
   GroupsResponseSchema,
   LocalizationsResponseSchema,
   PlanResponseSchema,
@@ -45,7 +48,9 @@ import type {
   CreateAppleAdsKeywordMutationPlan,
   CreateVersionInput,
   CreateVersionMutationPlan,
+  GenerateCustomerReviewReplyInput,
   GenerateReleaseCopyTranslationsInput,
+  OpenAiCredentialsInput,
   MutationPlan,
   SubmitVersionInput,
   SubmitVersionMutationPlan,
@@ -57,6 +62,9 @@ import type {
   UpdateScreenshotsMutationPlan,
   UpdateScreenshotSetInput,
   UpdateVersionLocalizationsInput,
+  UpsertCustomerReviewResponseInput,
+  UpsertCustomerReviewResponseMutationPlan,
+  CustomerReviewSort,
 } from "@asc-studio/contracts";
 
 interface ResponseSchema<T> {
@@ -141,6 +149,11 @@ export const api = {
     AppleAdsConnectionResponseSchema,
     { method: "DELETE" },
   ),
+  resetAppleAdsVault: () => request(
+    "/api/connections/apple-ads/reset-vault",
+    AppleAdsConnectionResponseSchema,
+    { method: "POST", body: JSON.stringify({ confirmation: "RESET APPLE ADS CONNECTIONS" }) },
+  ),
   appleAdsCampaigns: (appId?: string) => {
     const query = appId ? `?${new URLSearchParams({ appId })}` : "";
     return request(`/api/apple-ads/campaigns${query}`, AppleAdsCampaignsResponseSchema);
@@ -186,10 +199,36 @@ export const api = {
     AppStoreConnectConnectionResponseSchema,
     { method: "DELETE" },
   ),
+  resetAppleConnectionsVault: () => request(
+    "/api/connections/app-store-connect/reset-vault",
+    AppStoreConnectConnectionResponseSchema,
+    { method: "POST", body: JSON.stringify({ confirmation: "RESET APPLE CONNECTIONS" }) },
+  ),
+  openAiConnection: () => request("/api/connections/openai", OpenAiConnectionResponseSchema),
+  connectOpenAi: (input: OpenAiCredentialsInput) => request(
+    "/api/connections/openai",
+    OpenAiConnectionResponseSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  ),
+  removeOpenAiConnection: () => request(
+    "/api/connections/openai",
+    OpenAiConnectionResponseSchema,
+    { method: "DELETE" },
+  ),
+  resetOpenAiVault: () => request(
+    "/api/connections/openai/reset-vault",
+    OpenAiConnectionResponseSchema,
+    { method: "POST", body: JSON.stringify({ confirmation: "RESET OPENAI CONNECTION" }) },
+  ),
   translationStatus: () => request("/api/translations/status", TranslationProviderStatusSchema),
   generateReleaseCopyTranslations: (input: GenerateReleaseCopyTranslationsInput) => request(
     "/api/translations/release-copy",
     GeneratedReleaseCopyTranslationsResponseSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  ),
+  generateCustomerReviewReply: (input: GenerateCustomerReviewReplyInput) => request(
+    "/api/replies/customer-review",
+    GeneratedCustomerReviewReplyResponseSchema,
     { method: "POST", body: JSON.stringify(input) },
   ),
   apps: (options: { limit?: number; paginate?: boolean } = {}) => {
@@ -204,6 +243,29 @@ export const api = {
     return request(`/api/apps/${encodeURIComponent(appId)}/builds?${query}`, BuildsResponseSchema);
   },
   groups: (appId: string) => request(`/api/apps/${encodeURIComponent(appId)}/groups`, GroupsResponseSchema),
+  customerReviews: (
+    appId: string,
+    options: {
+      limit?: number;
+      cursor?: string;
+      ratings?: number[];
+      territories?: string[];
+      sort?: CustomerReviewSort;
+      publishedResponse?: boolean;
+    } = {},
+  ) => {
+    const query = new URLSearchParams();
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    if (options.cursor) query.set("cursor", options.cursor);
+    if (options.ratings?.length) query.set("ratings", options.ratings.join(","));
+    if (options.territories?.length) query.set("territories", options.territories.join(","));
+    if (options.sort) query.set("sort", options.sort);
+    if (options.publishedResponse !== undefined) query.set("publishedResponse", String(options.publishedResponse));
+    return request(
+      `/api/apps/${encodeURIComponent(appId)}/customer-reviews${query.size ? `?${query}` : ""}`,
+      CustomerReviewsResponseSchema,
+    );
+  },
   versions: (
     appId: string,
     platform: AppStorePlatform = "IOS",
@@ -296,6 +358,19 @@ export const api = {
   planSubmission: async (input: SubmitVersionInput): Promise<{ plan: SubmitVersionMutationPlan }> => {
     const response = await request("/api/plans/submission", PlanResponseSchema, { method: "POST", body: JSON.stringify(input) });
     if (response.plan.operation !== "version.submit") throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
+    return { plan: response.plan };
+  },
+  planCustomerReviewResponse: async (
+    input: UpsertCustomerReviewResponseInput,
+  ): Promise<{ plan: UpsertCustomerReviewResponseMutationPlan }> => {
+    const response = await request(
+      "/api/plans/customer-review-response",
+      PlanResponseSchema,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    if (response.plan.operation !== "customer_review.response.upsert") {
+      throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
+    }
     return { plan: response.plan };
   },
   planAppleAdsCampaignCreate: async (input: CreateAppleAdsCampaignInput): Promise<{ plan: CreateAppleAdsCampaignMutationPlan }> => {

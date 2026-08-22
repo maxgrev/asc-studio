@@ -67,6 +67,225 @@ describe("AppStoreConnectProvider direct transport", () => {
     expect(new Set(authorizations).size).toBe(1);
   });
 
+  it("maps customer reviews, included responses, filters, and opaque paging cursors", async () => {
+    let requestedUrl: URL | null = null;
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname !== "/v1/apps/app-1/customerReviews" || init?.method !== "GET") {
+        throw new Error(`Unexpected request: ${init?.method} ${url}`);
+      }
+      requestedUrl = url;
+      return json({
+        data: [{
+          type: "customerReviews",
+          id: "review-1",
+          attributes: {
+            rating: 2,
+            title: "Sync needs attention",
+            body: "The latest edits took too long to appear.",
+            reviewerNickname: "CarefulWriter",
+            createdDate: "2026-08-20T08:15:00-07:00",
+            territory: "USA",
+          },
+          relationships: {
+            response: { data: { type: "customerReviewResponses", id: "response-1" } },
+          },
+        }],
+        included: [{
+          type: "customerReviewResponses",
+          id: "response-1",
+          attributes: {
+            responseBody: "We are investigating the sync delay.",
+            lastModifiedDate: "2026-08-20T18:00:00Z",
+            state: "PENDING_PUBLISH",
+          },
+          relationships: {
+            review: { data: { type: "customerReviews", id: "review-1" } },
+          },
+        }],
+        links: {
+          self: url.toString(),
+          next: "https://api.appstoreconnect.apple.com/v1/apps/app-1/customerReviews?cursor=AQ.secret&limit=1&filter%5Brating%5D=2",
+        },
+        meta: { paging: { total: 14, limit: 1 } },
+      });
+    }) as unknown as typeof fetch;
+    const provider = new AppStoreConnectProvider({ credentials, fetch: mockFetch });
+
+    await expect(provider.listCustomerReviews("app-1", {
+      limit: 1,
+      cursor: "AQ.first",
+      ratings: [2, 5],
+      territories: ["USA", "GBR"],
+      sort: "rating",
+      publishedResponse: false,
+    })).resolves.toEqual({
+      reviews: [{
+        id: "review-1",
+        appId: "app-1",
+        rating: 2,
+        title: "Sync needs attention",
+        body: "The latest edits took too long to appear.",
+        reviewerNickname: "CarefulWriter",
+        createdAt: "2026-08-20T08:15:00-07:00",
+        territory: "USA",
+        response: {
+          id: "response-1",
+          reviewId: "review-1",
+          responseBody: "We are investigating the sync delay.",
+          lastModifiedAt: "2026-08-20T18:00:00Z",
+          state: "PENDING_PUBLISH",
+        },
+      }],
+      total: 14,
+      nextCursor: "AQ.secret",
+    });
+
+    expect(requestedUrl).not.toBeNull();
+    expect(requestedUrl!.searchParams.get("limit")).toBe("1");
+    expect(requestedUrl!.searchParams.get("cursor")).toBe("AQ.first");
+    expect(requestedUrl!.searchParams.get("filter[rating]")).toBe("2,5");
+    expect(requestedUrl!.searchParams.get("filter[territory]")).toBe("USA,GBR");
+    expect(requestedUrl!.searchParams.get("exists[publishedResponse]")).toBe("false");
+    expect(requestedUrl!.searchParams.get("sort")).toBe("rating");
+    expect(requestedUrl!.searchParams.get("include")).toBe("response");
+    expect(requestedUrl!.searchParams.get("fields[customerReviews]")).toBe(
+      "rating,title,body,reviewerNickname,createdDate,territory,response",
+    );
+    expect(requestedUrl!.searchParams.get("fields[customerReviewResponses]")).toBe(
+      "responseBody,lastModifiedDate,state,review",
+    );
+  });
+
+  it("reads one customer review and fails closed when linked response data is omitted", async () => {
+    let omitIncluded = false;
+    const review = {
+      type: "customerReviews",
+      id: "review-2",
+      attributes: {
+        rating: 5,
+        title: "Excellent",
+        body: "Fast and focused.",
+        reviewerNickname: "OrbitFan",
+        createdDate: "2026-08-19T12:00:00Z",
+        territory: "GBR",
+      },
+      relationships: {
+        response: { data: { type: "customerReviewResponses", id: "response-2" } },
+      },
+    };
+    const included = [{
+      type: "customerReviewResponses",
+      id: "response-2",
+      attributes: {
+        responseBody: "Thank you!",
+        lastModifiedDate: null,
+        state: "PUBLISHED",
+      },
+    }];
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname !== "/v1/customerReviews/review-2" || init?.method !== "GET") {
+        throw new Error(`Unexpected request: ${init?.method} ${url}`);
+      }
+      expect(url.searchParams.get("include")).toBe("response");
+      return json({ data: review, ...(omitIncluded ? {} : { included }), links: { self: url.toString() } });
+    }) as unknown as typeof fetch;
+    const provider = new AppStoreConnectProvider({ credentials, fetch: mockFetch });
+
+    await expect(provider.getCustomerReview("app-1", "review-2")).resolves.toEqual(expect.objectContaining({
+      id: "review-2",
+      appId: "app-1",
+      response: expect.objectContaining({ id: "response-2", reviewId: "review-2", lastModifiedAt: null }),
+    }));
+
+    omitIncluded = true;
+    await expect(provider.getCustomerReview("app-1", "review-2")).rejects.toThrow(
+      "omitted included response data for customer review review-2",
+    );
+  });
+
+  it("posts the exact customer review response document once and verifies its review relationship", async () => {
+    let requestBody: unknown;
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname !== "/v1/customerReviewResponses" || init?.method !== "POST") {
+        throw new Error(`Unexpected request: ${init?.method} ${url}`);
+      }
+      requestBody = JSON.parse(String(init.body));
+      return json({
+        data: {
+          type: "customerReviewResponses",
+          id: "response-new",
+          attributes: {
+            responseBody: "Thanks for the thoughtful report.",
+            lastModifiedDate: "2026-08-21T12:00:00Z",
+            state: "PENDING_PUBLISH",
+          },
+          relationships: {
+            review: { data: { type: "customerReviews", id: "review-9" } },
+          },
+        },
+        links: { self: "https://api.appstoreconnect.apple.com/v1/customerReviewResponses/response-new" },
+      }, 201);
+    }) as unknown as typeof fetch;
+    const provider = new AppStoreConnectProvider({ credentials, fetch: mockFetch });
+
+    await expect(provider.upsertCustomerReviewResponse(
+      "review-9",
+      "Thanks for the thoughtful report.",
+    )).resolves.toEqual({
+      id: "response-new",
+      reviewId: "review-9",
+      responseBody: "Thanks for the thoughtful report.",
+      lastModifiedAt: "2026-08-21T12:00:00Z",
+      state: "PENDING_PUBLISH",
+    });
+    expect(requestBody).toEqual({
+      data: {
+        type: "customerReviewResponses",
+        attributes: { responseBody: "Thanks for the thoughtful report." },
+        relationships: {
+          review: { data: { type: "customerReviews", id: "review-9" } },
+        },
+      },
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry customer review response writes", async () => {
+    const mockFetch = vi.fn(async () => json({
+      errors: [{ status: "500", code: "UNAVAILABLE", detail: "Try later." }],
+    }, 500)) as unknown as typeof fetch;
+    const provider = new AppStoreConnectProvider({ credentials, fetch: mockFetch });
+
+    await expect(provider.upsertCustomerReviewResponse("review-10", "We are looking into this."))
+      .rejects.toMatchObject({ status: 500, code: "UNAVAILABLE" });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a customer review response linked to another review", async () => {
+    const mockFetch = vi.fn(async () => json({
+      data: {
+        type: "customerReviewResponses",
+        id: "response-wrong",
+        attributes: {
+          responseBody: "Wrong review.",
+          lastModifiedDate: null,
+          state: "PENDING_PUBLISH",
+        },
+        relationships: {
+          review: { data: { type: "customerReviews", id: "review-other" } },
+        },
+      },
+      links: { self: "https://api.appstoreconnect.apple.com/v1/customerReviewResponses/response-wrong" },
+    }, 201)) as unknown as typeof fetch;
+    const provider = new AppStoreConnectProvider({ credentials, fetch: mockFetch });
+
+    await expect(provider.upsertCustomerReviewResponse("review-expected", "Reply."))
+      .rejects.toThrow("without the expected review relationship");
+  });
+
   it("maps builds and groups from Apple's JSON:API relationships and writes group access directly", async () => {
     let assignmentBody: unknown;
     const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {

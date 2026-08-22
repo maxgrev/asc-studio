@@ -264,6 +264,15 @@ The form language is gently squared and compact. Core controls use the control a
 - **Style:** A centered overlay with the overlay radius, 1px boundary, dedicated dialog shadow, and separated header, content, and footer regions.
 - **Behavior:** Keep the exact change or decision visible near the final action and preserve keyboard focus treatment.
 
+### Connections
+
+- **Grouping:** Keep Apple services and optional writing assistance in separate, titled groups. An OpenAI connection is workspace-wide, so it must not appear attached to the active Apple organization.
+- **Rows:** Use the standard bordered operating row with a 14px service name, an 11px text-backed status, 12px connection detail, and one compact action.
+- **Secrets:** Collect API keys in masked fields only inside the expanded setup region. Never prefill a saved key or echo it in connection metadata. Name macOS Keychain as the GUI credential vault. Describe **Always Allow** as trust in ASC Studio's native helper, not exclusive access by the app, and never imply signed-host, XPC, Data Protection Keychain, or Secure Enclave isolation.
+- **Lifecycle:** Verify before replacing. A write-ahead recovery marker protects every Keychain mutation. A normal commit or rollback is freshly verified before the marker clears; a crash or unverifiable rollback leaves an uncertain, fail-closed state shared by every data-directory copy with that vault ID. The destructive, explicitly scoped reset deletes the bundle and current-directory legacy files, then leaves a non-secret vault-wide tombstone that blocks stale copied legacy data until an intentional verified reconnect. Use inline destructive confirmation for removal and reset, and explain that neither action revokes the remote credential or guarantees erasure from other copies or backups. Busy validation locks the candidate fields and dialog dismissal.
+- **Failure:** Treat locked, unavailable, or failed Keychain migration as a needs-attention state with a plain recovery action. Never present a plaintext fallback as connected.
+- **Responsive behavior:** At 620px, use the full viewport dialog, move each row action beneath its service detail, and stack form and destructive actions at a minimum 44px height.
+
 ## Do's and Don'ts
 
 ### Do:

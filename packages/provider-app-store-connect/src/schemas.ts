@@ -134,6 +134,42 @@ export const ReviewSubmissionItemResourceSchema = z.object({
 }).passthrough();
 export const ReviewSubmissionItemResponseSchema = single(ReviewSubmissionItemResourceSchema);
 
+export const CustomerReviewResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("customerReviews"),
+  attributes: z.object({
+    rating: z.number().int().min(1).max(5),
+    title: z.string(),
+    body: z.string(),
+    reviewerNickname: z.string(),
+    createdDate: z.string().min(1),
+    territory: z.string().regex(/^[A-Z]{3}$/),
+  }).passthrough(),
+}).passthrough();
+
+export const CustomerReviewResponseResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("customerReviewResponses"),
+  attributes: z.object({
+    responseBody: z.string(),
+    lastModifiedDate: z.string().min(1).nullable(),
+    state: z.enum(["PENDING_PUBLISH", "PUBLISHED"]),
+  }).passthrough(),
+}).passthrough();
+
+export const CustomerReviewsPageSchema = z.object({
+  data: z.array(CustomerReviewResourceSchema),
+  included: z.array(z.unknown()).optional(),
+  links,
+  meta: z.object({
+    paging: z.object({
+      total: z.number().int().nonnegative().optional(),
+    }).passthrough(),
+  }).passthrough().optional(),
+}).passthrough();
+export const CustomerReviewResponseSchema = single(CustomerReviewResourceSchema);
+export const CustomerReviewResponseResourceResponseSchema = single(CustomerReviewResponseResourceSchema);
+
 export const EmptySchema = z.null();
 
 export type AppResource = z.infer<typeof AppResourceSchema>;
@@ -144,3 +180,5 @@ export type BuildResource = z.infer<typeof BuildResourceSchema>;
 export type PreReleaseVersionResource = z.infer<typeof PreReleaseVersionResourceSchema>;
 export type BetaGroupResource = z.infer<typeof BetaGroupResourceSchema>;
 export type ReviewSubmissionResource = z.infer<typeof ReviewSubmissionResourceSchema>;
+export type CustomerReviewResource = z.infer<typeof CustomerReviewResourceSchema>;
+export type CustomerReviewResponseResource = z.infer<typeof CustomerReviewResponseResourceSchema>;

@@ -4,10 +4,10 @@ import type {
   CreateVersionInput,
   CreateVersionMutationPlan,
   GenerateReleaseCopyTranslationsInput,
+  OpenAiConnection,
   ReleaseCopyField,
   SubmitVersionMutationPlan,
   UpdateScreenshotsMutationPlan,
-  TranslationProviderStatus,
   UpdateLocalizationsMutationPlan,
   ValidationReport,
   VersionLocalizationDraft,
@@ -271,12 +271,26 @@ export const ReadinessDialog = ({ report, demo, busy, error, onRetry, onClose }:
 interface TranslationDialogProps {
   source: VersionLocalizationDraft;
   targets: VersionLocalizationDraft[];
-  status: TranslationProviderStatus | null;
+  connection: OpenAiConnection | null;
+  connectionLoading: boolean;
+  connectionError: string | null;
+  onRetryConnection: () => Promise<void>;
+  onManageOpenAi: () => void;
   onGenerate: (input: GenerateReleaseCopyTranslationsInput) => Promise<void>;
   onClose: () => void;
 }
 
-export const TranslationDialog = ({ source, targets, status, onGenerate, onClose }: TranslationDialogProps) => {
+export const TranslationDialog = ({
+  source,
+  targets,
+  connection,
+  connectionLoading,
+  connectionError,
+  onRetryConnection,
+  onManageOpenAi,
+  onGenerate,
+  onClose,
+}: TranslationDialogProps) => {
   const [includeWhatsNew, setIncludeWhatsNew] = useState(true);
   const [includePromotionalText, setIncludePromotionalText] = useState(false);
   const [selectedLocales, setSelectedLocales] = useState(() => new Set(targets.map((target) => target.locale)));
@@ -290,6 +304,29 @@ export const TranslationDialog = ({ source, targets, status, onGenerate, onClose
   const targetLocales = targets.filter((target) => selectedLocales.has(target.locale)).map((target) => target.locale);
   const selectedSourceIsEmpty = fields.some((field) => !source[field].trim());
   const allSelected = selectedLocales.size === targets.length;
+  const providerReady = Boolean(connection?.configured);
+  const providerTitle = connection?.source === "demo"
+    ? "Sample translator"
+    : connection?.source === "environment" && !connection.configured
+      ? "Environment-managed OpenAI needs attention"
+    : providerReady
+      ? `OpenAI · ${connection?.model ?? "Configured model"}`
+      : connectionError
+        ? "OpenAI status unavailable"
+        : connectionLoading
+          ? "Checking OpenAI setup"
+          : "OpenAI is not set up";
+  const providerDetail = connection?.source === "demo"
+    ? "Demo mode returns marked sample translations and never calls OpenAI."
+    : connection?.source === "environment"
+      ? connection.configured
+        ? `Ready for writing assistance. Managed by OPENAI_API_KEY${connection.modelSource === "environment" ? " and ASC_STUDIO_OPENAI_MODEL" : ""}.`
+        : "OPENAI_API_KEY is empty or invalid. Update the environment value, then restart ASC Studio."
+      : connection?.source === "local"
+        ? "Ready for writing assistance. The API key is protected by macOS Keychain."
+        : connectionError ?? (connectionLoading
+          ? "Reading the local writing-assistance connection…"
+          : "Add an API key in Connections to translate release metadata.");
 
   const toggleLocale = (locale: VersionLocalizationDraft["locale"]) => {
     setSelectedLocales((current) => {
@@ -329,13 +366,16 @@ export const TranslationDialog = ({ source, targets, status, onGenerate, onClose
       onClose={onClose}
     >
       <div className="dialog-content translation-dialog">
-        <div className={status?.configured ? "translation-provider ready" : "translation-provider unconfigured"}>
-          {status?.configured ? <Languages size={19} /> : <KeyRound size={19} />}
+        <div className={providerReady ? "translation-provider ready" : connectionError ? "translation-provider error" : "translation-provider unconfigured"}>
+          {providerReady ? <Languages size={19} /> : <KeyRound size={19} />}
           <p>
-            <strong>{status?.provider === "demo" ? "Sample translator" : status?.configured ? `OpenAI · ${status.model}` : "OpenAI API key needed"}</strong>
-            <span>{status?.detail ?? "Checking the local translation provider…"}</span>
-            {status && !status.configured ? <code>OPENAI_API_KEY="your-key" npm run local</code> : null}
+            <strong>{providerTitle}</strong>
+            <span>{providerDetail}</span>
           </p>
+          {connectionError ? <button className="button secondary compact" type="button" onClick={() => void onRetryConnection()}>Retry</button> : null}
+          {!connectionLoading && !connectionError && connection?.source !== "demo" && connection?.source !== "environment" ? (
+            <button className="button secondary compact" type="button" onClick={onManageOpenAi}>{providerReady ? "Manage" : "Set up OpenAI"}</button>
+          ) : null}
         </div>
 
         <section className="translation-field-picker" aria-labelledby="translation-fields-title">
@@ -378,7 +418,7 @@ export const TranslationDialog = ({ source, targets, status, onGenerate, onClose
           className="button primary"
           type="button"
           onClick={() => void generate()}
-          disabled={busy || !status?.configured || fields.length === 0 || targetLocales.length === 0 || selectedSourceIsEmpty}
+          disabled={busy || !providerReady || fields.length === 0 || targetLocales.length === 0 || selectedSourceIsEmpty}
         >
           <Languages size={16} />{busy ? "Translating…" : `Translate ${targetLocales.length} locale${targetLocales.length === 1 ? "" : "s"}`}
         </button>

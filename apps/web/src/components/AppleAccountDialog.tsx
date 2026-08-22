@@ -25,7 +25,7 @@ export const AppleAccountDialog = ({ onConnected, onClose }: AppleAccountDialogP
       <AppleAccountForm submitLabel="Add and switch" onConnected={onConnected} onCancel={onClose} />
       <div className="account-security-note">
         <LockKeyhole size={15} />
-        <span>The private key stays in an owner-only file on this Mac.</span>
+        <span>After Apple verifies the connection, the private key is encrypted in macOS Keychain and never returned to the browser. <strong>Allow Once</strong> permits one read; <strong>Always Allow</strong> trusts ASC Studio’s native helper, which other processes in this macOS account can also invoke.</span>
       </div>
     </section>
   </div>

@@ -1,5 +1,5 @@
 import type { AgentStatus } from "@asc-studio/contracts";
-import { CheckCircle2, KeyRound, LockKeyhole } from "lucide-react";
+import { CheckCircle2, KeyRound, LockKeyhole, Sparkles } from "lucide-react";
 import { AppleAccountForm } from "./AppleAccountForm.js";
 
 interface ConnectionSetupProps {
@@ -28,9 +28,14 @@ export const ConnectionSetup = ({ status, onConnected }: ConnectionSetupProps) =
 
         <AppleAccountForm statusDetail={status.detail} onConnected={onConnected} />
 
+        <div className="connection-setup-optional">
+          <Sparkles size={16} />
+          <span>OpenAI writing assistance is optional. Add it later from <strong>Connections</strong> for release translation and review reply drafts.</span>
+        </div>
+
         <footer>
           <LockKeyhole size={15} />
-          <span>The private key stays on this Mac in an owner-only file under ASC Studio’s local data folder. The browser never receives it again.</span>
+          <span>After Apple verifies the connection, ASC Studio stores the private key encrypted in macOS Keychain and never returns it to the browser. <strong>Allow Once</strong> permits one read; <strong>Always Allow</strong> trusts ASC Studio’s native helper, which other processes in this macOS account can also invoke.</span>
         </footer>
       </section>
     </main>

@@ -12,13 +12,16 @@ import {
   CreateAppleAdsKeywordInputSchema,
   AppStoreConnectCredentialsInputSchema,
   AppStorePlatformSchema,
+  CustomerReviewSortSchema,
   CreateVersionInputSchema,
+  GenerateCustomerReviewReplyInputSchema,
   GenerateReleaseCopyTranslationsInputSchema,
   ScreenshotDisplayTypeSchema,
   SubmitVersionInputSchema,
   UpdateAppleAdsCampaignInputSchema,
   UpdateAppleAdsKeywordInputSchema,
   UpdateScreenshotSetInputSchema,
+  UpsertCustomerReviewResponseInputSchema,
   UpdateVersionLocalizationsInputSchema,
 } from "@asc-studio/contracts";
 import type { ScreenshotDisplayType, ScreenshotUploadReceipt } from "@asc-studio/contracts";
@@ -31,10 +34,24 @@ import {
 import { AppStoreConnectApiError, AppStoreConnectProvider } from "@asc-studio/provider-app-store-connect";
 import { MockAscProvider } from "@asc-studio/provider-demo";
 import { z } from "zod";
-import { AppleAdsCredentialStore, AppStoreConnectCredentialStore, CredentialStoreError } from "./credentials.js";
+import {
+  AppleAdsCredentialStore,
+  AppStoreConnectCredentialStore,
+  CredentialStoreError,
+  defaultCredentialRecoveryDirectory,
+  OpenAiCredentialStore,
+} from "./credentials.js";
+import { InMemoryCredentialVault, systemCredentialVault } from "./keychain.js";
+import { acquireInstanceLock } from "./instance-lock.js";
 import { handleMcpRequest } from "./mcp.js";
 import { SqlitePlanStore } from "./store.js";
-import { createReleaseCopyTranslator, TranslationProviderError } from "./translation.js";
+import {
+  createCustomerReviewReplyGenerator,
+  createReleaseCopyTranslator,
+  resolveOpenAiModel,
+  TranslationProviderError,
+  validateOpenAiCredential,
+} from "./translation.js";
 
 const port = Number(process.env.ASC_STUDIO_PORT ?? 0);
 const host = "127.0.0.1";
@@ -43,6 +60,52 @@ const webDirectory = process.env.ASC_STUDIO_WEB_DIR ? resolve(process.env.ASC_ST
 const maximumBodyBytes = 64 * 1024;
 const maximumScreenshotBytes = 20 * 1024 * 1024;
 const screenshotUploadsDirectory = join(dataDirectory, "uploads", "screenshots");
+
+const customerReviewRatingsQuerySchema = z.string()
+  .regex(/^[1-5](?:,[1-5])*$/)
+  .transform((value) => value.split(",").map(Number))
+  .refine((values) => new Set(values).size === values.length, "Ratings must be unique.");
+
+const customerReviewTerritoriesQuerySchema = z.string()
+  .regex(/^[A-Z]{3}(?:,[A-Z]{3})*$/)
+  .transform((value) => value.split(","))
+  .refine((values) => new Set(values).size === values.length, "Territories must be unique.");
+
+const customerReviewsQuerySchema = z.object({
+  limit: z.string()
+    .regex(/^(?:[1-9]|[1-9]\d|1\d{2}|200)$/)
+    .transform(Number)
+    .optional()
+    .default("50"),
+  cursor: z.string().min(1).max(2_048).optional(),
+  ratings: customerReviewRatingsQuerySchema.optional(),
+  territories: customerReviewTerritoriesQuerySchema.optional(),
+  sort: CustomerReviewSortSchema.optional().default("-createdDate"),
+  publishedResponse: z.enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+}).strict();
+
+const resetOpenAiVaultInputSchema = z.object({
+  confirmation: z.literal("RESET OPENAI CONNECTION"),
+}).strict();
+const resetAppleAdsVaultInputSchema = z.object({
+  confirmation: z.literal("RESET APPLE ADS CONNECTIONS"),
+}).strict();
+const resetAppleConnectionsVaultInputSchema = z.object({
+  confirmation: z.literal("RESET APPLE CONNECTIONS"),
+}).strict();
+
+const uniqueSearchParams = (searchParams: URLSearchParams) => {
+  const values = Object.create(null) as Record<string, string>;
+  for (const [key, value] of searchParams) {
+    if (Object.hasOwn(values, key)) {
+      throw new RequestError("invalid_input", "Query parameters may only be supplied once.", 400);
+    }
+    values[key] = value;
+  }
+  return values;
+};
 
 const screenshotDimensions: Record<ScreenshotDisplayType, Set<string>> = {
   APP_IPHONE_55: new Set(["1242x2208", "2208x1242"]),
@@ -118,7 +181,7 @@ class AsyncReadWriteLock {
 }
 
 const domainStatus = (code: string) => {
-  if (["group_not_found", "localization_not_found", "plan_not_found", "screenshot_not_found", "version_not_found", "source_version_not_found"].includes(code)) return 404;
+  if (["group_not_found", "localization_not_found", "plan_not_found", "review_not_found", "screenshot_not_found", "version_not_found", "source_version_not_found"].includes(code)) return 404;
   if ([
     "already_assigned",
     "apple_ads_ad_group_changed",
@@ -385,11 +448,40 @@ const isTrustedOrigin = (value: string | undefined) => {
   }
 };
 
-const credentialStore = new AppStoreConnectCredentialStore(dataDirectory);
-const appleAdsCredentialStore = new AppleAdsCredentialStore(dataDirectory);
+const usesTestCredentialVault = process.env.NODE_ENV === "test"
+  && process.env.ASC_STUDIO_TEST_IN_MEMORY_KEYCHAIN === "1";
+const credentialVault = usesTestCredentialVault
+  ? new InMemoryCredentialVault()
+  : systemCredentialVault;
+const credentialRecoveryDirectory = usesTestCredentialVault
+  ? join(dataDirectory, "test-credential-recovery")
+  : defaultCredentialRecoveryDirectory();
+const credentialStore = new AppStoreConnectCredentialStore(
+  dataDirectory,
+  credentialVault,
+  credentialRecoveryDirectory,
+);
+const appleAdsCredentialStore = new AppleAdsCredentialStore(
+  dataDirectory,
+  () => new Date(),
+  credentialVault,
+  credentialRecoveryDirectory,
+);
+const openAiCredentialStore = new OpenAiCredentialStore(
+  dataDirectory,
+  credentialVault,
+  credentialRecoveryDirectory,
+);
 const accountLock = new AsyncReadWriteLock();
+const openAiLock = new AsyncReadWriteLock();
 
 const main = async () => {
+  const releaseInstanceLock = await acquireInstanceLock(
+    dataDirectory,
+    usesTestCredentialVault ? { runtimeDirectory: join(dataDirectory, "test-instance-locks") } : {},
+  );
+  let serverStarted = false;
+  try {
   await mkdir(screenshotUploadsDirectory, { recursive: true, mode: 0o700 });
   if (webDirectory) {
     const webStats = await stat(webDirectory).catch(() => null);
@@ -409,8 +501,7 @@ const main = async () => {
   const adsProvider = demoProvider ?? new AppleAdsPlatformProvider({
     credentials: async () => appleAdsCredentialStore.load(await activeAppleAccount()),
   });
-  const status = await provider.getStatus();
-  const databaseName = status.mode === "demo" ? "demo.sqlite" : "live.sqlite";
+  const databaseName = mode === "demo" ? "demo.sqlite" : "live.sqlite";
   const store = new SqlitePlanStore(join(dataDirectory, databaseName));
   const service = new AscStudioService({
     provider,
@@ -420,7 +511,31 @@ const main = async () => {
     id: () => randomUUID(),
     digest: (value) => createHash("sha256").update(value).digest("hex"),
   });
-  const translator = createReleaseCopyTranslator(mode);
+  const resolveOpenAiCredential = () => openAiCredentialStore.load();
+  const translator = createReleaseCopyTranslator(mode, resolveOpenAiCredential);
+  const customerReviewReplyGenerator = createCustomerReviewReplyGenerator(mode, resolveOpenAiCredential);
+  const openAiConnectionResponse = async () => {
+    if (mode === "demo") {
+      return {
+        connection: {
+          configured: true,
+          source: "demo" as const,
+          model: null,
+          modelSource: "demo" as const,
+        },
+      };
+    }
+    const summary = await openAiCredentialStore.summary();
+    const effectiveModel = resolveOpenAiModel(summary.source === "local" ? summary.localModel : null);
+    return {
+      connection: {
+        configured: summary.configured,
+        source: summary.source,
+        model: effectiveModel.model,
+        modelSource: effectiveModel.source,
+      },
+    };
+  };
   const appleAdsConnectionResponse = async () => ({
     status: await service.getAppleAdsStatus(),
     connection: mode === "demo"
@@ -446,6 +561,7 @@ const main = async () => {
     }
 
     let releaseAccountLock: (() => void) | null = null;
+    let releaseOpenAiLock: (() => void) | null = null;
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
       const authorization = requestAuthorization(request);
@@ -461,7 +577,9 @@ const main = async () => {
         return;
       }
 
-      if (mode === "live" && (isApiRequest || isMcpRequest)) {
+      const isOpenAiConnectionRequest = url.pathname === "/api/connections/openai"
+        || url.pathname === "/api/connections/openai/reset-vault";
+      if (mode === "live" && (isApiRequest || isMcpRequest) && !isOpenAiConnectionRequest) {
         const changesActiveAccount = (
           request.method === "POST"
           && (
@@ -469,6 +587,8 @@ const main = async () => {
             || url.pathname === "/api/connections/app-store-connect"
             || url.pathname === "/api/connections/apple-ads"
             || url.pathname === "/api/connections/apple-ads/key-pair"
+            || url.pathname === "/api/connections/apple-ads/reset-vault"
+            || url.pathname === "/api/connections/app-store-connect/reset-vault"
             || /^\/api\/connections\/app-store-connect\/[^/]+\/activate$/.test(url.pathname)
           )
         ) || (
@@ -479,6 +599,18 @@ const main = async () => {
           )
         );
         releaseAccountLock = await (changesActiveAccount ? accountLock.acquireWrite() : accountLock.acquireRead());
+      }
+
+      const usesOpenAiCredential = isOpenAiConnectionRequest
+        || url.pathname === "/api/translations/status"
+        || url.pathname === "/api/translations/release-copy"
+        || url.pathname === "/api/replies/customer-review";
+      if (mode === "live" && usesOpenAiCredential) {
+        const mutatesOpenAiCredential = isOpenAiConnectionRequest
+          && (request.method === "POST" || request.method === "DELETE");
+        releaseOpenAiLock = await (mutatesOpenAiCredential
+          ? openAiLock.acquireWrite()
+          : openAiLock.acquireRead());
       }
 
       if (isApiRequest || isMcpRequest) {
@@ -507,7 +639,8 @@ const main = async () => {
         return;
       }
       if (request.method === "GET" && url.pathname === "/health") {
-        json(response, 200, { name: "ASC Studio local agent", version: "0.6.0", mode: status.mode, connected: status.connected });
+        const currentStatus = await service.getStatus();
+        json(response, 200, { name: "ASC Studio local agent", version: "0.6.0", mode: currentStatus.mode, connected: currentStatus.connected });
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/status") {
@@ -552,6 +685,32 @@ const main = async () => {
         json(response, 200, { accounts: mode === "live" ? await credentialStore.list() : [] });
         return;
       }
+      if (request.method === "GET" && url.pathname === "/api/connections/openai") {
+        json(response, 200, await openAiConnectionResponse());
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/connections/openai") {
+        if (mode !== "live") throw new RequestError("demo_connection", "Demo mode cannot save a live OpenAI connection.", 409);
+        const input = openAiCredentialStore.candidate(await readBody(request));
+        const effectiveModel = resolveOpenAiModel(input.model?.trim() || null);
+        await validateOpenAiCredential(input.apiKey, effectiveModel.model);
+        await openAiCredentialStore.save(input);
+        json(response, 200, await openAiConnectionResponse());
+        return;
+      }
+      if (request.method === "DELETE" && url.pathname === "/api/connections/openai") {
+        if (mode !== "live") throw new RequestError("demo_connection", "Demo mode cannot remove a live OpenAI connection.", 409);
+        await openAiCredentialStore.remove();
+        json(response, 200, await openAiConnectionResponse());
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/connections/openai/reset-vault") {
+        if (mode !== "live") throw new RequestError("demo_connection", "Demo mode has no OpenAI credential vault to reset.", 409);
+        resetOpenAiVaultInputSchema.parse(await readBody(request));
+        await openAiCredentialStore.reset();
+        json(response, 200, await openAiConnectionResponse());
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/connections/apple-ads") {
         json(response, 200, await appleAdsConnectionResponse());
         return;
@@ -588,6 +747,23 @@ const main = async () => {
         json(response, 200, await appleAdsConnectionResponse());
         return;
       }
+      if (request.method === "POST" && url.pathname === "/api/connections/apple-ads/reset-vault") {
+        if (mode !== "live") throw new RequestError("demo_connection", "Demo mode has no Apple Ads credential vault to reset.", 409);
+        resetAppleAdsVaultInputSchema.parse(await readBody(request));
+        await appleAdsCredentialStore.reset();
+        json(response, 200, await appleAdsConnectionResponse());
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/connections/app-store-connect/reset-vault") {
+        if (mode !== "live") throw new RequestError("demo_connection", "Demo mode has no Apple credential vault to reset.", 409);
+        resetAppleConnectionsVaultInputSchema.parse(await readBody(request));
+        // Apple Ads bundles refer to App Store Connect connection IDs, so reset
+        // those links first before removing the Apple account bundle itself.
+        await appleAdsCredentialStore.reset();
+        await credentialStore.reset();
+        json(response, 200, { status: await service.getStatus(), accounts: [] });
+        return;
+      }
       if (
         request.method === "POST"
         && ["/api/connection/app-store-connect", "/api/connections/app-store-connect"].includes(url.pathname)
@@ -595,7 +771,7 @@ const main = async () => {
         if (mode !== "live") throw new RequestError("demo_connection", "Demo mode cannot save a live connection.", 409);
         const input = AppStoreConnectCredentialsInputSchema.parse(await readBody(request));
         const candidate = new AppStoreConnectProvider({
-          credentials: { ...input, connectionId: "pending", authBackend: "Pending local credential file" },
+          credentials: { ...input, connectionId: "pending", authBackend: "Pending macOS Keychain credential" },
           uploadDirectory: screenshotUploadsDirectory,
         });
         const candidateStatus = await candidate.getStatus();
@@ -691,8 +867,39 @@ const main = async () => {
         });
         return;
       }
+      const customerReviewsMatch = url.pathname.match(/^\/api\/apps\/([^/]+)\/customer-reviews$/);
+      if (request.method === "GET" && customerReviewsMatch?.[1]) {
+        const query = customerReviewsQuerySchema.parse(uniqueSearchParams(url.searchParams));
+        const options = {
+          limit: query.limit,
+          sort: query.sort,
+          ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+          ...(query.ratings === undefined ? {} : { ratings: query.ratings }),
+          ...(query.territories === undefined ? {} : { territories: query.territories }),
+          ...(query.publishedResponse === undefined ? {} : { publishedResponse: query.publishedResponse }),
+        };
+        const page = await service.listCustomerReviews(decodeURIComponent(customerReviewsMatch[1]), options);
+        json(response, 200, {
+          reviews: page.reviews,
+          total: page.total,
+          nextCursor: page.nextCursor,
+        });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/replies/customer-review") {
+        const input = GenerateCustomerReviewReplyInputSchema.parse(await readBody(request));
+        const review = await service.getCustomerReview(input.appId, input.reviewId).catch((error: unknown) => {
+          if (mode !== "demo" && (!(error instanceof AppStoreConnectApiError) || error.status !== 404)) throw error;
+          throw new DomainError("review_not_found", "The selected customer review no longer exists.");
+        });
+        if (review.appId !== input.appId || review.id !== input.reviewId) {
+          throw new DomainError("review_not_found", "The selected customer review no longer exists.");
+        }
+        json(response, 200, await customerReviewReplyGenerator.generate(review));
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/translations/status") {
-        json(response, 200, translator.getStatus());
+        json(response, 200, await translator.getStatus());
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/translations/release-copy") {
@@ -826,6 +1033,11 @@ const main = async () => {
         json(response, 201, { plan: await service.createSubmitVersionPlan(input, "gui") });
         return;
       }
+      if (request.method === "POST" && url.pathname === "/api/plans/customer-review-response") {
+        const input = UpsertCustomerReviewResponseInputSchema.parse(await readBody(request));
+        json(response, 201, { plan: await service.createUpsertCustomerReviewResponsePlan(input, "gui") });
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/api/plans/apple-ads/campaign-create") {
         const input = CreateAppleAdsCampaignInputSchema.parse(await readBody(request));
         json(response, 201, { plan: await service.createAppleAdsCampaignPlan(input, "gui") });
@@ -917,6 +1129,7 @@ const main = async () => {
       console.error(error);
       json(response, 500, { error: { code: "internal_error", message: "ASC Studio failed to complete the request." } });
     } finally {
+      releaseOpenAiLock?.();
       releaseAccountLock?.();
     }
   });
@@ -928,13 +1141,38 @@ const main = async () => {
       server.off("error", onError);
       const address = server.address();
       const resolvedPort = typeof address === "object" && address ? address.port : port;
-      console.log(`ASC Studio local agent (${status.mode}) listening on http://${host}:${resolvedPort}`);
+      console.log(`ASC Studio local agent (${mode}) listening on http://${host}:${resolvedPort}`);
       console.log(`MCP endpoint: http://${host}:${resolvedPort}/mcp`);
       if (guiToken.generated) console.log(`GUI bearer token: ${guiToken.value}`);
       if (mcpToken.generated) console.log(`MCP bearer token: ${mcpToken.value}`);
       resolve();
     });
   });
+  serverStarted = true;
+
+  let shuttingDown = false;
+  let releaseLockPromise: Promise<void> | null = null;
+  const releaseLock = () => releaseLockPromise ??= releaseInstanceLock();
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const forceExit = setTimeout(() => {
+      void releaseLock().finally(() => process.exit(1));
+    }, 5_000);
+    forceExit.unref();
+    server.close(() => {
+      clearTimeout(forceExit);
+      void releaseLock().then(
+        () => process.exit(0),
+        () => process.exit(1),
+      );
+    });
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+  } finally {
+    if (!serverStarted) await releaseInstanceLock();
+  }
 };
 
 void main().catch((error) => {

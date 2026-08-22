@@ -11,6 +11,9 @@ import {
   type AppSummary,
   type BuildSummary,
   type CreateVersionInput,
+  type CustomerReview,
+  type CustomerReviewResponse,
+  type CustomerReviewsPage,
   type LocalizationSnapshot,
   type ScreenshotAsset,
   type ScreenshotAssetSnapshot,
@@ -31,6 +34,7 @@ import type {
   AppListOptions,
   AscProvider,
   BuildListOptions,
+  CustomerReviewListOptions,
   VersionListOptions,
 } from "@asc-studio/core";
 import type { output, ZodTypeAny } from "zod";
@@ -50,6 +54,10 @@ import {
   BetaGroupsPageSchema,
   BuildResponseSchema,
   BuildsPageSchema,
+  CustomerReviewResponseResourceResponseSchema,
+  CustomerReviewResponseSchema as CustomerReviewDocumentSchema,
+  CustomerReviewResponseResourceSchema,
+  CustomerReviewsPageSchema,
   LinkageResponseSchema,
   LocalizationResponseSchema,
   LocalizationsPageSchema,
@@ -65,6 +73,8 @@ import {
   type AppStoreVersionResource,
   type BetaGroupResource,
   type BuildResource,
+  type CustomerReviewResource,
+  type CustomerReviewResponseResource,
   type LocalizationResource,
   type PreReleaseVersionResource,
   type ReviewSubmissionResource,
@@ -194,6 +204,52 @@ const normalizeGroup = (resource: BetaGroupResource): TesterGroup => {
     name: requiredStringValue(attributes.name, "beta group name"),
     testerCount: null,
     internal: booleanValue(attributes.isInternalGroup) ?? false,
+  };
+};
+
+const normalizeCustomerReviewResponse = (
+  resource: CustomerReviewResponseResource,
+  expectedReviewId: string,
+  requireReviewRelationship = false,
+): CustomerReviewResponse => {
+  const linkedReviewId = relationshipId(resource, "review");
+  if (requireReviewRelationship && linkedReviewId !== expectedReviewId) {
+    throw new Error("App Store Connect returned a customer review response without the expected review relationship.");
+  }
+  if (linkedReviewId && linkedReviewId !== expectedReviewId) {
+    throw new Error("App Store Connect returned a customer review response for another review.");
+  }
+  return {
+    id: resource.id,
+    reviewId: expectedReviewId,
+    responseBody: resource.attributes.responseBody,
+    lastModifiedAt: resource.attributes.lastModifiedDate,
+    state: resource.attributes.state,
+  };
+};
+
+const normalizeCustomerReview = (
+  resource: CustomerReviewResource,
+  appId: string,
+  responses: Map<string, CustomerReviewResponseResource>,
+): CustomerReview => {
+  const responseId = relationshipId(resource, "response");
+  const responseResource = responseId ? responses.get(responseId) : null;
+  if (responseId && !responseResource) {
+    throw new Error(`App Store Connect omitted included response data for customer review ${resource.id}.`);
+  }
+  return {
+    id: resource.id,
+    appId,
+    rating: resource.attributes.rating,
+    title: resource.attributes.title,
+    body: resource.attributes.body,
+    reviewerNickname: resource.attributes.reviewerNickname,
+    createdAt: resource.attributes.createdDate,
+    territory: resource.attributes.territory,
+    response: responseResource
+      ? normalizeCustomerReviewResponse(responseResource, resource.id)
+      : null,
   };
 };
 
@@ -372,6 +428,100 @@ export class AppStoreConnectProvider implements AscProvider {
       bundleId: resource.attributes.bundleId,
       platforms: [],
     }));
+  }
+
+  async listCustomerReviews(
+    appId: string,
+    options: CustomerReviewListOptions = {},
+  ): Promise<CustomerReviewsPage> {
+    const limit = this.limit(options.limit ?? 50, "Customer review");
+    const sort = options.sort ?? "-createdDate";
+    const ratings = options.ratings ?? [];
+    const territories = options.territories ?? [];
+    if (ratings.some((rating) => !Number.isInteger(rating) || rating < 1 || rating > 5)) {
+      throw new Error("Customer review ratings must be integers between 1 and 5.");
+    }
+    if (territories.some((territory) => !/^[A-Z]{3}$/.test(territory))) {
+      throw new Error("Customer review territories must use three-letter uppercase codes.");
+    }
+    if (!["rating", "-rating", "createdDate", "-createdDate"].includes(sort)) {
+      throw new Error("Customer review sort is unsupported.");
+    }
+
+    const query = new URLSearchParams({
+      limit: String(limit),
+      include: "response",
+      sort,
+      "fields[customerReviews]": "rating,title,body,reviewerNickname,createdDate,territory,response",
+      "fields[customerReviewResponses]": "responseBody,lastModifiedDate,state,review",
+    });
+    if (ratings.length > 0) query.set("filter[rating]", ratings.join(","));
+    if (territories.length > 0) query.set("filter[territory]", territories.join(","));
+    if (options.publishedResponse !== undefined) {
+      query.set("exists[publishedResponse]", String(options.publishedResponse));
+    }
+    if (options.cursor !== undefined) query.set("cursor", options.cursor);
+
+    const page = await this.client.request(
+      "GET",
+      `/v1/apps/${encodeURIComponent(appId)}/customerReviews?${query}`,
+      CustomerReviewsPageSchema,
+    );
+    const responses = new Map((page.included ?? []).flatMap((candidate) => {
+      const parsed = CustomerReviewResponseResourceSchema.safeParse(candidate);
+      return parsed.success ? [[parsed.data.id, parsed.data] as const] : [];
+    }));
+    const nextCursor = page.links.next
+      ? this.client.resolveNext(page.links.next).searchParams.get("cursor")
+      : null;
+    return {
+      reviews: page.data.map((resource) => normalizeCustomerReview(resource, appId, responses)),
+      total: page.meta?.paging.total ?? null,
+      nextCursor,
+    };
+  }
+
+  async getCustomerReview(appId: string, reviewId: string): Promise<CustomerReview> {
+    const query = new URLSearchParams({
+      include: "response",
+      "fields[customerReviews]": "rating,title,body,reviewerNickname,createdDate,territory,response",
+      "fields[customerReviewResponses]": "responseBody,lastModifiedDate,state,review",
+    });
+    const page = await this.client.request(
+      "GET",
+      `/v1/customerReviews/${encodeURIComponent(reviewId)}?${query}`,
+      CustomerReviewDocumentSchema,
+    );
+    const responses = new Map((page.included ?? []).flatMap((candidate) => {
+      const parsed = CustomerReviewResponseResourceSchema.safeParse(candidate);
+      return parsed.success ? [[parsed.data.id, parsed.data] as const] : [];
+    }));
+    return normalizeCustomerReview(page.data, appId, responses);
+  }
+
+  async upsertCustomerReviewResponse(
+    reviewId: string,
+    responseBody: string,
+  ): Promise<CustomerReviewResponse> {
+    const response = await this.client.request(
+      "POST",
+      "/v1/customerReviewResponses",
+      CustomerReviewResponseResourceResponseSchema,
+      {
+        expectedStatus: 201,
+        retry: false,
+        body: {
+          data: {
+            type: "customerReviewResponses",
+            attributes: { responseBody },
+            relationships: {
+              review: { data: { type: "customerReviews", id: reviewId } },
+            },
+          },
+        },
+      },
+    );
+    return normalizeCustomerReviewResponse(response.data, reviewId, true);
   }
 
   async listBuilds(appId: string, options: BuildListOptions = {}): Promise<BuildSummary[]> {

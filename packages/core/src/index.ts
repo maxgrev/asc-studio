@@ -22,6 +22,10 @@ import type {
   CreateAppleAdsAdGroupInput,
   CreateAppleAdsCampaignInput,
   CreateAppleAdsKeywordInput,
+  CustomerReview,
+  CustomerReviewResponse,
+  CustomerReviewsPage,
+  CustomerReviewSort,
   LocalizationSnapshot,
   MutationPlan,
   ScreenshotAsset,
@@ -34,6 +38,7 @@ import type {
   TesterGroup,
   UpdateVersionLocalizationsInput,
   UpdateScreenshotSetInput,
+  UpsertCustomerReviewResponseInput,
   ValidationReport,
   VersionSubmissionPreview,
   VersionSubmissionResult,
@@ -42,9 +47,14 @@ import type {
   VersionLocalizationPatch,
 } from "@asc-studio/contracts";
 
+export type { UpsertCustomerReviewResponseInput } from "@asc-studio/contracts";
+
 export interface AscProvider {
   getStatus(): Promise<AgentStatus>;
   listApps(options?: AppListOptions): Promise<AppSummary[]>;
+  listCustomerReviews(appId: string, options?: CustomerReviewListOptions): Promise<CustomerReviewsPage>;
+  getCustomerReview(appId: string, reviewId: string): Promise<CustomerReview>;
+  upsertCustomerReviewResponse(reviewId: string, responseBody: string): Promise<CustomerReviewResponse>;
   listBuilds(appId: string, options?: BuildListOptions): Promise<BuildSummary[]>;
   getBuild(appId: string, buildId: string): Promise<BuildSummary>;
   listGroups(appId: string): Promise<TesterGroup[]>;
@@ -109,6 +119,15 @@ export interface BuildListOptions {
 export interface VersionListOptions {
   limit?: number;
   paginate?: boolean;
+}
+
+export interface CustomerReviewListOptions {
+  limit?: number;
+  cursor?: string;
+  ratings?: number[];
+  territories?: string[];
+  sort?: CustomerReviewSort;
+  publishedResponse?: boolean;
 }
 
 export interface PlanStore {
@@ -291,6 +310,17 @@ export class AscStudioService {
     return this.dependencies.provider.listApps(options);
   }
 
+  async listCustomerReviews(appId: string, options?: CustomerReviewListOptions) {
+    if (options?.cursor !== undefined && options.cursor.length > 2_048) {
+      throw new DomainError("invalid_cursor", "The customer-review cursor is too long.");
+    }
+    return this.dependencies.provider.listCustomerReviews(appId, options);
+  }
+
+  getCustomerReview(appId: string, reviewId: string) {
+    return this.dependencies.provider.getCustomerReview(appId, reviewId);
+  }
+
   listBuilds(appId: string, options?: BuildListOptions) {
     return this.dependencies.provider.listBuilds(appId, options);
   }
@@ -353,6 +383,59 @@ export class AscStudioService {
 
   listPendingPlans(limit = 50) {
     return this.dependencies.store.listPlans("awaiting_confirmation", Math.min(Math.max(limit, 1), 200));
+  }
+
+  async createUpsertCustomerReviewResponsePlan(
+    input: UpsertCustomerReviewResponseInput,
+    actor: AuditEvent["actor"],
+  ): Promise<MutationPlan> {
+    if (input.responseBody.trim().length === 0) {
+      throw new DomainError("invalid_response_body", "Enter a non-empty review response.");
+    }
+    const [review, context] = await Promise.all([
+      this.dependencies.provider.getCustomerReview(input.appId, input.reviewId).catch(() => {
+        throw new DomainError("review_not_found", "The selected customer review no longer exists.");
+      }),
+      this.activeContext(),
+    ]);
+    if (review.appId !== input.appId || review.id !== input.reviewId) {
+      throw new DomainError("review_not_found", "The selected customer review no longer exists.");
+    }
+    if (review.response?.responseBody === input.responseBody) {
+      throw new DomainError("no_changes", "The customer-review response already has this exact text.");
+    }
+
+    const createdAt = this.dependencies.now();
+    const expiresAt = new Date(createdAt.getTime() + 10 * 60 * 1000);
+    const target = {
+      appId: review.appId,
+      reviewId: review.id,
+      reviewTitle: review.title,
+      reviewerNickname: review.reviewerNickname,
+    };
+    const planWithoutDigest = {
+      operation: "customer_review.response.upsert" as const,
+      context,
+      target,
+      before: review,
+      after: { responseBody: input.responseBody },
+      expiresAt: expiresAt.toISOString(),
+    };
+    const plan: MutationPlan = {
+      id: this.dependencies.id(),
+      ...planWithoutDigest,
+      risk: "mutation",
+      state: "awaiting_confirmation",
+      createdAt: createdAt.toISOString(),
+      digest: this.dependencies.digest(stableJson(planWithoutDigest)),
+      summary: review.response
+        ? `Replace response to review from ${review.reviewerNickname}`
+        : `Respond to review from ${review.reviewerNickname}`,
+      error: null,
+    };
+
+    await this.savePlanned(plan, actor, review.id);
+    return plan;
   }
 
   async createAddBuildToGroupPlan(
@@ -904,6 +987,8 @@ export class AscStudioService {
         return this.confirmUpdateScreenshotsPlan(plan, actor);
       case "version.submit":
         return this.confirmSubmitVersionPlan(plan, actor);
+      case "customer_review.response.upsert":
+        return this.confirmUpsertCustomerReviewResponsePlan(plan, actor);
       case "apple_ads.campaign.create":
         return this.confirmCreateAppleAdsCampaignPlan(plan, actor);
       case "apple_ads.campaign.update":
@@ -923,6 +1008,22 @@ export class AscStudioService {
 
   async recordSync(count: number, actor: AuditEvent["actor"]) {
     await this.audit(actor, "builds.sync", "succeeded", "testflight", `Synced ${count} builds`, "success");
+  }
+
+  private async confirmUpsertCustomerReviewResponsePlan(
+    plan: Extract<MutationPlan, { operation: "customer_review.response.upsert" }>,
+    actor: AuditEvent["actor"],
+  ) {
+    const current = await this.dependencies.provider
+      .getCustomerReview(plan.target.appId, plan.target.reviewId)
+      .catch(async () => this.markStale(plan, actor, plan.target.reviewId, "The customer review no longer exists."));
+    if (stableJson(current) !== stableJson(plan.before)) {
+      await this.markStale(plan, actor, current.id, "The customer review or its response changed after planning.");
+    }
+
+    return this.runPlan(plan, actor, current.id, async () => {
+      await this.dependencies.provider.upsertCustomerReviewResponse(current.id, plan.after.responseBody);
+    });
   }
 
   private async confirmBuildGroupPlan(

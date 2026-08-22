@@ -8,6 +8,62 @@ export const AppSummarySchema = z.object({
 });
 export type AppSummary = z.infer<typeof AppSummarySchema>;
 
+export const CustomerReviewResponseStateSchema = z.enum(["PENDING_PUBLISH", "PUBLISHED"]);
+export type CustomerReviewResponseState = z.infer<typeof CustomerReviewResponseStateSchema>;
+
+export const CustomerReviewResponseSchema = z.object({
+  id: z.string(),
+  reviewId: z.string(),
+  responseBody: z.string(),
+  lastModifiedAt: z.string().nullable(),
+  state: CustomerReviewResponseStateSchema,
+}).strict();
+export type CustomerReviewResponse = z.infer<typeof CustomerReviewResponseSchema>;
+
+export const CustomerReviewSchema = z.object({
+  id: z.string(),
+  appId: z.string(),
+  rating: z.number().int().min(1).max(5),
+  title: z.string(),
+  body: z.string(),
+  reviewerNickname: z.string(),
+  createdAt: z.string(),
+  territory: z.string().regex(/^[A-Z]{3}$/, "Use an ISO 3166-1 alpha-3 territory code."),
+  response: CustomerReviewResponseSchema.nullable(),
+}).strict();
+export type CustomerReview = z.infer<typeof CustomerReviewSchema>;
+
+export const CustomerReviewSortSchema = z.enum(["rating", "-rating", "createdDate", "-createdDate"]);
+export type CustomerReviewSort = z.infer<typeof CustomerReviewSortSchema>;
+
+export const CustomerReviewsPageSchema = z.object({
+  reviews: z.array(CustomerReviewSchema),
+  total: z.number().nullable(),
+  nextCursor: z.string().nullable(),
+}).strict();
+export type CustomerReviewsPage = z.infer<typeof CustomerReviewsPageSchema>;
+
+export const CustomerReviewsResponseSchema = CustomerReviewsPageSchema;
+export type CustomerReviewsResponse = CustomerReviewsPage;
+
+export const UpsertCustomerReviewResponseInputSchema = z.object({
+  appId: z.string(),
+  reviewId: z.string(),
+  responseBody: z.string().refine((value) => value.trim().length > 0, "Enter a non-empty response."),
+}).strict();
+export type UpsertCustomerReviewResponseInput = z.infer<typeof UpsertCustomerReviewResponseInputSchema>;
+
+export const GenerateCustomerReviewReplyInputSchema = z.object({
+  appId: z.string().min(1),
+  reviewId: z.string().min(1),
+}).strict();
+export type GenerateCustomerReviewReplyInput = z.infer<typeof GenerateCustomerReviewReplyInputSchema>;
+
+export const GeneratedCustomerReviewReplyResponseSchema = z.object({
+  responseBody: z.string().trim().min(1),
+}).strict();
+export type GeneratedCustomerReviewReplyResponse = z.infer<typeof GeneratedCustomerReviewReplyResponseSchema>;
+
 export const StatusToneSchema = z.enum(["success", "warning", "danger", "neutral", "progress"]);
 export type StatusTone = z.infer<typeof StatusToneSchema>;
 
@@ -511,6 +567,44 @@ export const GeneratedReleaseCopyTranslationSchema = z.object({
 }).strict();
 export type GeneratedReleaseCopyTranslation = z.infer<typeof GeneratedReleaseCopyTranslationSchema>;
 
+export const OpenAiModelSchema = z.string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, "Use a valid OpenAI model ID.")
+  .refine((value) => !/^sk-/i.test(value), "Use a model ID, not an API key.");
+export type OpenAiModel = z.infer<typeof OpenAiModelSchema>;
+
+export const OpenAiCredentialsInputSchema = z.object({
+  apiKey: z.string()
+    .trim()
+    .min(1, "Enter an OpenAI API key.")
+    .max(8_192, "The OpenAI API key is too long.")
+    .refine((value) => !/\s/.test(value), "OpenAI API keys cannot contain whitespace."),
+  model: z.string()
+    .trim()
+    .max(200)
+    .refine(
+      (value) => value === "" || (/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value) && !/^sk-/i.test(value)),
+      "Use a valid OpenAI model ID, not an API key.",
+    )
+    .optional(),
+}).strict();
+export type OpenAiCredentialsInput = z.infer<typeof OpenAiCredentialsInputSchema>;
+
+export const OpenAiConnectionSchema = z.object({
+  configured: z.boolean(),
+  source: z.enum(["environment", "local", "demo"]).nullable(),
+  model: OpenAiModelSchema.nullable(),
+  modelSource: z.enum(["environment", "local", "default", "demo"]),
+}).strict();
+export type OpenAiConnection = z.infer<typeof OpenAiConnectionSchema>;
+
+export const OpenAiConnectionResponseSchema = z.object({
+  connection: OpenAiConnectionSchema,
+}).strict();
+export type OpenAiConnectionResponse = z.infer<typeof OpenAiConnectionResponseSchema>;
+
 export const TranslationProviderStatusSchema = z.object({
   provider: z.enum(["openai", "demo"]),
   configured: z.boolean(),
@@ -804,6 +898,21 @@ export const SubmitVersionMutationPlanSchema = PlanBaseSchema.extend({
 });
 export type SubmitVersionMutationPlan = z.infer<typeof SubmitVersionMutationPlanSchema>;
 
+export const UpsertCustomerReviewResponseMutationPlanSchema = PlanBaseSchema.extend({
+  operation: z.literal("customer_review.response.upsert"),
+  target: z.object({
+    appId: z.string(),
+    reviewId: z.string(),
+    reviewTitle: z.string(),
+    reviewerNickname: z.string(),
+  }).strict(),
+  before: CustomerReviewSchema,
+  after: z.object({
+    responseBody: z.string(),
+  }).strict(),
+});
+export type UpsertCustomerReviewResponseMutationPlan = z.infer<typeof UpsertCustomerReviewResponseMutationPlanSchema>;
+
 export const AppleAdsCampaignSnapshotSchema = AppleAdsCampaignSchema.pick({
   id: true,
   adAccountId: true,
@@ -915,6 +1024,7 @@ export const MutationPlanSchema = z.discriminatedUnion("operation", [
   UpdateLocalizationsMutationPlanSchema,
   UpdateScreenshotsMutationPlanSchema,
   SubmitVersionMutationPlanSchema,
+  UpsertCustomerReviewResponseMutationPlanSchema,
   CreateAppleAdsCampaignMutationPlanSchema,
   UpdateAppleAdsCampaignMutationPlanSchema,
   CreateAppleAdsAdGroupMutationPlanSchema,

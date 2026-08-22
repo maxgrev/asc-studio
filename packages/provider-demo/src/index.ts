@@ -17,6 +17,9 @@ import type {
   CreateAppleAdsCampaignInput,
   CreateAppleAdsKeywordInput,
   CreateVersionInput,
+  CustomerReview,
+  CustomerReviewResponse,
+  CustomerReviewsPage,
   LocalizationSnapshot,
   ScreenshotAsset,
   ScreenshotAssetSnapshot,
@@ -33,7 +36,15 @@ import type {
   VersionSubmissionResult,
   VersionSubmissionStatus,
 } from "@asc-studio/contracts";
-import type { AppleAdsProvider, ApplyScreenshotChangesInput, AppListOptions, AscProvider, BuildListOptions, VersionListOptions } from "@asc-studio/core";
+import type {
+  AppleAdsProvider,
+  ApplyScreenshotChangesInput,
+  AppListOptions,
+  AscProvider,
+  BuildListOptions,
+  CustomerReviewListOptions,
+  VersionListOptions,
+} from "@asc-studio/core";
 
 const orbitNotes: AppSummary = {
   id: "demo-app-orbit-notes",
@@ -50,6 +61,148 @@ const fieldLog: AppSummary = {
 };
 
 const apps = [orbitNotes, fieldLog];
+
+const orbitReviewFixtures: CustomerReview[] = [
+  {
+    id: "demo-review-orbit-001",
+    appId: orbitNotes.id,
+    rating: 5,
+    title: "The first notes app that stays out of my way",
+    body: "Capture is instant, search is reliable, and the Mac app finally makes my project notes feel like one workspace instead of two separate copies.",
+    reviewerNickname: "MiraMakes",
+    createdAt: "2026-08-20T16:42:00.000Z",
+    territory: "USA",
+    response: {
+      id: "demo-review-response-orbit-001",
+      reviewId: "demo-review-orbit-001",
+      responseBody: "Thank you, Mira — fast capture and dependable sync are exactly what we want Orbit Notes to deliver.",
+      lastModifiedAt: "2026-08-20T19:05:00.000Z",
+      state: "PUBLISHED",
+    },
+  },
+  {
+    id: "demo-review-orbit-002",
+    appId: orbitNotes.id,
+    rating: 4,
+    title: "Nearly perfect for research",
+    body: "Backlinks and quick search are excellent. I would love a compact outline view for longer notes, but this has already replaced three other tools for me.",
+    reviewerNickname: "northbank_reader",
+    createdAt: "2026-08-18T09:15:00.000Z",
+    territory: "GBR",
+    response: null,
+  },
+  {
+    id: "demo-review-orbit-003",
+    appId: orbitNotes.id,
+    rating: 2,
+    title: "Sync stalled after the latest update",
+    body: "My phone showed the latest edits, but the Mac kept an older copy until I restarted both apps. Nothing was lost, although it made me nervous during a client meeting.",
+    reviewerNickname: "KlaraB",
+    createdAt: "2026-08-16T14:31:00.000Z",
+    territory: "DEU",
+    response: {
+      id: "demo-review-response-orbit-003",
+      reviewId: "demo-review-orbit-003",
+      responseBody: "We’re sorry about the sync delay. The next update includes a fix, and our support team can help verify that every edit is present.",
+      lastModifiedAt: "2026-08-17T08:20:00.000Z",
+      state: "PENDING_PUBLISH",
+    },
+  },
+  {
+    id: "demo-review-orbit-004",
+    appId: orbitNotes.id,
+    rating: 1,
+    title: "Export needs work",
+    body: "I exported a large notebook to Markdown and several image links pointed to the wrong folder. The editor is pleasant, but export has to be dependable before I can move my archive here. The notebook had nested folders, a mixture of PNG and JPEG attachments, and note titles containing punctuation. I tried the export twice, once to iCloud Drive and once to local storage, with the same result. Please add a validation summary before the export completes so it is obvious when attachments could not be copied.",
+    reviewerNickname: "ArchiveFirst",
+    createdAt: "2026-08-13T22:04:00.000Z",
+    territory: "USA",
+    response: null,
+  },
+  {
+    id: "demo-review-orbit-005",
+    appId: orbitNotes.id,
+    rating: 5,
+    title: "書くことに集中できます",
+    body: "動作が軽く、検索も速いです。iPhone と Mac の同期も安定していて、毎日のメモに欠かせません。",
+    reviewerNickname: "星をたどる人",
+    createdAt: "2026-08-10T06:48:00.000Z",
+    territory: "JPN",
+    response: {
+      id: "demo-review-response-orbit-005",
+      reviewId: "demo-review-orbit-005",
+      responseBody: "温かいレビューをありがとうございます。これからも快適に使えるよう改善を続けます。",
+      lastModifiedAt: "2026-08-11T01:10:00.000Z",
+      state: "PUBLISHED",
+    },
+  },
+  {
+    id: "demo-review-orbit-006",
+    appId: orbitNotes.id,
+    rating: 3,
+    title: "",
+    body: "",
+    reviewerNickname: "QuietReader",
+    createdAt: "2026-08-06T18:00:00.000Z",
+    territory: "CAN",
+    response: null,
+  },
+  {
+    id: "demo-review-orbit-007",
+    appId: orbitNotes.id,
+    rating: 4,
+    title: "Great offline companion",
+    body: "Used it through a long flight with no connection and every edit synced when I landed. A quicker way to reorder pinned notes would make it five stars.",
+    reviewerNickname: "PaperlessPilot",
+    createdAt: "2026-08-03T03:27:00.000Z",
+    territory: "AUS",
+    response: {
+      id: "demo-review-response-orbit-007",
+      reviewId: "demo-review-orbit-007",
+      responseBody: "Thanks for putting offline editing through a real trip. We’ve shared your pinned-note feedback with the team.",
+      lastModifiedAt: "2026-08-03T10:00:00.000Z",
+      state: "PENDING_PUBLISH",
+    },
+  },
+  {
+    id: "demo-review-orbit-008",
+    appId: orbitNotes.id,
+    rating: 5,
+    title: "Simple, rapide et fiable",
+    body: "L’application va droit au but. Mes notes sont disponibles partout et la recherche retrouve même les idées anciennes en quelques secondes.",
+    reviewerNickname: "CamilleEnRoute",
+    createdAt: "2026-07-29T11:52:00.000Z",
+    territory: "FRA",
+    response: {
+      id: "demo-review-response-orbit-008",
+      reviewId: "demo-review-orbit-008",
+      responseBody: "Merci beaucoup, Camille. Nous sommes ravis qu’Orbit Notes vous aide à retrouver vos idées rapidement.",
+      lastModifiedAt: "2026-07-30T07:40:00.000Z",
+      state: "PUBLISHED",
+    },
+  },
+];
+
+const reviewFixturesByApp = new Map<string, CustomerReview[]>([
+  [orbitNotes.id, orbitReviewFixtures],
+  [fieldLog.id, []],
+]);
+
+const encodeReviewCursor = (offset: number) => Buffer.from(`customer-reviews:${offset}`).toString("base64url");
+
+const decodeReviewCursor = (cursor: string | undefined) => {
+  if (cursor === undefined) return 0;
+  try {
+    const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+    const match = /^customer-reviews:(\d+)$/.exec(decoded);
+    if (!match) throw new Error();
+    const offset = Number(match[1]);
+    if (!Number.isSafeInteger(offset)) throw new Error();
+    return offset;
+  } catch {
+    throw new Error("The demo customer review cursor is invalid.");
+  }
+};
 
 const demoCampaigns: AppleAdsCampaign[] = [
   {
@@ -453,6 +606,7 @@ const screenshotSnapshot = (asset: ScreenshotAsset): ScreenshotAssetSnapshot => 
 export class MockAscProvider implements AscProvider, AppleAdsProvider {
   private readonly attachedBuildIds = new Map<string, string>();
   private readonly submissions = new Map<string, VersionSubmissionStatus>();
+  private readonly reviewsByApp = structuredClone(reviewFixturesByApp);
   private readonly adsCampaigns = structuredClone(demoCampaigns);
   private readonly adsAdGroups = structuredClone(demoAdGroups);
   private readonly adsKeywords = structuredClone(demoKeywords);
@@ -661,6 +815,83 @@ export class MockAscProvider implements AscProvider, AppleAdsProvider {
 
   async listApps(options: AppListOptions = {}) {
     return structuredClone(options.paginate === false && options.limit ? apps.slice(0, options.limit) : apps);
+  }
+
+  async listCustomerReviews(
+    appId: string,
+    options: CustomerReviewListOptions = {},
+  ): Promise<CustomerReviewsPage> {
+    const limit = options.limit ?? 50;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new Error("Customer review limit must be between 1 and 200.");
+    }
+    const ratings = options.ratings ?? [];
+    const territories = options.territories ?? [];
+    if (ratings.some((rating) => !Number.isInteger(rating) || rating < 1 || rating > 5)) {
+      throw new Error("Customer review ratings must be integers between 1 and 5.");
+    }
+    if (territories.some((territory) => !/^[A-Z]{3}$/.test(territory))) {
+      throw new Error("Customer review territories must use three-letter uppercase codes.");
+    }
+
+    const sort = options.sort ?? "-createdDate";
+    if (!["rating", "-rating", "createdDate", "-createdDate"].includes(sort)) {
+      throw new Error("Customer review sort is unsupported.");
+    }
+    const reviews = this.requireAppValue(this.reviewsByApp, appId, "reviews")
+      .filter((review) => (
+        (ratings.length === 0 || ratings.includes(review.rating))
+        && (territories.length === 0 || territories.includes(review.territory))
+        && (
+          options.publishedResponse === undefined
+          || (options.publishedResponse
+            ? review.response?.state === "PUBLISHED"
+            : review.response?.state !== "PUBLISHED")
+        )
+      ));
+    reviews.sort((left, right) => {
+      const comparison = sort.endsWith("rating")
+        ? left.rating - right.rating
+        : left.createdAt.localeCompare(right.createdAt);
+      const directed = sort.startsWith("-") ? -comparison : comparison;
+      return directed || right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id);
+    });
+
+    const offset = decodeReviewCursor(options.cursor);
+    if (offset > reviews.length) throw new Error("The demo customer review cursor is invalid.");
+    const selected = reviews.slice(offset, offset + limit);
+    const nextOffset = offset + selected.length;
+    return structuredClone({
+      reviews: selected,
+      total: reviews.length,
+      nextCursor: nextOffset < reviews.length ? encodeReviewCursor(nextOffset) : null,
+    });
+  }
+
+  async getCustomerReview(appId: string, reviewId: string): Promise<CustomerReview> {
+    const review = this.requireAppValue(this.reviewsByApp, appId, "reviews")
+      .find((candidate) => candidate.id === reviewId);
+    if (!review) throw new Error(`Customer review ${reviewId} was not found.`);
+    return structuredClone(review);
+  }
+
+  async upsertCustomerReviewResponse(
+    reviewId: string,
+    responseBody: string,
+  ): Promise<CustomerReviewResponse> {
+    const review = [...this.reviewsByApp.values()]
+      .flat()
+      .find((candidate) => candidate.id === reviewId);
+    if (!review) throw new Error(`Customer review ${reviewId} was not found.`);
+    const response: CustomerReviewResponse = {
+      id: review.response?.id ?? reviewId.replace(/^demo-review-/, "demo-review-response-"),
+      reviewId,
+      responseBody,
+      lastModifiedAt: "2026-08-21T12:00:00.000Z",
+      state: "PENDING_PUBLISH",
+    };
+    review.response = response;
+    return structuredClone(response);
   }
 
   async listBuilds(appId: string, options: BuildListOptions = {}) {
