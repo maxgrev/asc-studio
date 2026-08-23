@@ -2,7 +2,7 @@
 
 ASC Studio is a local-first App Store Connect and Apple Ads control plane with a desktop-grade web interface and an MCP server. It connects straight to Apple's public APIs. It does not install, invoke, or parse another App Store tool.
 
-This repository now contains seven complete vertical slices:
+This repository now contains eight complete vertical slices:
 
 - A TestFlight control room for builds, filters, build details, tester groups, and reviewed group assignments.
 - A multi-platform release workspace for iOS, macOS, tvOS, and visionOS version creation, localized What's New, promotional text, keywords, exact diffs, and submission-readiness checks.
@@ -10,6 +10,7 @@ This repository now contains seven complete vertical slices:
 - GUI- or environment-managed BYOK writing assistance that turns one source locale into checked release-copy drafts and produces grounded customer-review reply drafts without reading or changing keywords.
 - Per-locale, per-device screenshot sets with local file checks, add or replace modes, exact review plans, stale-data checks, and guarded upload or deletion.
 - An app-scoped written-customer-review inbox with rating, territory, and exact published-response filters; loaded-review search; Apple cursor pagination; a full-review inspector; per-review session drafts; guarded create-or-replace public responses; and optional OpenAI reply drafting.
+- A portfolio-first Analytics workspace that combines every app in the active organization, compares periods, ranks the apps behind a change, and preserves the same metric and time context when drilling into territory, source, page type, or version evidence.
 - An Apple Ads workspace that combines app suggestions with country-and-genre search popularity, reports on campaign performance, and manages paused-first campaigns, ad groups, keywords, status, budgets, and bids through reviewed plans.
 
 App Store Connect and Apple Ads writes use the same plan, review, stale-check, confirm, and audit path. Writing assistance creates local drafts; it does not write to Apple. The rest of the product map lives in [the roadmap](docs/roadmap.md).
@@ -37,7 +38,7 @@ flowchart LR
 - The local agent signs short-lived Apple JWTs. GUI-imported keys pass through the authenticated setup form once, then are stored in macOS Keychain and never returned to the browser. Audit records never contain credentials.
 - App Store Connect and Apple Ads can belong to the same Apple organization, but they use separate roles and API credentials. An App Store Connect key is never sent to the Apple Ads API.
 
-See [the local-control-plane record](docs/adr/0001-local-control-plane.md) and [the OpenAI credential record](docs/adr/0003-gui-managed-openai-credentials.md) for the full decisions.
+See [the local-control-plane record](docs/adr/0001-local-control-plane.md), [the OpenAI credential record](docs/adr/0003-gui-managed-openai-credentials.md), and [the portfolio-analytics ingestion record](docs/adr/0004-portfolio-analytics-ingestion.md) for the full decisions.
 
 ## Run it locally with App Store Connect
 
@@ -170,6 +171,18 @@ Demo mode uses a deterministic, visibly marked sample writer for translation and
 
 Customer-review responses in demo mode likewise stay inside isolated sample data and never reach Apple.
 
+### Enable and sync Analytics
+
+Open **Analytics** to start with **All apps**, a combined view of the complete app portfolio for the active App Store Connect organization. The first slice shows Impressions, First-time downloads, Total downloads, Product page views, Download rate, Sessions, and Estimated proceeds, with a previous-period comparison. Selecting an app keeps the same range and metric in place, then narrows the ranked evidence to territory, source, page type, or version.
+
+Apple requires an Analytics Reports request for each app. ASC Studio prepares either an ongoing request or a one-time historical snapshot as a normal reviewed mutation plan; it does not create one merely because the Analytics tab was opened. An Admin key is required to create a request. Apple allows Admin, Sales and Reports, or Finance access to download reports after a request exists. The first report instances can take roughly 24–48 hours to appear.
+
+**Sync from Apple** starts a background download and ingestion run; **Refresh view** only re-reads the local report cache. The live provider ingests the Standard daily Discovery and Engagement, Downloads, Pre-Orders, Purchases, and Sessions report families. It fetches every segment, verifies the declared byte size and MD5 checksum, parses changing column order by header name, and publishes a date only after the entire instance succeeds. When Apple produces a correction, the newer processing batch replaces the older partition instead of being added to it. Ongoing and snapshot requests for the same logical report and date are likewise collapsed, with ongoing data preferred when processing dates are equal.
+
+Portfolio totals include only additive values, or ratios recomputed from portfolio-wide additive numerators and denominators. **Total downloads** means first-time downloads plus redownloads; updates are excluded. Impressions combine Apple's raw impression events with product-page views because [Apple defines Impressions as including product-page views](https://developer.apple.com/help/app-store-connect-analytics/reference/metrics-definitions/). **Download rate** is ASC Studio's explicit formula, Total downloads ÷ Product page views; it is not labeled as Apple's Conversion Rate. Sessions can be privacy-limited and usage-opt-in-only. Missing, incomplete, and privacy-withheld values remain unavailable or partial rather than turning into zero. Estimated proceeds come from App Analytics reports and can differ from finalized payments.
+
+Analytics facts and sync state are cached locally in SQLite, scoped by Apple issuer and app. Signed report-segment URLs never reach the browser and never receive the App Store Connect authorization token. When deterministic sample-fixture semantics change, Demo mode rebuilds only its demo-issuer analytics cache and seeds it through the same aggregate read model; ordinary launches reuse that versioned cache. Demo performs no Apple network requests, and plans, audit history, reviews, and the live database are untouched.
+
 The one-time bearer secret stays in the URL fragment, moves into browser session storage, and is removed from the address bar after bootstrap. A plain tab without that session cannot call the agent API.
 
 The current live write paths can add a build to a TestFlight group; create an editable iOS, macOS, tvOS, or visionOS App Store version; apply selected locale changes; add, replace, or delete screenshots for one locale and device set; attach a processed build for the same platform; submit a version to App Review; create or replace a public response to a written customer review; and create or update the Apple Ads resources listed above. ASC Studio first creates a ten-minute plan, shows the exact before and after state, binds confirmation to that plan and active connection, re-reads Apple data, and stops if anything changed.
@@ -226,7 +239,7 @@ npm run build      # production web build
 
 ```text
 apps/
-  local-agent/              Loopback API, MCP transport, SQLite audit store
+  local-agent/              Loopback API, MCP transport, audit and analytics stores
   web/                      React and Vite interface
 packages/
   contracts/                Shared schemas and public data types
@@ -254,6 +267,7 @@ The App Store Connect provider creates ten-minute ES256 JWTs, sends typed JSON:A
 - Reviews are app-scoped written feedback. The App Store Connect customer-review API does not provide an aggregate overall rating or total rating count, locale or language, platform or app version, or server-side text search. The displayed total is the number of matching written reviews, and search covers only reviews already loaded in the browser.
 - Review records have no language field. Reply drafting asks the model to follow the review language only when it is clear and otherwise use English; it does not guarantee language detection or publication-ready copy.
 - Apple may take up to 24 hours to publish a new or replaced review response. This slice has no delete-response UI; version-scoped browsing and separately sourced aggregate storefront ratings remain future work.
+- Analytics currently uses Standard daily App Analytics report families and manual background sync. It does not yet include non-additive unique-user KPIs, retention or subscription cohorts, peer benchmarks, Sales and Trends reconciliation, finalized financial reports, Apple Ads joins, saved views, scheduled sync, exports, or AI explanations. Apple report latency and privacy processing can make recent dates partial even after a successful sync.
 - Per-launch token exchange is manual in development. A packaged desktop shell should inject the GUI secret and manage MCP registration.
 - The local agent uses Node's built-in SQLite module, which may still print an experimental warning on some Node releases.
 - App creation, privacy-label answers, APNs key creation, and Resolution Center messages do not have complete public App Store Connect API coverage. These need clear web-only adapters, not hidden browser automation.

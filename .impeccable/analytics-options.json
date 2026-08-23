@@ -1,0 +1,48 @@
+{
+  "title": "Choose the Analytics workspace",
+  "question": "Each option keeps ASC Studio’s calm operator interface, shows metric provenance and freshness, and turns Apple data into decisions. Choose the structure that should organize analysis.",
+  "options": [
+    {
+      "id": "analysis-notebook",
+      "label": "Analysis Notebook",
+      "kicker": "THE ROLL",
+      "lineage": "Saved Appfigures-style reports with a persistent evidence canvas",
+      "thesis": "Start from a concise performance pulse, then keep each investigation as a reusable view with its filters, comparison, and findings intact.",
+      "palette": ["#f7f8fa", "#ffffff", "#1464e8", "#42a348", "#e69512"],
+      "materials": ["flat report surfaces", "hairline chart frames", "compact saved-view rail", "evidence annotations"],
+      "viewport": "A slim saved-view rail and global date controls frame one large comparison chart, pinned KPIs, contribution breakdowns, and a cited What changed note.",
+      "risk": "Saved reports must remain lightweight so the workspace feels like analysis, not a document manager.",
+      "comp": ".impeccable/mocks/decision/analytics-analysis-notebook.webp"
+    },
+    {
+      "id": "portfolio-pulse",
+      "label": "Portfolio Pulse",
+      "lineage": "Adaptive portfolio overview with app-level drill-down",
+      "thesis": "Show every app’s material movement first, then expand the selected app into acquisition, engagement, revenue, and quality evidence.",
+      "palette": ["#f7f8fa", "#ffffff", "#1464e8", "#42a348", "#d64c4c"],
+      "materials": ["dense app roster", "quiet trend lines", "soft-blue selection", "source-stamped metrics"],
+      "viewport": "A compact app roster ranks meaningful changes on the left while the selected app owns a broad trend canvas and ranked driver table on the right.",
+      "risk": "The portfolio view is less useful for a single-app operator unless the selected-app analysis remains dominant.",
+      "comp": ".impeccable/mocks/decision/analytics-portfolio-pulse.webp"
+    },
+    {
+      "id": "what-changed-workbench",
+      "label": "What Changed Workbench",
+      "lineage": "Question-led diagnostics with contribution analysis",
+      "thesis": "Organize the workspace around the questions operators actually ask: what changed, where, why might it have changed, and what should I inspect next?",
+      "palette": ["#f7f8fa", "#ffffff", "#1464e8", "#42a348", "#e69512"],
+      "materials": ["question tabs", "one dominant comparison chart", "ranked contribution rows", "cited next-step callouts"],
+      "viewport": "A question switcher and global filters lead into one dominant trend, a ranked drivers panel, and evidence-linked actions into Storefront, Releases, Reviews, or Apple Ads.",
+      "risk": "The guidance must label correlation as a hypothesis and never let AI imply causation from thin data.",
+      "comp": ".impeccable/mocks/decision/analytics-what-changed.webp"
+    }
+  ],
+  "reroll": {
+    "registers": ["safer", "bolder"]
+  },
+  "buildPath": {
+    "value": "comp",
+    "toggle": true
+  },
+  "steer": true
+}

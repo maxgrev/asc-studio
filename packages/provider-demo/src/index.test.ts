@@ -1,5 +1,99 @@
 import { describe, expect, it } from "vitest";
-import { MockAscProvider } from "./index.js";
+import { AnalyticsFactBatchSchema, AnalyticsSyncResultSchema } from "@asc-studio/contracts";
+import { MockAscProvider, demoAnalyticsFactBatches } from "./index.js";
+
+describe("MockAscProvider analytics", () => {
+  it("returns a deterministic whole-portfolio sync with complete segment evidence", async () => {
+    const provider = new MockAscProvider();
+    const result = await provider.syncAnalytics({
+      schemaVersion: 1,
+      appIds: ["demo-app-orbit-notes", "demo-app-field-log"],
+      force: false,
+    });
+
+    expect(() => AnalyticsSyncResultSchema.parse(result)).not.toThrow();
+    expect(result).toMatchObject({
+      issuerId: "demo-issuer",
+      state: "SUCCEEDED",
+      appIds: ["demo-app-orbit-notes", "demo-app-field-log"],
+      freshness: { dataThrough: "2026-08-17", partial: true },
+    });
+    expect(result.batches).toHaveLength(8);
+    expect(result.batches.every((batch) => (
+      batch.expectedSegmentCount === batch.verifiedSegmentCount
+      && batch.segmentIds.length === batch.segments.length
+    ))).toBe(true);
+  });
+
+  it("includes both app-level movement and an explicit privacy-limited usage state", () => {
+    const batches = demoAnalyticsFactBatches();
+    batches.forEach((batch) => expect(() => AnalyticsFactBatchSchema.parse(batch)).not.toThrow());
+
+    const orbitDownloads = batches
+      .flatMap((batch) => batch.observations)
+      .filter((observation) => observation.appId === "demo-app-orbit-notes" && observation.metric === "DOWNLOADS");
+    const fieldSessions = batches
+      .flatMap((batch) => batch.observations)
+      .filter((observation) => observation.appId === "demo-app-field-log" && observation.metric === "SESSIONS");
+    const orbitFirstTime = batches
+      .flatMap((batch) => batch.observations)
+      .filter((observation) => observation.appId === "demo-app-orbit-notes" && observation.metric === "FIRST_TIME_DOWNLOADS");
+    const orbitImpressions = batches
+      .flatMap((batch) => batch.observations)
+      .filter((observation) => observation.appId === "demo-app-orbit-notes" && observation.metric === "IMPRESSIONS");
+    const beforeRelease = orbitDownloads
+      .filter((observation) => observation.date === "2026-08-05")
+      .reduce((sum, observation) => sum + observation.value!, 0);
+    const afterRelease = orbitDownloads
+      .filter((observation) => observation.date === "2026-08-06")
+      .reduce((sum, observation) => sum + observation.value!, 0);
+
+    expect(afterRelease).toBeGreaterThan(beforeRelease);
+    expect(orbitFirstTime.length).toBeGreaterThan(0);
+    expect(orbitImpressions.length).toBeGreaterThan(0);
+    expect(fieldSessions).toContainEqual(expect.objectContaining({
+      availability: "PRIVACY_WITHHELD",
+      value: null,
+      dimensions: expect.objectContaining({ territory: "JPN" }),
+    }));
+  });
+
+  it("uses only Standard Page Type categories with metric-appropriate discovery values", () => {
+    const observations = demoAnalyticsFactBatches().flatMap((batch) => batch.observations);
+    const pageTypes = observations.map((observation) => observation.dimensions.productPage);
+    const productPageViews = observations.filter((observation) => observation.metric === "PRODUCT_PAGE_VIEWS");
+    const impressions = observations.filter((observation) => observation.metric === "IMPRESSIONS");
+
+    expect([...new Set(pageTypes)].sort()).toEqual([
+      "In-App Event",
+      "No Page",
+      "Product Page",
+      "Store Sheet",
+    ]);
+    expect(productPageViews.length).toBeGreaterThan(0);
+    expect(productPageViews.every((observation) => observation.dimensions.productPage === "Product Page")).toBe(true);
+    expect(impressions.length).toBeGreaterThan(0);
+    expect(impressions.every((observation) => (
+      observation.dimensions.productPage === "Product Page"
+      || observation.dimensions.productPage === "No Page"
+    ))).toBe(true);
+  });
+
+  it("returns isolated clones and supports report-request creation for setup-plan confirmation", async () => {
+    const provider = new MockAscProvider();
+    const before = await provider.listAnalyticsReportRequests("demo-app-orbit-notes");
+    before[0]!.id = "caller-mutation";
+    await expect(provider.listAnalyticsReportRequests("demo-app-orbit-notes"))
+      .resolves.toMatchObject([{ id: "demo-analytics-request-1", accessType: "ONGOING" }]);
+
+    await expect(provider.createAnalyticsReportRequest({
+      appId: "demo-app-orbit-notes",
+      accessType: "ONE_TIME_SNAPSHOT",
+    })).resolves.toMatchObject({ appId: "demo-app-orbit-notes", accessType: "ONE_TIME_SNAPSHOT" });
+    await expect(provider.listAnalyticsReportRequests("demo-app-orbit-notes"))
+      .resolves.toHaveLength(2);
+  });
+});
 
 describe("MockAscProvider customer reviews", () => {
   it("serves deterministic review fixtures and an intentionally empty app", async () => {

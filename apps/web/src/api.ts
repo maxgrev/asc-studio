@@ -1,6 +1,9 @@
 import {
   ActivityResponseSchema,
   AgentStatusSchema,
+  AnalyticsOverviewResponseSchema,
+  AnalyticsStatusResponseSchema,
+  AnalyticsSyncResponseSchema,
   AppleAdsAdGroupsResponseSchema,
   AppleAdsCampaignReportResponseSchema,
   AppleAdsCampaignsResponseSchema,
@@ -32,6 +35,9 @@ import {
 } from "@asc-studio/contracts";
 import type {
   AddBuildToGroupInput,
+  AnalyticsOverviewQuery,
+  AnalyticsReportRequestCreateInput,
+  AnalyticsSyncInput,
   AppleAdsCampaignReportInput,
   AppleAdsCredentialsInput,
   AppleAdsKeywordResearchInput,
@@ -46,6 +52,7 @@ import type {
   CreateAppleAdsCampaignMutationPlan,
   CreateAppleAdsKeywordInput,
   CreateAppleAdsKeywordMutationPlan,
+  CreateAnalyticsReportRequestMutationPlan,
   CreateVersionInput,
   CreateVersionMutationPlan,
   GenerateCustomerReviewReplyInput,
@@ -237,6 +244,21 @@ export const api = {
     if (options.paginate !== undefined) query.set("paginate", String(options.paginate));
     return request(`/api/apps${query.size ? `?${query}` : ""}`, AppsResponseSchema);
   },
+  analyticsStatus: () => request("/api/analytics/status", AnalyticsStatusResponseSchema),
+  analyticsOverview: (input: AnalyticsOverviewQuery) => request(
+    "/api/analytics/overview",
+    AnalyticsOverviewResponseSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  ),
+  syncAnalytics: (input: AnalyticsSyncInput) => request(
+    "/api/analytics/sync",
+    AnalyticsSyncResponseSchema,
+    { method: "POST", body: JSON.stringify(input) },
+  ),
+  analyticsSync: (runId: string) => request(
+    `/api/analytics/sync/${encodeURIComponent(runId)}`,
+    AnalyticsSyncResponseSchema,
+  ),
   builds: (appId: string) => request(`/api/apps/${encodeURIComponent(appId)}/builds`, BuildsResponseSchema),
   releaseBuilds: (appId: string, version: string, platform: AppStorePlatform) => {
     const query = new URLSearchParams({ version, platform, includeGroups: "false" });
@@ -369,6 +391,19 @@ export const api = {
       { method: "POST", body: JSON.stringify(input) },
     );
     if (response.plan.operation !== "customer_review.response.upsert") {
+      throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
+    }
+    return { plan: response.plan };
+  },
+  planAnalyticsReportRequest: async (
+    input: AnalyticsReportRequestCreateInput,
+  ): Promise<{ plan: CreateAnalyticsReportRequestMutationPlan }> => {
+    const response = await request(
+      "/api/plans/analytics-report-request",
+      PlanResponseSchema,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    if (response.plan.operation !== "analytics.report_request.create") {
       throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
     }
     return { plan: response.plan };

@@ -7,6 +7,9 @@ import {
   AppleAdsCampaignReportInputSchema,
   AppleAdsCredentialsInputSchema,
   AppleAdsKeywordResearchInputSchema,
+  AnalyticsOverviewQuerySchema,
+  AnalyticsReportRequestCreateInputSchema,
+  AnalyticsSyncInputSchema,
   CreateAppleAdsAdGroupInputSchema,
   CreateAppleAdsCampaignInputSchema,
   CreateAppleAdsKeywordInputSchema,
@@ -24,15 +27,19 @@ import {
   UpsertCustomerReviewResponseInputSchema,
   UpdateVersionLocalizationsInputSchema,
 } from "@asc-studio/contracts";
-import type { ScreenshotDisplayType, ScreenshotUploadReceipt } from "@asc-studio/contracts";
+import type { AppSummary, ScreenshotDisplayType, ScreenshotUploadReceipt } from "@asc-studio/contracts";
 import { AscStudioService, DomainError } from "@asc-studio/core";
 import {
   AppleAdsApiError,
   AppleAdsCredentialUnavailableError,
   AppleAdsPlatformProvider,
 } from "@asc-studio/provider-apple-ads";
-import { AppStoreConnectApiError, AppStoreConnectProvider } from "@asc-studio/provider-app-store-connect";
-import { MockAscProvider } from "@asc-studio/provider-demo";
+import { AnalyticsPermissionError, AppStoreConnectApiError, AppStoreConnectProvider } from "@asc-studio/provider-app-store-connect";
+import {
+  demoAnalyticsFixtureVersion,
+  demoAnalyticsIssuerId,
+  MockAscProvider,
+} from "@asc-studio/provider-demo";
 import { z } from "zod";
 import {
   AppleAdsCredentialStore,
@@ -45,6 +52,8 @@ import { InMemoryCredentialVault, systemCredentialVault } from "./keychain.js";
 import { acquireInstanceLock } from "./instance-lock.js";
 import { handleMcpRequest } from "./mcp.js";
 import { SqlitePlanStore } from "./store.js";
+import { SqliteAnalyticsStore } from "./analytics-store.js";
+import { AnalyticsSyncBusyError, AnalyticsSyncCoordinator } from "./analytics-sync.js";
 import {
   createCustomerReviewReplyGenerator,
   createReleaseCopyTranslator,
@@ -181,9 +190,10 @@ class AsyncReadWriteLock {
 }
 
 const domainStatus = (code: string) => {
-  if (["group_not_found", "localization_not_found", "plan_not_found", "review_not_found", "screenshot_not_found", "version_not_found", "source_version_not_found"].includes(code)) return 404;
+  if (["app_not_found", "group_not_found", "localization_not_found", "plan_not_found", "review_not_found", "screenshot_not_found", "version_not_found", "source_version_not_found"].includes(code)) return 404;
   if ([
     "already_assigned",
+    "analytics_report_request_exists",
     "apple_ads_ad_group_changed",
     "apple_ads_ad_group_exists",
     "apple_ads_bid_strategy_unsupported",
@@ -502,15 +512,98 @@ const main = async () => {
     credentials: async () => appleAdsCredentialStore.load(await activeAppleAccount()),
   });
   const databaseName = mode === "demo" ? "demo.sqlite" : "live.sqlite";
-  const store = new SqlitePlanStore(join(dataDirectory, databaseName));
+  const databasePath = join(dataDirectory, databaseName);
+  const store = new SqlitePlanStore(databasePath);
+  const analyticsStore = new SqliteAnalyticsStore(databasePath);
+  await analyticsStore.failInterruptedAnalyticsSyncRuns(new Date().toISOString());
   const service = new AscStudioService({
     provider,
     adsProvider,
+    analyticsProvider: provider,
+    analyticsStore,
     store,
     now: () => new Date(),
     id: () => randomUUID(),
     digest: (value) => createHash("sha256").update(value).digest("hex"),
   });
+  const activeAnalyticsIssuerId = async () => {
+    if (mode === "demo") return demoAnalyticsIssuerId;
+    return (await credentialStore.load())?.issuerId ?? null;
+  };
+  const portfolioAppsByIssuer = new Map<string, AppSummary[]>();
+  const loadCompletePortfolioApps = async () => {
+    const apps = await service.listApps({ paginate: true });
+    const issuerId = await activeAnalyticsIssuerId();
+    if (issuerId) portfolioAppsByIssuer.set(issuerId, apps);
+    return apps;
+  };
+  const analyticsSync = new AnalyticsSyncCoordinator({
+    provider,
+    store: analyticsStore,
+    acquireAccountRead: () => accountLock.acquireRead(),
+    activeIssuerId: activeAnalyticsIssuerId,
+    now: () => new Date(),
+    id: () => randomUUID(),
+  });
+  const requireAnalyticsApps = async (appIds: string[], allowProvider = false) => {
+    if (new Set(appIds).size !== appIds.length) {
+      throw new RequestError("analytics_duplicate_apps", "Choose each portfolio app only once.", 400);
+    }
+    const issuerId = await activeAnalyticsIssuerId();
+    if (!issuerId) {
+      throw new RequestError(
+        "analytics_not_configured",
+        "Connect App Store Connect before reading analytics.",
+        409,
+      );
+    }
+    const apps = portfolioAppsByIssuer.get(issuerId) ?? (allowProvider ? await loadCompletePortfolioApps() : null);
+    if (!apps) {
+      throw new RequestError(
+        "analytics_portfolio_not_loaded",
+        "Load the complete App Store Connect portfolio before reading analytics.",
+        409,
+      );
+    }
+    const known = new Set(apps.map((app) => app.id));
+    const unknown = appIds.find((appId) => !known.has(appId));
+    if (unknown) {
+      throw new RequestError(
+        "analytics_app_not_found",
+        "One or more selected apps are not part of the active App Store Connect portfolio.",
+        404,
+      );
+    }
+    return { issuerId, apps };
+  };
+  const requireAnalyticsDateRange = (startDate: string, endDate: string) => {
+    const parse = (value: string) => {
+      const date = new Date(`${value}T00:00:00.000Z`);
+      return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? null : date;
+    };
+    const start = parse(startDate);
+    const end = parse(endDate);
+    if (!start || !end) throw new RequestError("analytics_date_invalid", "Choose valid analytics calendar dates.", 400);
+    const days = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
+    if (days > 3_653) {
+      throw new RequestError("analytics_range_too_large", "Choose an analytics range of ten years or less.", 400);
+    }
+  };
+  if (mode === "demo") {
+    const apps = await loadCompletePortfolioApps();
+    if (analyticsStore.getDemoAnalyticsFixtureVersion(demoAnalyticsIssuerId) !== demoAnalyticsFixtureVersion) {
+      // Demo analytics is deterministic sample data rather than user state.
+      // Rebuild only its issuer-scoped cache when fixture semantics change so
+      // upgrades are truthful without slowing every launch or touching live data.
+      analyticsStore.clearAnalyticsIssuer(demoAnalyticsIssuerId);
+      await service.syncAnalytics({
+        schemaVersion: 1,
+        appIds: apps.map((app) => app.id),
+        force: false,
+      });
+      analyticsStore.setDemoAnalyticsFixtureVersion(demoAnalyticsIssuerId, demoAnalyticsFixtureVersion);
+    }
+  }
   const resolveOpenAiCredential = () => openAiCredentialStore.load();
   const translator = createReleaseCopyTranslator(mode, resolveOpenAiCredential);
   const customerReviewReplyGenerator = createCustomerReviewReplyGenerator(mode, resolveOpenAiCredential);
@@ -647,6 +740,76 @@ const main = async () => {
         json(response, 200, await service.getStatus());
         return;
       }
+      if (request.method === "GET" && url.pathname === "/api/analytics/status") {
+        const analyticsStatus = await service.getAnalyticsStatus();
+        const activeRun = analyticsStatus.issuerId
+          ? analyticsStore.getActiveSyncRun(analyticsStatus.issuerId)
+          : null;
+        const persisted = analyticsStatus.issuerId && analyticsStatus.state === "WAITING_FOR_DATA"
+          ? await analyticsStore.getLatestSuccessfulAnalyticsSyncRun(analyticsStatus.issuerId)
+          : null;
+        json(response, 200, activeRun ? {
+          ...analyticsStatus,
+          state: "SYNCING",
+          detail: "Analytics reports are syncing in the background. Existing portfolio data remains available.",
+        } : persisted ? {
+          ...analyticsStatus,
+          state: persisted.state === "PARTIAL" || persisted.freshness.partial ? "PARTIAL" : "READY",
+          reportRequests: analyticsStatus.reportRequests.length > 0
+            ? analyticsStatus.reportRequests
+            : persisted.reportRequests,
+          freshness: persisted.freshness,
+          detail: persisted.freshness.detail,
+        } : analyticsStatus);
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/analytics/report-requests") {
+        const { appId } = z.object({ appId: z.string().min(1).optional() })
+          .strict()
+          .parse(uniqueSearchParams(url.searchParams));
+        if (appId) await requireAnalyticsApps([appId], true);
+        json(response, 200, { reportRequests: await service.listAnalyticsReportRequests(appId) });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/analytics/overview") {
+        const input = AnalyticsOverviewQuerySchema.parse(await readBody(request));
+        requireAnalyticsDateRange(input.startDate, input.endDate);
+        const context = await requireAnalyticsApps(input.appIds);
+        json(response, 200, await service.getAnalyticsOverview(input, context));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/analytics/sync") {
+        const input = AnalyticsSyncInputSchema.parse(await readBody(request));
+        await requireAnalyticsApps(input.appIds, true);
+        const analyticsStatus = await service.getAnalyticsStatus();
+        if (!analyticsStatus.issuerId) {
+          throw new RequestError(
+            "analytics_not_configured",
+            "Connect App Store Connect before syncing analytics reports.",
+            409,
+          );
+        }
+        // Keep role failures synchronous and actionable instead of queuing a job
+        // that can only fail later with an opaque upstream message.
+        const reportRequests = (await Promise.all(
+          input.appIds.map((appId) => service.listAnalyticsReportRequests(appId)),
+        )).flat();
+        json(response, 202, await analyticsSync.start(analyticsStatus.issuerId, input, {
+          ...analyticsStatus,
+          reportRequests,
+        }));
+        return;
+      }
+      const analyticsSyncMatch = url.pathname.match(/^\/api\/analytics\/sync\/([^/]+)$/);
+      if (request.method === "GET" && analyticsSyncMatch?.[1]) {
+        const run = await analyticsSync.get(decodeURIComponent(analyticsSyncMatch[1]));
+        const activeIssuerId = await activeAnalyticsIssuerId();
+        if (!run || run.issuerId !== activeIssuerId) {
+          throw new RequestError("analytics_sync_not_found", "The analytics sync run was not found in this workspace.", 404);
+        }
+        json(response, 200, run);
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/apple-ads/status") {
         json(response, 200, await service.getAppleAdsStatus());
         return;
@@ -761,6 +924,7 @@ const main = async () => {
         // those links first before removing the Apple account bundle itself.
         await appleAdsCredentialStore.reset();
         await credentialStore.reset();
+        portfolioAppsByIssuer.clear();
         json(response, 200, { status: await service.getStatus(), accounts: [] });
         return;
       }
@@ -777,6 +941,7 @@ const main = async () => {
         const candidateStatus = await candidate.getStatus();
         if (!candidateStatus.connected) throw new RequestError("connection_failed", candidateStatus.detail, 422);
         await credentialStore.save(input);
+        portfolioAppsByIssuer.clear();
         json(response, 200, { status: await service.getStatus(), accounts: await credentialStore.list() });
         return;
       }
@@ -791,6 +956,7 @@ const main = async () => {
         const nextStatus = await candidate.getStatus();
         if (!nextStatus.connected) throw new RequestError("connection_failed", nextStatus.detail, 422);
         await credentialStore.activate(connectionId);
+        portfolioAppsByIssuer.clear();
         json(response, 200, { status: nextStatus, accounts: await credentialStore.list() });
         return;
       }
@@ -800,6 +966,7 @@ const main = async () => {
         const connectionId = decodeURIComponent(removeConnectionMatch[1]);
         await appleAdsCredentialStore.removeLinked(connectionId);
         await credentialStore.remove(connectionId);
+        portfolioAppsByIssuer.clear();
         json(response, 200, { status: await service.getStatus(), accounts: await credentialStore.list() });
         return;
       }
@@ -859,12 +1026,15 @@ const main = async () => {
         const paginate = paginateValue === null
           ? undefined
           : z.enum(["true", "false"]).transform((value) => value === "true").parse(paginateValue);
-        json(response, 200, {
-          apps: await service.listApps({
-            ...(limit === undefined ? {} : { limit }),
-            ...(paginate === undefined ? {} : { paginate }),
-          }),
+        const apps = await service.listApps({
+          ...(limit === undefined ? {} : { limit }),
+          ...(paginate === undefined ? {} : { paginate }),
         });
+        if (paginate === true) {
+          const issuerId = await activeAnalyticsIssuerId();
+          if (issuerId) portfolioAppsByIssuer.set(issuerId, apps);
+        }
+        json(response, 200, { apps });
         return;
       }
       const customerReviewsMatch = url.pathname.match(/^\/api\/apps\/([^/]+)\/customer-reviews$/);
@@ -1038,6 +1208,11 @@ const main = async () => {
         json(response, 201, { plan: await service.createUpsertCustomerReviewResponsePlan(input, "gui") });
         return;
       }
+      if (request.method === "POST" && url.pathname === "/api/plans/analytics-report-request") {
+        const input = AnalyticsReportRequestCreateInputSchema.parse(await readBody(request));
+        json(response, 201, { plan: await service.createAnalyticsReportRequestPlan(input, "gui") });
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/api/plans/apple-ads/campaign-create") {
         const input = CreateAppleAdsCampaignInputSchema.parse(await readBody(request));
         json(response, 201, { plan: await service.createAppleAdsCampaignPlan(input, "gui") });
@@ -1095,6 +1270,14 @@ const main = async () => {
         return;
       }
       if (error instanceof TranslationProviderError) {
+        json(response, error.status, { error: { code: error.code, message: error.message } });
+        return;
+      }
+      if (error instanceof AnalyticsSyncBusyError) {
+        json(response, error.status, { error: { code: error.code, message: error.message } });
+        return;
+      }
+      if (error instanceof AnalyticsPermissionError) {
         json(response, error.status, { error: { code: error.code, message: error.message } });
         return;
       }
@@ -1161,8 +1344,11 @@ const main = async () => {
     }, 5_000);
     forceExit.unref();
     server.close(() => {
-      clearTimeout(forceExit);
-      void releaseLock().then(
+      void analyticsSync.waitForAll().then(() => {
+        clearTimeout(forceExit);
+        analyticsStore.close();
+        store.close();
+      }).then(releaseLock).then(
         () => process.exit(0),
         () => process.exit(1),
       );

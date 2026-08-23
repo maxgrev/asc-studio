@@ -104,6 +104,29 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Create or replace the exact public response through the account-bound, expiring, stale-checked plan and confirmation path with an audit record
 - Keep demo responses inside isolated sample data and use deterministic, visibly marked sample reply drafts without calling OpenAI
 
+## Portfolio analytics — complete
+
+- Open on an **All apps** portfolio aggregate and retain date, comparison, and metric context when drilling into one app
+- Show Impressions, First-time downloads, Total downloads, Product page views, Download rate, Sessions, and Estimated proceeds without presenting non-additive unique-user values as portfolio totals
+- Define Download rate as Total downloads ÷ Product page views and recompute it from aggregate numerators and denominators instead of averaging app rates
+- Compare current and previous periods, rank each app's contribution to portfolio movement, and break an app down by territory, source, page type, or version
+- Create ongoing or one-time snapshot Analytics Reports requests only through the existing reviewed plan and confirmation path
+- Run Apple report ingestion as a pollable background job while retaining previously complete cached data
+- Ingest only the five supported Standard daily report families, fetch every segment, verify size and checksum, and reject unsafe signed URLs, malformed gzip/TSV, wrong-app rows, and incomplete instances
+- Replace date partitions with newer Apple processing batches and deduplicate overlapping snapshot/ongoing requests by logical report identity
+- Scope cached facts and sync runs by Apple issuer and app; recover interrupted jobs and keep account switching locked during a sync
+- Keep missing, partial, and privacy-withheld values distinct from zero; expose source, completeness, usage opt-in, privacy, and estimated-proceeds caveats in the interface
+- Seed deterministic two-app demo data through the same aggregate query path without contacting Apple
+
+### Analytics follow-ons
+
+- Saved portfolio views and richer compound filters
+- Scheduled sync, export, anomaly alerts, and release/marketing annotations
+- Selection-scoped AI explanations that cite canonical aggregate evidence and never infer causality
+- Retention and subscription cohorts, quality/performance reports, and carefully defined non-additive metrics
+- Sales and Trends plus finalized financial reconciliation, with each revenue source labeled separately
+- Apple Ads attribution joins and custom product page/campaign decision workflows
+
 ## Next — Submission train
 
 - Direct IPA/PKG upload through Apple's Build Uploads resources, with a local picker and progress

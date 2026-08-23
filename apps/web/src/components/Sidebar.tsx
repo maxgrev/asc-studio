@@ -3,6 +3,7 @@ import {
   Activity,
   AppWindow,
   BadgeDollarSign,
+  ChartNoAxesCombined,
   Check,
   ChevronDown,
   CircleDollarSign,
@@ -21,10 +22,11 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-export type WorkspaceSection = "overview" | "testflight" | "releases" | "apple-ads" | "reviews";
+export type WorkspaceSection = "overview" | "analytics" | "testflight" | "releases" | "apple-ads" | "reviews";
 
 const navigation = [
   { label: "Overview", icon: Gauge, section: "overview" as const },
+  { label: "Analytics", icon: ChartNoAxesCombined, section: "analytics" as const },
   { label: "TestFlight", icon: Send, section: "testflight" as const },
   { label: "Releases", icon: ClipboardList, section: "releases" as const },
   { label: "Apple Ads", icon: BadgeDollarSign, section: "apple-ads" as const },
@@ -101,6 +103,7 @@ export const Sidebar = ({
   };
 
   return (
+    <>
     <aside className="sidebar" aria-label="Primary navigation">
       <div className="brand">
         <span className="brand-mark"><AppWindow size={19} strokeWidth={2.2} /></span>
@@ -247,5 +250,18 @@ export const Sidebar = ({
         ) : null}
       </div>
     </aside>
+    <label className="mobile-workspace-nav">
+      <span>Workspace</span>
+      <select
+        aria-label="Choose workspace"
+        value={activeSection}
+        onChange={(event) => onNavigate(event.target.value as WorkspaceSection)}
+      >
+        {navigation.flatMap((item) => item.section
+          ? [<option value={item.section} key={item.section}>{item.label}</option>]
+          : [])}
+      </select>
+    </label>
+    </>
   );
 };

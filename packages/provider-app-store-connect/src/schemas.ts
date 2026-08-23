@@ -170,6 +170,58 @@ export const CustomerReviewsPageSchema = z.object({
 export const CustomerReviewResponseSchema = single(CustomerReviewResourceSchema);
 export const CustomerReviewResponseResourceResponseSchema = single(CustomerReviewResponseResourceSchema);
 
+export const AnalyticsReportAccessTypeSchema = z.enum(["ONGOING", "ONE_TIME_SNAPSHOT"]);
+export const AnalyticsReportCategorySchema = z.enum([
+  "APP_STORE_ENGAGEMENT",
+  "COMMERCE",
+  "APP_USAGE",
+  "FRAMEWORK_USAGE",
+  "PERFORMANCE",
+]);
+export const AnalyticsReportGranularitySchema = z.enum(["DAILY", "WEEKLY", "MONTHLY"]);
+
+export const AnalyticsReportRequestResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("analyticsReportRequests"),
+  attributes: z.object({
+    accessType: AnalyticsReportAccessTypeSchema,
+    stoppedDueToInactivity: z.boolean(),
+  }).passthrough(),
+}).passthrough();
+export const AnalyticsReportRequestsPageSchema = page(AnalyticsReportRequestResourceSchema);
+export const AnalyticsReportRequestResponseSchema = single(AnalyticsReportRequestResourceSchema);
+
+export const AnalyticsReportResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("analyticsReports"),
+  attributes: z.object({
+    name: z.string().min(1),
+    category: AnalyticsReportCategorySchema,
+  }).passthrough(),
+}).passthrough();
+export const AnalyticsReportsPageSchema = page(AnalyticsReportResourceSchema);
+
+export const AnalyticsReportInstanceResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("analyticsReportInstances"),
+  attributes: z.object({
+    granularity: AnalyticsReportGranularitySchema,
+    processingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  }).passthrough(),
+}).passthrough();
+export const AnalyticsReportInstancesPageSchema = page(AnalyticsReportInstanceResourceSchema);
+
+export const AnalyticsReportSegmentResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("analyticsReportSegments"),
+  attributes: z.object({
+    checksum: z.string().regex(/^[0-9a-f]{32}$/i),
+    sizeInBytes: z.number().int().positive(),
+    url: z.string().url(),
+  }).passthrough(),
+}).passthrough();
+export const AnalyticsReportSegmentsPageSchema = page(AnalyticsReportSegmentResourceSchema);
+
 export const EmptySchema = z.null();
 
 export type AppResource = z.infer<typeof AppResourceSchema>;
@@ -182,3 +234,7 @@ export type BetaGroupResource = z.infer<typeof BetaGroupResourceSchema>;
 export type ReviewSubmissionResource = z.infer<typeof ReviewSubmissionResourceSchema>;
 export type CustomerReviewResource = z.infer<typeof CustomerReviewResourceSchema>;
 export type CustomerReviewResponseResource = z.infer<typeof CustomerReviewResponseResourceSchema>;
+export type AnalyticsReportRequestResource = z.infer<typeof AnalyticsReportRequestResourceSchema>;
+export type AnalyticsReportResource = z.infer<typeof AnalyticsReportResourceSchema>;
+export type AnalyticsReportInstanceResource = z.infer<typeof AnalyticsReportInstanceResourceSchema>;
+export type AnalyticsReportSegmentResource = z.infer<typeof AnalyticsReportSegmentResourceSchema>;

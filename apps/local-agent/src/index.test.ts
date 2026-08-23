@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +15,7 @@ interface RunningAgent {
   baseUrl: string;
   child: ChildProcess;
   dataDirectory: string;
+  providerCallLog: string | null;
 }
 
 interface StartAgentOptions {
@@ -21,6 +23,7 @@ interface StartAgentOptions {
   mode?: "demo" | "live";
   environment?: Record<string, string>;
   mockOpenAiValidation?: boolean;
+  mockAnalyticsForbidden?: boolean;
   prepareDataDirectory?: (dataDirectory: string) => Promise<void>;
 }
 
@@ -50,7 +53,7 @@ const startAgent = async (options: StartAgentOptions = {}): Promise<RunningAgent
     "OPENAI_API_KEY",
     "ASC_STUDIO_OPENAI_MODEL",
   ]) delete environment[name];
-  let childArguments = launchArguments;
+  const preloadPaths: string[] = [];
   if (options.mockOpenAiValidation) {
     const preloadPath = join(dataDirectory, "mock-openai-fetch.mjs");
     await writeFile(preloadPath, [
@@ -65,8 +68,31 @@ const startAgent = async (options: StartAgentOptions = {}): Promise<RunningAgent
       "  return originalFetch(input, init);",
       "};",
     ].join("\n"), "utf8");
-    childArguments = ["--import", preloadPath, ...launchArguments];
+    preloadPaths.push(preloadPath);
   }
+  if (options.mockAnalyticsForbidden) {
+    const preloadPath = join(dataDirectory, "mock-analytics-forbidden-fetch.mjs");
+    const providerCallLog = join(dataDirectory, "apple-provider-calls.log");
+    await writeFile(providerCallLog, "", "utf8");
+    await writeFile(preloadPath, [
+      "import { appendFileSync } from 'node:fs';",
+      "const originalFetch = globalThis.fetch;",
+      `const providerCallLog = ${JSON.stringify(providerCallLog)};`,
+      "globalThis.fetch = async (input, init) => {",
+      "  const url = new URL(String(input));",
+      "  if (url.hostname === 'api.appstoreconnect.apple.com') appendFileSync(providerCallLog, `${url.pathname}${url.search}\\n`);",
+      "  if (url.hostname === 'api.appstoreconnect.apple.com' && url.pathname === '/v1/apps') {",
+      "    return new Response(JSON.stringify({ data: [{ type: 'apps', id: '1234567890', attributes: { name: 'Denied App', bundleId: 'com.example.denied' } }], links: { self: url.toString() } }), { status: 200, headers: { 'content-type': 'application/json' } });",
+      "  }",
+      "  if (url.hostname === 'api.appstoreconnect.apple.com' && url.pathname.includes('analyticsReportRequests')) {",
+      "    return new Response(JSON.stringify({ errors: [{ status: '403', code: 'FORBIDDEN', detail: 'Forbidden' }] }), { status: 403, headers: { 'content-type': 'application/json' } });",
+      "  }",
+      "  return originalFetch(input, init);",
+      "};",
+    ].join("\n"), "utf8");
+    preloadPaths.push(preloadPath);
+  }
+  const childArguments = [...preloadPaths.flatMap((path) => ["--import", path]), ...launchArguments];
   const child = spawn(process.execPath, childArguments, {
     cwd: appRoot,
     env: {
@@ -99,7 +125,12 @@ const startAgent = async (options: StartAgentOptions = {}): Promise<RunningAgent
       const match = /listening on http:\/\/127\.0\.0\.1:(\d+)/.exec(stdout);
       if (!match?.[1]) return;
       clearTimeout(timer);
-      resolve({ baseUrl: `http://127.0.0.1:${match[1]}`, child, dataDirectory });
+      resolve({
+        baseUrl: `http://127.0.0.1:${match[1]}`,
+        child,
+        dataDirectory,
+        providerCallLog: options.mockAnalyticsForbidden ? join(dataDirectory, "apple-provider-calls.log") : null,
+      });
     });
     child.stderr?.on("data", (chunk: string) => { stderr += chunk; });
     child.once("error", (error) => {
@@ -239,6 +270,79 @@ describe("local-agent live connection setup", () => {
     expect(await openAi.json()).toMatchObject({ connection: { configured: false, source: null } });
     expect(await appleAds.json()).toMatchObject({ connection: { configured: false, source: null } });
     expect(await apple.json()).toMatchObject({ status: { connected: false }, accounts: [] });
+  });
+});
+
+describe("local-agent analytics permissions", () => {
+  let agent: RunningAgent | undefined;
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+
+  beforeAll(async () => {
+    agent = await startAgent({
+      mode: "live",
+      mockAnalyticsForbidden: true,
+      environment: {
+        ASC_STUDIO_PROFILE_NAME: "Restricted analytics key",
+        ASC_STUDIO_ISSUER_ID: "11111111-2222-3333-4444-555555555555",
+        ASC_STUDIO_KEY_ID: "ABC123DEFG",
+        ASC_STUDIO_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      },
+    });
+  });
+  afterAll(async () => { await stopAgent(agent); });
+
+  it("keeps portfolio, app, refresh, and unknown-app overview reads off Apple after roster loading", async () => {
+    const roster = await fetch(`${agent!.baseUrl}/api/apps?paginate=true`, {
+      headers: authorization(guiToken),
+    });
+    expect(roster.status).toBe(200);
+    expect(await roster.json()).toMatchObject({ apps: [expect.objectContaining({ id: "1234567890" })] });
+    const callsBefore = await readFile(agent!.providerCallLog!, "utf8");
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const query = {
+      schemaVersion: 1,
+      scope: "PORTFOLIO",
+      appIds: ["1234567890"],
+      startDate: "2026-08-01",
+      endDate: "2026-08-20",
+      compare: "NONE",
+      granularity: "DAY",
+      breakdowns: ["APP"],
+    };
+    const responses = await Promise.all([
+      fetch(`${agent!.baseUrl}/api/analytics/overview`, { method: "POST", headers, body: JSON.stringify(query) }),
+      fetch(`${agent!.baseUrl}/api/analytics/overview`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...query, scope: "APP", breakdowns: ["TERRITORY"] }),
+      }),
+      fetch(`${agent!.baseUrl}/api/analytics/overview`, { method: "POST", headers, body: JSON.stringify(query) }),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
+
+    const unknown = await fetch(`${agent!.baseUrl}/api/analytics/overview`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...query, appIds: ["another-account-app"] }),
+    });
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toMatchObject({ error: { code: "analytics_app_not_found" } });
+    expect(await readFile(agent!.providerCallLog!, "utf8")).toBe(callsBefore);
+  });
+
+  it("returns a typed reports-role error before queuing an analytics sync", async () => {
+    const response = await fetch(`${agent!.baseUrl}/api/analytics/sync`, {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: JSON.stringify({ schemaVersion: 1, appIds: ["1234567890"], force: false }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "analytics_reports_role_required",
+        message: expect.stringContaining("Sales and Reports"),
+      },
+    });
   });
 });
 
@@ -475,6 +579,158 @@ describe("local-agent session boundary", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       apps: [expect.objectContaining({ id: "demo-app-orbit-notes" })],
+    });
+  });
+
+  it("serves a seeded portfolio overview and an app drilldown without depending on sidebar selection", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const portfolioQuery = {
+      schemaVersion: 1,
+      scope: "PORTFOLIO",
+      appIds: ["demo-app-orbit-notes", "demo-app-field-log"],
+      startDate: "2026-07-22",
+      endDate: "2026-08-20",
+      compare: "PREVIOUS_PERIOD",
+      granularity: "DAY",
+      breakdowns: ["APP", "TERRITORY", "SOURCE"],
+      filters: { territories: ["USA"], sources: [], productPages: [], versions: [] },
+    };
+    const [status, portfolio, app] = await Promise.all([
+      fetch(`${agent!.baseUrl}/api/analytics/status`, { headers: authorization(guiToken) }),
+      fetch(`${agent!.baseUrl}/api/analytics/overview`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(portfolioQuery),
+      }),
+      fetch(`${agent!.baseUrl}/api/analytics/overview`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...portfolioQuery, scope: "APP", appIds: ["demo-app-orbit-notes"] }),
+      }),
+    ]);
+
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({
+      issuerId: "demo-issuer",
+      state: "PARTIAL",
+      freshness: { dataThrough: "2026-08-17", partial: true },
+    });
+    expect(portfolio.status).toBe(200);
+    const portfolioBody = await portfolio.json() as {
+      scope: string;
+      kpis: Array<{ metric: string; current: { value: number | null } }>;
+      appContributions: Array<{ appId: string; appName: string }>;
+      privacy: { mayIncludePrivacyAdjustments: boolean };
+      appliedFilters: { territories: string[] };
+      facets: { territories: string[] };
+      metricCoverage: Array<{ metric: string; source: string; completeThrough: string | null }>;
+    };
+    expect(portfolioBody.scope).toBe("PORTFOLIO");
+    expect(portfolioBody.kpis.find((kpi) => kpi.metric === "DOWNLOADS")?.current.value).toBeGreaterThan(0);
+    expect(portfolioBody.appContributions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ appId: "demo-app-orbit-notes", appName: "Orbit Notes" }),
+      expect.objectContaining({ appId: "demo-app-field-log", appName: "Field Log" }),
+    ]));
+    expect(portfolioBody.privacy.mayIncludePrivacyAdjustments).toBe(false);
+    expect(portfolioBody.appliedFilters.territories).toEqual(["USA"]);
+    expect(portfolioBody.facets.territories).toEqual(expect.arrayContaining(["USA", "MEX", "GBR", "JPN"]));
+    expect(portfolioBody.metricCoverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metric: "IMPRESSIONS", source: "APP_STORE_CONNECT_ANALYTICS_REPORTS" }),
+      expect.objectContaining({ metric: "FIRST_TIME_DOWNLOADS", source: "APP_STORE_CONNECT_ANALYTICS_REPORTS" }),
+    ]));
+    expect(app.status).toBe(200);
+    expect(await app.json()).toMatchObject({ scope: "APP", appId: "demo-app-orbit-notes" });
+  });
+
+  it("validates portfolio membership and exposes background analytics sync as a pollable job", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const invalid = await fetch(`${agent!.baseUrl}/api/analytics/overview`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        scope: "PORTFOLIO",
+        appIds: ["another-account-app"],
+        startDate: "2026-08-01",
+        endDate: "2026-08-20",
+        compare: "NONE",
+        granularity: "DAY",
+        breakdowns: ["APP"],
+      }),
+    });
+    expect(invalid.status).toBe(404);
+    expect(await invalid.json()).toMatchObject({ error: { code: "analytics_app_not_found" } });
+
+    const started = await fetch(`${agent!.baseUrl}/api/analytics/sync`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        appIds: ["demo-app-orbit-notes", "demo-app-field-log"],
+        force: false,
+      }),
+    });
+    expect(started.status).toBe(202);
+    const queued = await started.json() as { runId: string; state: string };
+    expect(queued).toMatchObject({ runId: expect.any(String) });
+
+    let completed: Record<string, unknown> | null = null;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const poll = await fetch(`${agent!.baseUrl}/api/analytics/sync/${encodeURIComponent(queued.runId)}`, {
+        headers: authorization(guiToken),
+      });
+      expect(poll.status).toBe(200);
+      completed = await poll.json() as Record<string, unknown>;
+      if (["SUCCEEDED", "PARTIAL", "FAILED"].includes(String(completed.state))) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(completed).toMatchObject({
+      issuerId: "demo-issuer",
+      runId: queued.runId,
+      state: "SUCCEEDED",
+      batchCount: 8,
+    });
+  });
+
+  it("rejects duplicate analytics filter values at the API boundary", async () => {
+    const response = await fetch(`${agent!.baseUrl}/api/analytics/overview`, {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: JSON.stringify({
+        schemaVersion: 1,
+        scope: "PORTFOLIO",
+        appIds: ["demo-app-orbit-notes"],
+        startDate: "2026-08-01",
+        endDate: "2026-08-20",
+        compare: "NONE",
+        granularity: "DAY",
+        breakdowns: ["TERRITORY"],
+        filters: { territories: ["USA", "USA"], sources: [], productPages: [], versions: [] },
+      }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("keeps analytics report-request creation behind plan review and exact confirmation", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const planned = await fetch(`${agent!.baseUrl}/api/plans/analytics-report-request`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        appId: "demo-app-field-log",
+        accessType: "ONE_TIME_SNAPSHOT",
+      }),
+    });
+    expect(planned.status).toBe(201);
+    const body = await planned.json() as { plan: { id: string; digest: string } };
+    const confirmed = await fetch(`${agent!.baseUrl}/api/plans/${body.plan.id}/confirm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ digest: body.plan.digest }),
+    });
+    expect(confirmed.status).toBe(200);
+    expect(await confirmed.json()).toMatchObject({
+      plan: { operation: "analytics.report_request.create", state: "succeeded" },
     });
   });
 

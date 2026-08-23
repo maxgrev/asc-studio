@@ -273,6 +273,15 @@ The form language is gently squared and compact. Core controls use the control a
 - **Failure:** Treat locked, unavailable, or failed Keychain migration as a needs-attention state with a plain recovery action. Never present a plaintext fallback as connected.
 - **Responsive behavior:** At 620px, use the full viewport dialog, move each row action beneath its service detail, and stack form and destructive actions at a minimum 44px height.
 
+### Analytics
+
+- **Information architecture:** Open on **All apps** and keep one persistent path from portfolio totals to an individual app. The desktop composition pairs a ranked app roster with a wider evidence column; narrowing the scope must preserve the chosen period, comparison, metric, and filters.
+- **Metric rail:** Treat the seven supported metrics as one continuous bordered rail, not a collection of floating KPI cards. Each value keeps its source availability, complete-through date, formula when derived, and comparison qualification close enough to scan as one unit.
+- **Charts:** Use straight SVG segments so interpolation never invents shape. Current data is solid, comparison data is dashed, and missing or privacy-withheld observations create gaps rather than zeroes. Every plot includes keyboard date inspection, a text summary, and a real HTML data table.
+- **Ranked evidence:** Portfolio scope ranks signed app contributions to the selected change; app scope ranks only dimensions supported by that metric. Keep Page Type, territory, source, and version labels literal to Apple's report fields, and never imply that Standard Page Type data identifies a named custom product page.
+- **Truth states:** Numeric partials retain their value plus a visible **Partial** qualifier. Unavailable and privacy-withheld values use an em dash plus plain-language state. Show sample/live mode, local-cache time, report provenance, privacy caveats, and per-metric freshness without relying on color.
+- **Responsive behavior:** At 1020px the roster becomes a scope selector. At 820px the metric rail becomes two columns. At 620px controls remain named and reachable, charts keep their units, tables reflow into labeled rows, and filters use a focus-trapped sheet with 44px actions.
+
 ## Do's and Don'ts
 
 ### Do:
@@ -283,6 +292,7 @@ The form language is gently squared and compact. Core controls use the control a
 - **Do** use one-pixel hairlines and compact rows to organize operational data.
 - **Do** preserve the 1220px, 820px, and 620px responsive behaviors when extending the shell.
 - **Do** keep motion to short state changes in transform, opacity, background, or border.
+- **Do** render analytics gaps, partial values, formulas, and provenance explicitly.
 
 ### Don't:
 
@@ -291,3 +301,4 @@ The form language is gently squared and compact. Core controls use the control a
 - **Don't** replace factual status language with decorative scores, trends, or visual claims.
 - **Don't** enlarge controls or spacing until the operating density stops reading as a desktop tool.
 - **Don't** animate layout for decoration or ignore reduced-motion preferences.
+- **Don't** present missing analytics as zero, average pre-aggregated rates, or label a Page Type as a named product page.

@@ -106,6 +106,504 @@ export const AgentStatusSchema = z.object({
 });
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
+export const AnalyticsSchemaVersionSchema = z.literal(1);
+export type AnalyticsSchemaVersion = z.infer<typeof AnalyticsSchemaVersionSchema>;
+
+export const AnalyticsIsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date in YYYY-MM-DD format.");
+export const AnalyticsIsoDateTimeSchema = z.string().datetime();
+
+export const AnalyticsMetricIdSchema = z.enum([
+  "IMPRESSIONS",
+  "DOWNLOADS",
+  "FIRST_TIME_DOWNLOADS",
+  "PRODUCT_PAGE_VIEWS",
+  "DOWNLOAD_RATE",
+  "SESSIONS",
+  "PROCEEDS",
+]);
+export type AnalyticsMetricId = z.infer<typeof AnalyticsMetricIdSchema>;
+
+export const AnalyticsAdditiveMetricIdSchema = z.enum([
+  "IMPRESSIONS",
+  "DOWNLOADS",
+  "FIRST_TIME_DOWNLOADS",
+  "PRODUCT_PAGE_VIEWS",
+  "SESSIONS",
+  "PROCEEDS",
+]);
+export type AnalyticsAdditiveMetricId = z.infer<typeof AnalyticsAdditiveMetricIdSchema>;
+
+export const ANALYTICS_METRIC_COMPLETENESS_DAYS: Record<AnalyticsAdditiveMetricId, number> = {
+  IMPRESSIONS: 3,
+  DOWNLOADS: 2,
+  FIRST_TIME_DOWNLOADS: 2,
+  PRODUCT_PAGE_VIEWS: 3,
+  SESSIONS: 5,
+  PROCEEDS: 2,
+};
+
+export const AnalyticsMetricUnitSchema = z.enum(["COUNT", "RATIO", "CURRENCY_USD"]);
+export type AnalyticsMetricUnit = z.infer<typeof AnalyticsMetricUnitSchema>;
+
+export const AnalyticsAvailabilitySchema = z.enum([
+  "AVAILABLE",
+  "PARTIAL",
+  "UNAVAILABLE",
+  "PRIVACY_WITHHELD",
+]);
+export type AnalyticsAvailability = z.infer<typeof AnalyticsAvailabilitySchema>;
+
+export const AnalyticsScopeSchema = z.enum(["APP", "PORTFOLIO"]);
+export type AnalyticsScope = z.infer<typeof AnalyticsScopeSchema>;
+
+export const AnalyticsComparisonModeSchema = z.enum(["NONE", "PREVIOUS_PERIOD"]);
+export type AnalyticsComparisonMode = z.infer<typeof AnalyticsComparisonModeSchema>;
+
+export const AnalyticsGranularitySchema = z.enum(["DAY", "WEEK", "MONTH"]);
+export type AnalyticsGranularity = z.infer<typeof AnalyticsGranularitySchema>;
+
+export const AnalyticsBreakdownDimensionSchema = z.enum([
+  "APP",
+  "TERRITORY",
+  "SOURCE",
+  "PRODUCT_PAGE",
+  "VERSION",
+]);
+export type AnalyticsBreakdownDimension = z.infer<typeof AnalyticsBreakdownDimensionSchema>;
+
+const AnalyticsFilterValueSchema = z.string().min(1).max(200)
+  .refine((value) => value.trim().length > 0, "Analytics filter values must contain visible text.")
+  .refine((value) => !/[\u0000-\u001F\u007F]/u.test(value), "Analytics filter values cannot contain control characters.");
+const uniqueAnalyticsFilterValues = (values: string[]) => new Set(values).size === values.length;
+const AnalyticsFilterValuesSchema = z.array(AnalyticsFilterValueSchema).max(100)
+  .refine(uniqueAnalyticsFilterValues, "Choose each analytics filter value only once.");
+export const AnalyticsFiltersSchema = z.object({
+  territories: AnalyticsFilterValuesSchema.default([]),
+  sources: AnalyticsFilterValuesSchema.default([]),
+  productPages: AnalyticsFilterValuesSchema.default([]),
+  versions: AnalyticsFilterValuesSchema.default([]),
+}).strict();
+export type AnalyticsFilters = z.infer<typeof AnalyticsFiltersSchema>;
+
+export const AnalyticsFacetsSchema = z.object({
+  territories: z.array(AnalyticsFilterValueSchema).max(500),
+  sources: z.array(AnalyticsFilterValueSchema).max(500),
+  productPages: z.array(AnalyticsFilterValueSchema).max(500),
+  versions: z.array(AnalyticsFilterValueSchema).max(500),
+}).strict();
+export type AnalyticsFacets = z.infer<typeof AnalyticsFacetsSchema>;
+
+const AnalyticsOverviewQueryBaseSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionSchema.default(1),
+  appIds: z.array(z.string().min(1)).min(1).max(2_000),
+  startDate: AnalyticsIsoDateSchema,
+  endDate: AnalyticsIsoDateSchema,
+  compare: AnalyticsComparisonModeSchema.default("PREVIOUS_PERIOD"),
+  granularity: AnalyticsGranularitySchema.default("DAY"),
+  breakdowns: z.array(AnalyticsBreakdownDimensionSchema).max(5).default(["APP", "TERRITORY", "SOURCE"]),
+  filters: AnalyticsFiltersSchema.optional(),
+}).strict();
+
+export const AnalyticsAppOverviewQuerySchema = AnalyticsOverviewQueryBaseSchema.extend({
+  scope: z.literal("APP"),
+  appIds: z.array(z.string().min(1)).length(1),
+}).strict().refine((query) => query.startDate <= query.endDate, {
+  message: "The start date must not be after the end date.",
+  path: ["startDate"],
+});
+export type AnalyticsAppOverviewQuery = z.infer<typeof AnalyticsAppOverviewQuerySchema>;
+
+export const AnalyticsPortfolioOverviewQuerySchema = AnalyticsOverviewQueryBaseSchema.extend({
+  scope: z.literal("PORTFOLIO"),
+}).strict().refine((query) => query.startDate <= query.endDate, {
+  message: "The start date must not be after the end date.",
+  path: ["startDate"],
+});
+export type AnalyticsPortfolioOverviewQuery = z.infer<typeof AnalyticsPortfolioOverviewQuerySchema>;
+
+export const AnalyticsOverviewQuerySchema = z.union([
+  AnalyticsAppOverviewQuerySchema,
+  AnalyticsPortfolioOverviewQuerySchema,
+]);
+export type AnalyticsOverviewQuery = z.infer<typeof AnalyticsOverviewQuerySchema>;
+
+export const AnalyticsDateRangeSchema = z.object({
+  startDate: AnalyticsIsoDateSchema,
+  endDate: AnalyticsIsoDateSchema,
+}).strict().refine((range) => range.startDate <= range.endDate, {
+  message: "The start date must not be after the end date.",
+  path: ["startDate"],
+});
+export type AnalyticsDateRange = z.infer<typeof AnalyticsDateRangeSchema>;
+
+export const AnalyticsEvidenceIdSchema = z.string().min(1);
+export type AnalyticsEvidenceId = z.infer<typeof AnalyticsEvidenceIdSchema>;
+export const AnalyticsSnapshotIdSchema = z.string().min(1);
+export type AnalyticsSnapshotId = z.infer<typeof AnalyticsSnapshotIdSchema>;
+
+export const AnalyticsMetricValueSchema = z.object({
+  value: z.number().finite().nullable(),
+  availability: AnalyticsAvailabilitySchema,
+}).strict().superRefine((measure, context) => {
+  if ((measure.availability === "AVAILABLE" || measure.availability === "PARTIAL") && measure.value === null) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Available and partial analytics values must contain a number.",
+      path: ["value"],
+    });
+  }
+  if ((measure.availability === "UNAVAILABLE" || measure.availability === "PRIVACY_WITHHELD") && measure.value !== null) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Unavailable and privacy-withheld analytics values must be null.",
+      path: ["value"],
+    });
+  }
+});
+export type AnalyticsMetricValue = z.infer<typeof AnalyticsMetricValueSchema>;
+
+export const AnalyticsMetricChangeSchema = z.object({
+  absolute: z.number().finite().nullable(),
+  relative: z.number().finite().nullable(),
+}).strict();
+export type AnalyticsMetricChange = z.infer<typeof AnalyticsMetricChangeSchema>;
+
+export const AnalyticsKpiSchema = z.object({
+  metric: AnalyticsMetricIdSchema,
+  label: z.string().min(1),
+  unit: AnalyticsMetricUnitSchema,
+  formula: z.string().min(1).nullable(),
+  current: AnalyticsMetricValueSchema,
+  previous: AnalyticsMetricValueSchema.nullable(),
+  change: AnalyticsMetricChangeSchema.nullable(),
+  evidenceId: AnalyticsEvidenceIdSchema,
+}).strict();
+export type AnalyticsKpi = z.infer<typeof AnalyticsKpiSchema>;
+
+export const AnalyticsSeriesPointSchema = z.object({
+  date: AnalyticsIsoDateSchema,
+  current: AnalyticsMetricValueSchema,
+  previous: AnalyticsMetricValueSchema.nullable(),
+}).strict();
+export type AnalyticsSeriesPoint = z.infer<typeof AnalyticsSeriesPointSchema>;
+
+export const AnalyticsSeriesSchema = z.object({
+  metric: AnalyticsMetricIdSchema,
+  label: z.string().min(1),
+  unit: AnalyticsMetricUnitSchema,
+  formula: z.string().min(1).nullable(),
+  points: z.array(AnalyticsSeriesPointSchema),
+  evidenceId: AnalyticsEvidenceIdSchema,
+}).strict();
+export type AnalyticsSeries = z.infer<typeof AnalyticsSeriesSchema>;
+
+export const AnalyticsBreakdownRowSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  appId: z.string().min(1).nullable(),
+  current: AnalyticsMetricValueSchema,
+  previous: AnalyticsMetricValueSchema.nullable(),
+  change: AnalyticsMetricChangeSchema.nullable(),
+  share: z.number().finite().nullable(),
+  evidenceId: AnalyticsEvidenceIdSchema,
+}).strict();
+export type AnalyticsBreakdownRow = z.infer<typeof AnalyticsBreakdownRowSchema>;
+
+export const AnalyticsBreakdownSchema = z.object({
+  dimension: AnalyticsBreakdownDimensionSchema,
+  metric: AnalyticsMetricIdSchema,
+  label: z.string().min(1),
+  rows: z.array(AnalyticsBreakdownRowSchema),
+}).strict();
+export type AnalyticsBreakdown = z.infer<typeof AnalyticsBreakdownSchema>;
+
+export const AnalyticsAppContributionSchema = z.object({
+  appId: z.string().min(1),
+  appName: z.string().min(1),
+  metric: AnalyticsAdditiveMetricIdSchema,
+  currentValue: z.number().finite().nullable(),
+  currentAvailability: AnalyticsAvailabilitySchema,
+  previousValue: z.number().finite().nullable(),
+  previousAvailability: AnalyticsAvailabilitySchema.nullable(),
+  absoluteChange: z.number().finite().nullable(),
+  shareOfPortfolioChange: z.number().finite().nullable(),
+  direction: z.enum(["UP", "DOWN", "FLAT", "UNAVAILABLE"]),
+  evidenceId: AnalyticsEvidenceIdSchema,
+}).strict();
+export type AnalyticsAppContribution = z.infer<typeof AnalyticsAppContributionSchema>;
+
+export const AnalyticsFreshnessSchema = z.object({
+  syncedAt: AnalyticsIsoDateTimeSchema.nullable(),
+  dataThrough: AnalyticsIsoDateSchema.nullable(),
+  expectedDelayDays: z.number().int().nonnegative().nullable(),
+  partial: z.boolean(),
+  detail: z.string().min(1),
+}).strict();
+export type AnalyticsFreshness = z.infer<typeof AnalyticsFreshnessSchema>;
+
+export const AnalyticsPrivacySchema = z.object({
+  aggregatedOnly: z.literal(true),
+  includesOptInUsageData: z.boolean(),
+  mayIncludePrivacyAdjustments: z.boolean(),
+  detail: z.string().min(1),
+}).strict();
+export type AnalyticsPrivacy = z.infer<typeof AnalyticsPrivacySchema>;
+
+export const AnalyticsProvenanceSchema = z.object({
+  source: z.literal("APP_STORE_CONNECT_ANALYTICS_REPORTS"),
+  reportNames: z.array(z.string().min(1)),
+  reportRequestIds: z.array(z.string().min(1)),
+  snapshotId: AnalyticsSnapshotIdSchema,
+  evidenceId: AnalyticsEvidenceIdSchema,
+}).strict();
+export type AnalyticsProvenance = z.infer<typeof AnalyticsProvenanceSchema>;
+
+export const AnalyticsMetricCoverageFamilySchema = z.object({
+  reportName: z.string().min(1),
+  expectedDelayDays: z.number().int().nonnegative(),
+  completeThrough: AnalyticsIsoDateSchema.nullable(),
+  availability: AnalyticsAvailabilitySchema,
+  detail: z.string().min(1),
+}).strict();
+export type AnalyticsMetricCoverageFamily = z.infer<typeof AnalyticsMetricCoverageFamilySchema>;
+
+export const AnalyticsMetricCoverageSchema = z.object({
+  metric: AnalyticsMetricIdSchema,
+  source: z.literal("APP_STORE_CONNECT_ANALYTICS_REPORTS"),
+  formula: z.string().min(1).nullable(),
+  expectedDelayDays: z.number().int().nonnegative(),
+  completeThrough: AnalyticsIsoDateSchema.nullable(),
+  availability: AnalyticsAvailabilitySchema,
+  detail: z.string().min(1),
+  reportFamilies: z.array(AnalyticsMetricCoverageFamilySchema),
+}).strict();
+export type AnalyticsMetricCoverage = z.infer<typeof AnalyticsMetricCoverageSchema>;
+
+const AnalyticsOverviewResponseBaseSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionSchema,
+  period: AnalyticsDateRangeSchema,
+  comparisonPeriod: AnalyticsDateRangeSchema.nullable(),
+  kpis: z.array(AnalyticsKpiSchema),
+  series: z.array(AnalyticsSeriesSchema),
+  breakdowns: z.array(AnalyticsBreakdownSchema),
+  appContributions: z.array(AnalyticsAppContributionSchema),
+  freshness: AnalyticsFreshnessSchema,
+  privacy: AnalyticsPrivacySchema,
+  provenance: AnalyticsProvenanceSchema,
+  metricCoverage: z.array(AnalyticsMetricCoverageSchema),
+  appliedFilters: AnalyticsFiltersSchema,
+  facets: AnalyticsFacetsSchema,
+  snapshotId: AnalyticsSnapshotIdSchema,
+  evidenceId: AnalyticsEvidenceIdSchema,
+}).strict();
+
+export const AnalyticsAppOverviewResponseSchema = AnalyticsOverviewResponseBaseSchema.extend({
+  scope: z.literal("APP"),
+  appId: z.string().min(1),
+}).strict();
+export type AnalyticsAppOverviewResponse = z.infer<typeof AnalyticsAppOverviewResponseSchema>;
+
+export const AnalyticsPortfolioOverviewResponseSchema = AnalyticsOverviewResponseBaseSchema.extend({
+  scope: z.literal("PORTFOLIO"),
+  appIds: z.array(z.string().min(1)).min(1),
+}).strict();
+export type AnalyticsPortfolioOverviewResponse = z.infer<typeof AnalyticsPortfolioOverviewResponseSchema>;
+
+export const AnalyticsOverviewResponseSchema = z.union([
+  AnalyticsAppOverviewResponseSchema,
+  AnalyticsPortfolioOverviewResponseSchema,
+]);
+export type AnalyticsOverviewResponse = z.infer<typeof AnalyticsOverviewResponseSchema>;
+
+export const AnalyticsReportAccessTypeSchema = z.enum(["ONE_TIME_SNAPSHOT", "ONGOING"]);
+export type AnalyticsReportAccessType = z.infer<typeof AnalyticsReportAccessTypeSchema>;
+
+export const AnalyticsReportRequestSchema = z.object({
+  id: z.string().min(1),
+  appId: z.string().min(1),
+  accessType: AnalyticsReportAccessTypeSchema,
+  createdAt: AnalyticsIsoDateTimeSchema.nullable(),
+  stoppedDueToInactivity: z.boolean(),
+}).strict();
+export type AnalyticsReportRequest = z.infer<typeof AnalyticsReportRequestSchema>;
+
+export const AnalyticsReportRequestCreateInputSchema = z.object({
+  appId: z.string().min(1),
+  accessType: AnalyticsReportAccessTypeSchema,
+}).strict();
+export type AnalyticsReportRequestCreateInput = z.infer<typeof AnalyticsReportRequestCreateInputSchema>;
+
+export const AnalyticsStatusStateSchema = z.enum([
+  "NOT_CONFIGURED",
+  "WAITING_FOR_DATA",
+  "READY",
+  "SYNCING",
+  "PARTIAL",
+  "ERROR",
+]);
+export type AnalyticsStatusState = z.infer<typeof AnalyticsStatusStateSchema>;
+
+export const AnalyticsStatusResponseSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionSchema,
+  issuerId: z.string().min(1).nullable(),
+  state: AnalyticsStatusStateSchema,
+  reportRequests: z.array(AnalyticsReportRequestSchema),
+  freshness: AnalyticsFreshnessSchema,
+  detail: z.string().min(1),
+}).strict();
+export type AnalyticsStatusResponse = z.infer<typeof AnalyticsStatusResponseSchema>;
+
+export const AnalyticsObservationSchema = z.object({
+  date: AnalyticsIsoDateSchema,
+  appId: z.string().min(1),
+  metric: AnalyticsAdditiveMetricIdSchema,
+  value: z.number().finite().nullable(),
+  currency: z.literal("USD").nullable(),
+  dimensions: z.record(z.string(), z.string()),
+  reportName: z.string().min(1),
+  availability: AnalyticsAvailabilitySchema,
+  evidenceId: AnalyticsEvidenceIdSchema,
+}).strict().superRefine((observation, context) => {
+  const numericAvailability = observation.availability === "AVAILABLE" || observation.availability === "PARTIAL";
+  if (numericAvailability && observation.value === null) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Available and partial analytics observations must contain a number.",
+      path: ["value"],
+    });
+  }
+  if (!numericAvailability && observation.value !== null) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Unavailable and privacy-withheld analytics observations must contain null, not a numeric sentinel.",
+      path: ["value"],
+    });
+  }
+  if (observation.metric !== "PROCEEDS" && observation.value !== null && observation.value < 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Count observations cannot be negative; only proceeds may be negative after refunds.",
+      path: ["value"],
+    });
+  }
+});
+export type AnalyticsObservation = z.infer<typeof AnalyticsObservationSchema>;
+
+export const AnalyticsSegmentEvidenceSchema = z.object({
+  segmentId: z.string().min(1),
+  checksumSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  byteCount: z.number().int().nonnegative(),
+  rowCount: z.number().int().nonnegative(),
+}).strict();
+export type AnalyticsSegmentEvidence = z.infer<typeof AnalyticsSegmentEvidenceSchema>;
+
+export const AnalyticsFactBatchSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionSchema,
+  issuerId: z.string().min(1),
+  appId: z.string().min(1),
+  accessType: AnalyticsReportAccessTypeSchema,
+  reportRequestId: z.string().min(1),
+  reportId: z.string().min(1),
+  reportName: z.string().min(1),
+  category: z.string().min(1),
+  granularity: z.literal("DAILY"),
+  instanceId: z.string().min(1),
+  processingDate: AnalyticsIsoDateSchema,
+  partitionDates: z.array(AnalyticsIsoDateSchema),
+  segmentIds: z.array(z.string().min(1)).min(1),
+  segments: z.array(AnalyticsSegmentEvidenceSchema).min(1),
+  expectedSegmentCount: z.number().int().positive(),
+  verifiedSegmentCount: z.number().int().positive(),
+  observations: z.array(AnalyticsObservationSchema),
+  snapshotId: AnalyticsSnapshotIdSchema,
+  evidenceId: AnalyticsEvidenceIdSchema,
+}).strict().superRefine((batch, context) => {
+  if (batch.expectedSegmentCount !== batch.verifiedSegmentCount || batch.segments.length !== batch.verifiedSegmentCount) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Only complete, verified report instances may be stored." });
+  }
+  const segmentIds = [...batch.segmentIds].sort();
+  const evidenceIds = batch.segments.map((segment) => segment.segmentId).sort();
+  if (JSON.stringify(segmentIds) !== JSON.stringify(evidenceIds)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Segment evidence must cover every reported segment ID." });
+  }
+  if (new Set(batch.partitionDates).size !== batch.partitionDates.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Analytics partition dates must be unique.",
+      path: ["partitionDates"],
+    });
+  }
+  const partitionDates = new Set(batch.partitionDates);
+  batch.partitionDates.forEach((date, index) => {
+    if (date > batch.processingDate) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Analytics partition dates cannot be later than the report processing date.",
+        path: ["partitionDates", index],
+      });
+    }
+  });
+  batch.observations.forEach((observation, index) => {
+    if (!partitionDates.has(observation.date)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Every analytics observation must belong to a declared raw partition date.",
+        path: ["observations", index, "date"],
+      });
+    }
+  });
+});
+export type AnalyticsFactBatch = z.infer<typeof AnalyticsFactBatchSchema>;
+
+export const AnalyticsObservationQuerySchema = z.object({
+  issuerId: z.string().min(1),
+  appIds: z.array(z.string().min(1)).min(1).max(2_000),
+  startDate: AnalyticsIsoDateSchema,
+  endDate: AnalyticsIsoDateSchema,
+  filters: AnalyticsFiltersSchema.optional(),
+  facetStartDate: AnalyticsIsoDateSchema.optional(),
+}).strict().refine((query) => query.startDate <= query.endDate, {
+  message: "The start date must not be after the end date.",
+  path: ["startDate"],
+}).refine((query) => query.facetStartDate === undefined || query.facetStartDate <= query.endDate, {
+  message: "The facet start date must not be after the end date.",
+  path: ["facetStartDate"],
+});
+export type AnalyticsObservationQuery = z.infer<typeof AnalyticsObservationQuerySchema>;
+
+export const AnalyticsSyncInputSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionSchema.default(1),
+  appIds: z.array(z.string().min(1)).min(1).max(2_000),
+  force: z.boolean().default(false),
+}).strict();
+export type AnalyticsSyncInput = z.infer<typeof AnalyticsSyncInputSchema>;
+
+export const AnalyticsSyncStateSchema = z.enum(["QUEUED", "RUNNING", "SUCCEEDED", "PARTIAL", "FAILED"]);
+export type AnalyticsSyncState = z.infer<typeof AnalyticsSyncStateSchema>;
+
+export const AnalyticsSyncResultSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionSchema,
+  issuerId: z.string().min(1),
+  runId: z.string().min(1),
+  state: AnalyticsSyncStateSchema,
+  appIds: z.array(z.string().min(1)).min(1),
+  batches: z.array(AnalyticsFactBatchSchema),
+  reportRequests: z.array(AnalyticsReportRequestSchema),
+  startedAt: AnalyticsIsoDateTimeSchema,
+  completedAt: AnalyticsIsoDateTimeSchema.nullable(),
+  snapshotId: AnalyticsSnapshotIdSchema.nullable(),
+  evidenceId: AnalyticsEvidenceIdSchema,
+  freshness: AnalyticsFreshnessSchema,
+  error: z.string().min(1).nullable(),
+}).strict();
+export type AnalyticsSyncResult = z.infer<typeof AnalyticsSyncResultSchema>;
+
+export const AnalyticsSyncResponseSchema = AnalyticsSyncResultSchema.omit({ batches: true }).extend({
+  batchCount: z.number().int().nonnegative(),
+  observationCount: z.number().int().nonnegative(),
+}).strict();
+export type AnalyticsSyncResponse = z.infer<typeof AnalyticsSyncResponseSchema>;
+
 export const AppleAdsStatusSchema = z.object({
   mode: AgentModeSchema,
   configured: z.boolean(),
@@ -913,6 +1411,21 @@ export const UpsertCustomerReviewResponseMutationPlanSchema = PlanBaseSchema.ext
 });
 export type UpsertCustomerReviewResponseMutationPlan = z.infer<typeof UpsertCustomerReviewResponseMutationPlanSchema>;
 
+export const CreateAnalyticsReportRequestMutationPlanSchema = PlanBaseSchema.extend({
+  operation: z.literal("analytics.report_request.create"),
+  target: z.object({
+    appId: z.string().min(1),
+    appName: z.string().min(1),
+    accessType: AnalyticsReportAccessTypeSchema,
+  }).strict(),
+  before: z.object({
+    matchingReportRequestIds: z.array(z.string().min(1)),
+    activeOngoingReportRequestIds: z.array(z.string().min(1)),
+  }).strict(),
+  after: AnalyticsReportRequestCreateInputSchema,
+});
+export type CreateAnalyticsReportRequestMutationPlan = z.infer<typeof CreateAnalyticsReportRequestMutationPlanSchema>;
+
 export const AppleAdsCampaignSnapshotSchema = AppleAdsCampaignSchema.pick({
   id: true,
   adAccountId: true,
@@ -1025,6 +1538,7 @@ export const MutationPlanSchema = z.discriminatedUnion("operation", [
   UpdateScreenshotsMutationPlanSchema,
   SubmitVersionMutationPlanSchema,
   UpsertCustomerReviewResponseMutationPlanSchema,
+  CreateAnalyticsReportRequestMutationPlanSchema,
   CreateAppleAdsCampaignMutationPlanSchema,
   UpdateAppleAdsCampaignMutationPlanSchema,
   CreateAppleAdsAdGroupMutationPlanSchema,

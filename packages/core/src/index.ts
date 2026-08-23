@@ -12,6 +12,9 @@ import type {
   AppleAdsCampaignSnapshot,
   AppleAdsAdGroupSnapshot,
   AppleAdsKeywordSnapshot,
+  AnalyticsOverviewQuery,
+  AnalyticsReportRequestCreateInput,
+  AnalyticsSyncInput,
   AppStoreLocale,
   AppStorePlatform,
   AppStoreVersion,
@@ -46,8 +49,15 @@ import type {
   VersionLocalization,
   VersionLocalizationPatch,
 } from "@asc-studio/contracts";
+import {
+  AnalyticsService,
+  type AnalyticsOverviewContext,
+  type AnalyticsProvider,
+  type AnalyticsStore,
+} from "./analytics.js";
 
 export type { UpsertCustomerReviewResponseInput } from "@asc-studio/contracts";
+export * from "./analytics.js";
 
 export interface AscProvider {
   getStatus(): Promise<AgentStatus>;
@@ -142,6 +152,8 @@ export interface PlanStore {
 export interface CoreDependencies {
   provider: AscProvider;
   adsProvider?: AppleAdsProvider;
+  analyticsProvider?: AnalyticsProvider;
+  analyticsStore?: AnalyticsStore;
   store: PlanStore;
   now: () => Date;
   id: () => string;
@@ -281,6 +293,27 @@ export class AscStudioService {
 
   getAppleAdsStatus() {
     return this.appleAdsProvider().getAppleAdsStatus();
+  }
+
+  getAnalyticsStatus() {
+    return this.analyticsService().getStatus();
+  }
+
+  getAnalyticsOverview(query: AnalyticsOverviewQuery, context: AnalyticsOverviewContext) {
+    return this.analyticsService().overview(query, context);
+  }
+
+  syncAnalytics(input: AnalyticsSyncInput) {
+    return this.analyticsService().sync(input);
+  }
+
+  getAnalyticsSyncRun(runId: string) {
+    if (!runId.trim()) throw new DomainError("analytics_sync_run_required", "Choose an analytics sync run.");
+    return this.analyticsService().getSyncRun(runId);
+  }
+
+  listAnalyticsReportRequests(appId?: string) {
+    return this.analyticsService().listReportRequests(appId);
   }
 
   researchAppleAdsKeywords(input: AppleAdsKeywordResearchInput) {
@@ -804,6 +837,61 @@ export class AscStudioService {
     return plan;
   }
 
+  async createAnalyticsReportRequestPlan(
+    input: AnalyticsReportRequestCreateInput,
+    actor: AuditEvent["actor"],
+  ): Promise<MutationPlan> {
+    const [apps, reportRequests, context] = await Promise.all([
+      this.dependencies.provider.listApps({ paginate: true }),
+      this.analyticsProvider().listAnalyticsReportRequests(input.appId),
+      this.activeContext(),
+    ]);
+    const app = apps.find((candidate) => candidate.id === input.appId);
+    if (!app) throw new DomainError("app_not_found", "The selected app no longer exists in this App Store Connect account.");
+    const matchingReportRequestIds = reportRequests
+      .filter((request) => request.appId === input.appId && request.accessType === input.accessType)
+      .map((request) => request.id)
+      .sort();
+    const activeOngoingReportRequestIds = input.accessType === "ONGOING"
+      ? reportRequests
+        .filter((request) => request.appId === input.appId && request.accessType === "ONGOING" && !request.stoppedDueToInactivity)
+        .map((request) => request.id)
+        .sort()
+      : [];
+    if (activeOngoingReportRequestIds.length > 0) {
+      throw new DomainError(
+        "analytics_report_request_exists",
+        `${app.name} already has an active ongoing analytics report request.`,
+      );
+    }
+
+    const createdAt = this.dependencies.now();
+    const expiresAt = new Date(createdAt.getTime() + 10 * 60 * 1000);
+    const target = { appId: app.id, appName: app.name, accessType: input.accessType };
+    const planWithoutDigest = {
+      operation: "analytics.report_request.create" as const,
+      context,
+      target,
+      before: { matchingReportRequestIds, activeOngoingReportRequestIds },
+      after: input,
+      expiresAt: expiresAt.toISOString(),
+    };
+    const plan: MutationPlan = {
+      id: this.dependencies.id(),
+      ...planWithoutDigest,
+      risk: "mutation",
+      state: "awaiting_confirmation",
+      createdAt: createdAt.toISOString(),
+      digest: this.dependencies.digest(stableJson(planWithoutDigest)),
+      summary: input.accessType === "ONGOING"
+        ? `Create ongoing analytics report request for ${app.name}`
+        : `Create one-time analytics snapshot request for ${app.name}; Apple may enforce its snapshot frequency limit`,
+      error: null,
+    };
+    await this.savePlanned(plan, actor, app.id);
+    return plan;
+  }
+
   async createUpdateAppleAdsCampaignPlan(input: UpdateAppleAdsCampaignInput, actor: AuditEvent["actor"]): Promise<MutationPlan> {
     const [campaign, campaigns, context] = await Promise.all([
       this.appleAdsProvider().getAppleAdsCampaign(input.campaignId),
@@ -989,6 +1077,8 @@ export class AscStudioService {
         return this.confirmSubmitVersionPlan(plan, actor);
       case "customer_review.response.upsert":
         return this.confirmUpsertCustomerReviewResponsePlan(plan, actor);
+      case "analytics.report_request.create":
+        return this.confirmCreateAnalyticsReportRequestPlan(plan, actor);
       case "apple_ads.campaign.create":
         return this.confirmCreateAppleAdsCampaignPlan(plan, actor);
       case "apple_ads.campaign.update":
@@ -1008,6 +1098,39 @@ export class AscStudioService {
 
   async recordSync(count: number, actor: AuditEvent["actor"]) {
     await this.audit(actor, "builds.sync", "succeeded", "testflight", `Synced ${count} builds`, "success");
+  }
+
+  private async confirmCreateAnalyticsReportRequestPlan(
+    plan: Extract<MutationPlan, { operation: "analytics.report_request.create" }>,
+    actor: AuditEvent["actor"],
+  ) {
+    const [apps, reportRequests] = await Promise.all([
+      this.dependencies.provider.listApps({ paginate: true }),
+      this.analyticsProvider().listAnalyticsReportRequests(plan.target.appId),
+    ]);
+    const app = apps.find((candidate) => candidate.id === plan.target.appId);
+    if (!app || app.name !== plan.target.appName) {
+      await this.markStale(plan, actor, plan.target.appId, "The selected app changed after planning.");
+    }
+    const matchingReportRequestIds = reportRequests
+      .filter((request) => request.appId === plan.target.appId && request.accessType === plan.target.accessType)
+      .map((request) => request.id)
+      .sort();
+    const activeOngoingReportRequestIds = plan.target.accessType === "ONGOING"
+      ? reportRequests
+        .filter((request) => request.appId === plan.target.appId && request.accessType === "ONGOING" && !request.stoppedDueToInactivity)
+        .map((request) => request.id)
+        .sort()
+      : [];
+    if (
+      stableJson(matchingReportRequestIds) !== stableJson(plan.before.matchingReportRequestIds)
+      || stableJson(activeOngoingReportRequestIds) !== stableJson(plan.before.activeOngoingReportRequestIds)
+    ) {
+      await this.markStale(plan, actor, plan.target.appId, "Analytics report requests changed after planning.");
+    }
+    return this.runPlan(plan, actor, plan.target.appId, async () => {
+      await this.analyticsProvider().createAnalyticsReportRequest(plan.after);
+    });
   }
 
   private async confirmUpsertCustomerReviewResponsePlan(
@@ -1306,6 +1429,25 @@ export class AscStudioService {
       throw new DomainError("apple_ads_unavailable", "Apple Ads is not available in this ASC Studio session.");
     }
     return this.dependencies.adsProvider;
+  }
+
+  private analyticsProvider() {
+    if (!this.dependencies.analyticsProvider) {
+      throw new DomainError("analytics_unavailable", "Analytics is not available in this ASC Studio session.");
+    }
+    return this.dependencies.analyticsProvider;
+  }
+
+  private analyticsService() {
+    if (!this.dependencies.analyticsStore) {
+      throw new DomainError("analytics_unavailable", "Analytics storage is not available in this ASC Studio session.");
+    }
+    return new AnalyticsService({
+      provider: this.analyticsProvider(),
+      store: this.dependencies.analyticsStore,
+      now: this.dependencies.now,
+      digest: this.dependencies.digest,
+    });
   }
 
   private async requireVersion(appId: string, versionId: string) {

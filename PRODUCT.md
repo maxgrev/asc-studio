@@ -29,7 +29,9 @@ The product's distinguishing mechanism is one local policy layer shared by the G
 
 ## Capabilities and Constraints
 
-- Current complete workflows cover TestFlight builds and group assignment; release versions and frequent metadata; guarded App Review submission; assisted release-copy translation; screenshots; app-scoped written customer reviews, grounded reply drafting, and guarded public responses; multiple App Store Connect accounts; and Apple Ads research, reporting, and guarded campaign management.
+- Current complete workflows cover TestFlight builds and group assignment; release versions and frequent metadata; guarded App Review submission; assisted release-copy translation; screenshots; app-scoped written customer reviews, grounded reply drafting, and guarded public responses; portfolio-to-app App Analytics; multiple App Store Connect accounts; and Apple Ads research, reporting, and guarded campaign management.
+- Analytics opens on a whole-portfolio view, then preserves range, comparison, and selected metric while narrowing to one app. It exposes only additive metrics and ratios recomputed from additive totals, keeps report provenance and freshness visible, and distinguishes zero, missing, partial, and privacy-withheld data.
+- The first Analytics slice ingests five Standard daily report families into an issuer- and app-scoped local fact cache. Complete instances replace older date partitions by processing date, and overlapping ongoing/snapshot requests cannot double-count the same logical report.
 - App Store Connect and Apple Ads credentials are separate. Imported private keys pass through the authenticated browser form once but are not retained there; generated Apple Ads private keys never enter the browser. No secret enters SQLite audit data or logs.
 - OpenAI writing assistance uses one local-agent BYOK configuration for release translation and review replies. **Connections → Writing assistance** accepts a key and optional model once; the browser briefly holds and sends them to the authenticated loopback agent, never stores the key, and never receives it back.
 - Each provider's GUI-managed bundle is encrypted in the current user's default macOS Keychain. The data directory keeps `keychain-vault-id`, a stable non-secret random UUID that contains no credential or account metadata but is availability-critical: deleting it loses the installation's association, while copying it under the same macOS user shares the namespace and process lock.
@@ -44,7 +46,7 @@ The product's distinguishing mechanism is one local policy layer shared by the G
 - New Apple Ads campaigns, ad groups, and keywords start paused.
 - The public Apple API is the product boundary. Unsupported work must be identified as web-only or deferred, never disguised behind private endpoints or browser automation.
 - Initial app creation, some certificates and service keys, privacy-label answers, Resolution Center messages, and some commercial agreements do not currently have complete public API coverage.
-- Direct IPA/PKG upload, a complete Store Listing editor, monetization, distribution, activity, additional submission controls, version-scoped review browsing, aggregate storefront ratings, and review-response deletion remain future work.
+- Direct IPA/PKG upload, a complete Store Listing editor, monetization, distribution, activity, additional submission controls, version-scoped review browsing, aggregate storefront ratings, review-response deletion, deeper analytics cohorts/reconciliation, scheduled analytics sync, and analytics AI explanations remain future work.
 - ASC Studio is not affiliated with Apple.
 
 ## Brand Commitments
@@ -53,8 +55,8 @@ The product name is ASC Studio. Product copy is precise, calm, and operational: 
 
 ## Evidence on Hand
 
-- The repository contains automated provider, policy, route, and store tests plus deterministic demo data.
-- Accepted concepts and verified implementation captures live in `docs/design/` for TestFlight, Releases, App Review submission, Apple Ads, and Apple-services connection flows.
+- The repository contains automated provider, policy, route, analytics-ingestion, and store tests plus deterministic demo data.
+- Accepted concepts and verified implementation captures live in `docs/design/` for TestFlight, Releases, App Review submission, Apple Ads, and Apple-services connection flows. The approved Analytics direction and its durable surface contract live under `.impeccable/mocks/decision/` and `apps/web/.impeccable/surfaces/`.
 - The README and roadmap describe shipped workflows and explicit limits.
 - No testimonials, customer counts, adoption metrics, or independent benchmarks are established; future product surfaces must not fabricate them.
 

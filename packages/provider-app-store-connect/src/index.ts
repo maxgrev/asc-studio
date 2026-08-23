@@ -4,6 +4,8 @@ import { basename, join, relative, resolve, sep } from "node:path";
 import {
   AppStoreLocaleSchema,
   AppStorePlatformSchema,
+  type AnalyticsReportRequestCreateInput,
+  type AnalyticsSyncInput,
   type AddBuildToGroupInput,
   type AgentStatus,
   type AppStorePlatform,
@@ -33,6 +35,7 @@ import type {
   ApplyScreenshotChangesInput,
   AppListOptions,
   AscProvider,
+  AnalyticsProvider,
   BuildListOptions,
   CustomerReviewListOptions,
   VersionListOptions,
@@ -46,6 +49,8 @@ import {
   type AppStoreConnectCredentials,
   type CredentialsResolver,
 } from "./client.js";
+import { AppStoreConnectAnalyticsReports } from "./analytics.js";
+export { AnalyticsPermissionError } from "./analytics.js";
 import {
   AppsPageSchema,
   AppStoreVersionResponseSchema,
@@ -355,8 +360,9 @@ const validationReport = (
 const toAppleValue = (value: string) => value === "" ? null : value;
 const wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-export class AppStoreConnectProvider implements AscProvider {
+export class AppStoreConnectProvider implements AscProvider, AnalyticsProvider {
   private readonly client: AppStoreConnectClient;
+  private readonly analytics: AppStoreConnectAnalyticsReports;
   private readonly uploadDirectory: string | null;
   private readonly mediaProcessingTimeoutMs: number;
 
@@ -372,8 +378,29 @@ export class AppStoreConnectProvider implements AscProvider {
       ...(options.now ? { now: options.now } : {}),
       ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
     });
+    this.analytics = new AppStoreConnectAnalyticsReports(this.client, {
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+      ...(options.now ? { now: options.now } : {}),
+      ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+    });
     this.uploadDirectory = options.uploadDirectory ? resolve(options.uploadDirectory) : null;
     this.mediaProcessingTimeoutMs = options.mediaProcessingTimeoutMs ?? 120_000;
+  }
+
+  getAnalyticsStatus() {
+    return this.analytics.getStatus();
+  }
+
+  listAnalyticsReportRequests(appId?: string) {
+    return this.analytics.listReportRequests(appId);
+  }
+
+  createAnalyticsReportRequest(input: AnalyticsReportRequestCreateInput) {
+    return this.analytics.createReportRequest(input);
+  }
+
+  syncAnalytics(input: AnalyticsSyncInput) {
+    return this.analytics.sync(input);
   }
 
   async getStatus(): Promise<AgentStatus> {

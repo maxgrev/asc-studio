@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   AddBuildToGroupInput,
   AgentStatus,
@@ -9,6 +10,13 @@ import type {
   AppleAdsKeywordResearchInput,
   AppleAdsKeywordResearchResult,
   AppleAdsStatus,
+  AnalyticsFactBatch,
+  AnalyticsObservation,
+  AnalyticsReportRequest,
+  AnalyticsReportRequestCreateInput,
+  AnalyticsStatusResponse,
+  AnalyticsSyncInput,
+  AnalyticsSyncResult,
   AppStorePlatform,
   AppStoreVersion,
   AppSummary,
@@ -37,6 +45,7 @@ import type {
   VersionSubmissionStatus,
 } from "@asc-studio/contracts";
 import type {
+  AnalyticsProvider,
   AppleAdsProvider,
   ApplyScreenshotChangesInput,
   AppListOptions,
@@ -61,6 +70,166 @@ const fieldLog: AppSummary = {
 };
 
 const apps = [orbitNotes, fieldLog];
+
+export const demoAnalyticsIssuerId = "demo-issuer";
+export const demoAnalyticsFixtureVersion = "page-type-v2";
+const demoAnalyticsSyncedAt = "2026-08-22T15:00:00.000Z";
+const demoAnalyticsDataThrough = "2026-08-17";
+
+const demoAnalyticsFreshness = {
+  syncedAt: demoAnalyticsSyncedAt,
+  dataThrough: demoAnalyticsDataThrough,
+  expectedDelayDays: 5,
+  partial: true,
+  detail: "Sample reports are complete through Aug 17; newer numeric facts remain partial during report-specific correction windows, and missing data is not zero.",
+} as const;
+
+const initialDemoAnalyticsReportRequests: AnalyticsReportRequest[] = apps.map((app, index) => ({
+  id: `demo-analytics-request-${index + 1}`,
+  appId: app.id,
+  accessType: "ONGOING",
+  createdAt: "2026-05-20T12:00:00.000Z",
+  stoppedDueToInactivity: false,
+}));
+
+const addUtcDays = (date: string, days: number) => {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+};
+
+const demoAnalyticsCells = [
+  { territory: "USA", source: "App Store Search", pageType: "Product Page", share: 0.46 },
+  { territory: "MEX", source: "App Store Browse", pageType: "No Page", share: 0.23 },
+  { territory: "GBR", source: "Web Referral", pageType: "Store Sheet", share: 0.18 },
+  { territory: "JPN", source: "App Referral", pageType: "In-App Event", share: 0.13 },
+] as const;
+
+type DemoAdditiveMetric = AnalyticsObservation["metric"];
+type DemoPageType = typeof demoAnalyticsCells[number]["pageType"];
+
+const demoPageTypeForMetric = (
+  metric: DemoAdditiveMetric,
+  cell: typeof demoAnalyticsCells[number],
+  index: number,
+): DemoPageType => {
+  if (metric === "PRODUCT_PAGE_VIEWS") return "Product Page";
+  if (metric === "IMPRESSIONS") return index % 2 === 0 ? "Product Page" : "No Page";
+  return cell.pageType;
+};
+
+const distributeDemoMetric = (
+  app: AppSummary,
+  metric: DemoAdditiveMetric,
+  date: string,
+  total: number,
+  dayIndex: number,
+  reportName: string,
+): AnalyticsObservation[] => {
+  let assigned = 0;
+  return demoAnalyticsCells.map((cell, index) => {
+    const isLast = index === demoAnalyticsCells.length - 1;
+    const value = isLast
+      ? Number((total - assigned).toFixed(metric === "PROCEEDS" ? 2 : 0))
+      : Number((total * cell.share).toFixed(metric === "PROCEEDS" ? 2 : 0));
+    assigned += value;
+    const privacyLimited = app.id === fieldLog.id && metric === "SESSIONS" && cell.territory === "JPN" && dayIndex % 6 === 0;
+    return {
+      date,
+      appId: app.id,
+      metric,
+      value: privacyLimited ? null : value,
+      currency: metric === "PROCEEDS" ? "USD" : null,
+      dimensions: {
+        territory: cell.territory,
+        source: cell.source,
+        productPage: demoPageTypeForMetric(metric, cell, index),
+        version: app.id === orbitNotes.id
+          ? index < 2 ? "2.5.0" : "2.4.0"
+          : index < 2 ? "1.8.0" : "1.7.0",
+      },
+      reportName,
+      availability: privacyLimited ? "PRIVACY_WITHHELD" : "AVAILABLE",
+      evidenceId: `demo-evidence:${app.id}:${metric}:${date}:${cell.territory}`,
+    };
+  });
+};
+
+const demoAnalyticsObservations = (app: AppSummary) => {
+  const observations = new Map<string, AnalyticsObservation[]>();
+  const startDate = "2026-05-23";
+  for (let dayIndex = 0; dayIndex < 90; dayIndex += 1) {
+    const date = addUtcDays(startDate, dayIndex);
+    const weekdayLift = [0, 8, 14, 11, 18, 23, 6][dayIndex % 7]!;
+    const orbitReleaseLift = app.id === orbitNotes.id && date >= "2026-08-06" ? 76 : 0;
+    const fieldSeasonalDip = app.id === fieldLog.id && date >= "2026-08-12" ? -18 : 0;
+    const downloads = Math.max(1, Math.round(
+      (app.id === orbitNotes.id ? 248 : 126)
+      + dayIndex * (app.id === orbitNotes.id ? 0.72 : 0.24)
+      + weekdayLift
+      + orbitReleaseLift
+      + fieldSeasonalDip,
+    ));
+    const productPageViews = Math.round(downloads * (app.id === orbitNotes.id ? 3.08 : 3.62) + 42);
+    const impressions = Math.round(productPageViews * (app.id === orbitNotes.id ? 5.6 : 4.9));
+    const firstTimeDownloads = Math.round(downloads * (app.id === orbitNotes.id ? 0.74 : 0.68));
+    const sessions = Math.round(downloads * (app.id === orbitNotes.id ? 4.75 : 3.85));
+    const proceeds = Number((downloads * (app.id === orbitNotes.id ? 1.42 : 0.78)).toFixed(2));
+    const definitions: Array<[string, DemoAdditiveMetric, number, string]> = [
+      ["discovery", "IMPRESSIONS", impressions, "App Store Discovery and Engagement Standard"],
+      ["discovery", "PRODUCT_PAGE_VIEWS", productPageViews, "App Store Discovery and Engagement Standard"],
+      ["downloads", "DOWNLOADS", downloads, "App Store Downloads Standard"],
+      ["downloads", "FIRST_TIME_DOWNLOADS", firstTimeDownloads, "App Store Downloads Standard"],
+      ["usage", "SESSIONS", sessions, "App Sessions Standard"],
+      ["commerce", "PROCEEDS", proceeds, "App Store Purchases Standard"],
+    ];
+    for (const [group, metric, total, reportName] of definitions) {
+      const values = observations.get(group) ?? [];
+      values.push(...distributeDemoMetric(app, metric, date, total, dayIndex, reportName));
+      observations.set(group, values);
+    }
+  }
+  return observations;
+};
+
+export const demoAnalyticsFactBatches = (appIds: string[] = apps.map((app) => app.id)): AnalyticsFactBatch[] => {
+  const reportRequests = new Map(initialDemoAnalyticsReportRequests.map((request) => [request.appId, request]));
+  return apps.filter((app) => appIds.includes(app.id)).flatMap((app) => {
+    const byGroup = demoAnalyticsObservations(app);
+    const request = reportRequests.get(app.id)!;
+    return [...byGroup.entries()].map(([group, observations]): AnalyticsFactBatch => {
+      const reportName = observations[0]!.reportName;
+      const segmentId = `demo-segment-${app.id}-${group}`;
+      const checksumSha256 = createHash("sha256").update(JSON.stringify(observations)).digest("hex");
+      return {
+        schemaVersion: 1,
+        issuerId: demoAnalyticsIssuerId,
+        appId: app.id,
+        accessType: "ONGOING",
+        reportRequestId: request.id,
+        reportId: `demo-report-${app.id}-${group}`,
+        reportName,
+        category: group === "usage" ? "USAGE" : group === "commerce" || group === "downloads" ? "COMMERCE" : "ENGAGEMENT",
+        granularity: "DAILY",
+        instanceId: `demo-instance-${app.id}-${group}-2026-08-22`,
+        processingDate: "2026-08-22",
+        partitionDates: [...new Set(observations.map((observation) => observation.date))].sort(),
+        segmentIds: [segmentId],
+        segments: [{
+          segmentId,
+          checksumSha256,
+          byteCount: JSON.stringify(observations).length,
+          rowCount: observations.length,
+        }],
+        expectedSegmentCount: 1,
+        verifiedSegmentCount: 1,
+        observations,
+        snapshotId: `demo-snapshot-${app.id}-${group}-2026-08-22`,
+        evidenceId: `demo-evidence-${app.id}-${group}-2026-08-22`,
+      };
+    });
+  });
+};
 
 const orbitReviewFixtures: CustomerReview[] = [
   {
@@ -603,13 +772,14 @@ const screenshotSnapshot = (asset: ScreenshotAsset): ScreenshotAssetSnapshot => 
   sortOrder: asset.sortOrder,
 });
 
-export class MockAscProvider implements AscProvider, AppleAdsProvider {
+export class MockAscProvider implements AscProvider, AppleAdsProvider, AnalyticsProvider {
   private readonly attachedBuildIds = new Map<string, string>();
   private readonly submissions = new Map<string, VersionSubmissionStatus>();
   private readonly reviewsByApp = structuredClone(reviewFixturesByApp);
   private readonly adsCampaigns = structuredClone(demoCampaigns);
   private readonly adsAdGroups = structuredClone(demoAdGroups);
   private readonly adsKeywords = structuredClone(demoKeywords);
+  private readonly analyticsReportRequests = structuredClone(initialDemoAnalyticsReportRequests);
   private adsSequence = 1000;
 
   async getStatus(): Promise<AgentStatus> {
@@ -632,6 +802,62 @@ export class MockAscProvider implements AscProvider, AppleAdsProvider {
       provider: "demo",
       adAccountId: "demo-ads-account",
       detail: "Demo Apple Ads data is isolated and never calls Apple.",
+    };
+  }
+
+  async getAnalyticsStatus(): Promise<AnalyticsStatusResponse> {
+    return {
+      schemaVersion: 1,
+      issuerId: demoAnalyticsIssuerId,
+      state: "PARTIAL",
+      reportRequests: structuredClone(this.analyticsReportRequests),
+      freshness: demoAnalyticsFreshness,
+      detail: "Sample portfolio analytics are ready. A small set of Field Log session rows demonstrates Apple's privacy-limited state.",
+    };
+  }
+
+  async listAnalyticsReportRequests(appId?: string) {
+    return structuredClone(appId
+      ? this.analyticsReportRequests.filter((request) => request.appId === appId)
+      : this.analyticsReportRequests);
+  }
+
+  async createAnalyticsReportRequest(input: AnalyticsReportRequestCreateInput) {
+    if (!apps.some((app) => app.id === input.appId)) throw new Error(`App ${input.appId} was not found.`);
+    const existing = this.analyticsReportRequests.find((request) => (
+      request.appId === input.appId && request.accessType === input.accessType
+    ));
+    if (existing) return structuredClone(existing);
+    const request: AnalyticsReportRequest = {
+      id: `demo-analytics-request-${this.analyticsReportRequests.length + 1}`,
+      appId: input.appId,
+      accessType: input.accessType,
+      createdAt: demoAnalyticsSyncedAt,
+      stoppedDueToInactivity: false,
+    };
+    this.analyticsReportRequests.push(request);
+    return structuredClone(request);
+  }
+
+  async syncAnalytics(input: AnalyticsSyncInput): Promise<AnalyticsSyncResult> {
+    const appIds = [...new Set(input.appIds)];
+    const unknown = appIds.find((appId) => !apps.some((app) => app.id === appId));
+    if (unknown) throw new Error(`App ${unknown} was not found.`);
+    const batches = demoAnalyticsFactBatches(appIds);
+    return {
+      schemaVersion: 1,
+      issuerId: demoAnalyticsIssuerId,
+      runId: `demo-analytics-sync-${appIds.slice().sort().join("-")}`,
+      state: "SUCCEEDED",
+      appIds,
+      batches: structuredClone(batches),
+      reportRequests: structuredClone(this.analyticsReportRequests.filter((request) => appIds.includes(request.appId))),
+      startedAt: demoAnalyticsSyncedAt,
+      completedAt: demoAnalyticsSyncedAt,
+      snapshotId: "demo-portfolio-snapshot-2026-08-22",
+      evidenceId: "demo-portfolio-evidence-2026-08-22",
+      freshness: demoAnalyticsFreshness,
+      error: null,
     };
   }
 
