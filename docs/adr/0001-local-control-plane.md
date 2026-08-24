@@ -69,7 +69,7 @@ Credential replacement uses a write-ahead marker, write, fresh read-back, and co
 
 GUI writing assistance uses one optional, workspace-wide OpenAI connection for Releases and Reviews. A user can submit a key and optional model through **Connections → Writing assistance**, or use environment variables for unattended runs. During GUI setup the browser briefly holds the key and sends it to the authenticated loopback agent; it does not retain the key in browser storage, and the agent never returns it. After validation, the key is stored in macOS Keychain. [ADR 0003](0003-gui-managed-openai-credentials.md) defines storage, precedence, migration, validation, and removal.
 
-Release translation requests contain selected What's New and promotional text fields only. Keywords stay out of the model request and remain unchanged in every target locale.
+Release translation requests contain What’s New only. Description, promotional text, keywords, and URLs stay out of the model request and remain unchanged in every target locale.
 
 For a customer-review reply, the browser submits only `{appId, reviewId}`. The local agent re-reads that exact review from the active provider. It then makes a generation Responses call that sends only rating, title, and body and accepts only `responseBody` through a strict schema. Review content is untrusted model input: the generation prompt ignores embedded instructions, favors concise and specific language over canned or AI-like filler, and forbids invented fixes, investigations, causes, timelines, versions, contact channels, refunds, promises, follow-up, and rating manipulation.
 

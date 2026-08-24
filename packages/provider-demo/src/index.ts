@@ -641,14 +641,15 @@ const versionsByApp = new Map<string, AppStoreVersion[]>([
 const localization = (
   versionId: string,
   locale: VersionLocalization["locale"],
-  values: Pick<VersionLocalization, "whatsNew" | "promotionalText" | "keywords">,
+  values: Pick<VersionLocalization, "whatsNew" | "promotionalText" | "keywords">
+    & Partial<Pick<VersionLocalization, "description" | "marketingUrl" | "supportUrl">>,
 ): VersionLocalization => ({
   id: `${versionId}-${locale}`,
   versionId,
   locale,
-  description: "Orbit Notes keeps ideas organized across all your devices.",
-  marketingUrl: "https://example.com/orbit-notes",
-  supportUrl: "https://example.com/support",
+  description: values.description ?? "Orbit Notes keeps ideas organized across all your devices.",
+  marketingUrl: values.marketingUrl ?? "https://example.com/orbit-notes",
+  supportUrl: values.supportUrl ?? "https://example.com/support",
   ...values,
 });
 
@@ -1253,13 +1254,23 @@ export class MockAscProvider implements AscProvider, AppleAdsProvider, Analytics
     for (const patch of patches) {
       let target = byLocale.get(patch.locale);
       if (!target) {
-        target = localization(versionId, patch.locale, { whatsNew: "", promotionalText: "", keywords: "" });
+        target = localization(versionId, patch.locale, {
+          description: "",
+          whatsNew: "",
+          promotionalText: "",
+          keywords: "",
+          marketingUrl: "",
+          supportUrl: "",
+        });
         localizations.push(target);
         byLocale.set(patch.locale, target);
       }
+      if (patch.description !== undefined) target.description = patch.description;
       if (patch.whatsNew !== undefined) target.whatsNew = patch.whatsNew;
       if (patch.promotionalText !== undefined) target.promotionalText = patch.promotionalText;
       if (patch.keywords !== undefined) target.keywords = patch.keywords;
+      if (patch.marketingUrl !== undefined) target.marketingUrl = patch.marketingUrl;
+      if (patch.supportUrl !== undefined) target.supportUrl = patch.supportUrl;
     }
   }
 
@@ -1426,9 +1437,12 @@ export class MockAscProvider implements AscProvider, AppleAdsProvider, Analytics
     return {
       id: item?.id ?? null,
       locale,
+      description: item?.description ?? "",
       whatsNew: item?.whatsNew ?? "",
       promotionalText: item?.promotionalText ?? "",
       keywords: item?.keywords ?? "",
+      marketingUrl: item?.marketingUrl ?? "",
+      supportUrl: item?.supportUrl ?? "",
     };
   }
 

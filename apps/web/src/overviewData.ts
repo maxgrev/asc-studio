@@ -1,4 +1,42 @@
-import type { AppleAdsCampaign, AppStoreVersion, BuildSummary, MutationPlan } from "@asc-studio/contracts";
+import type {
+  AnalyticsAppOverviewQuery,
+  AnalyticsMetricCoverage,
+  AnalyticsMetricId,
+  AppleAdsCampaign,
+  AppStoreVersion,
+  BuildSummary,
+  MutationPlan,
+} from "@asc-studio/contracts";
+import { analyticsDateRange, emptyAnalyticsFilters, shiftIsoDate, todayIsoDate } from "./analyticsData.js";
+
+export const overviewAnalyticsMetricIds = [
+  "DOWNLOADS",
+  "FIRST_TIME_DOWNLOADS",
+  "DOWNLOAD_RATE",
+  "PROCEEDS",
+] as const satisfies readonly AnalyticsMetricId[];
+
+const overviewAnalyticsCorrectionDays = 3;
+
+export const overviewAnalyticsQuery = (appId: string, now = new Date()): AnalyticsAppOverviewQuery => {
+  const endDate = shiftIsoDate(todayIsoDate(now), -overviewAnalyticsCorrectionDays);
+  return {
+    schemaVersion: 1,
+    scope: "APP",
+    appIds: [appId],
+    ...analyticsDateRange("30d", endDate),
+    compare: "PREVIOUS_PERIOD",
+    granularity: "DAY",
+    breakdowns: [],
+    filters: emptyAnalyticsFilters(),
+  };
+};
+
+export const overviewAnalyticsCompleteThrough = (coverage: AnalyticsMetricCoverage[]) => {
+  const byMetric = new Map(coverage.map((item) => [item.metric, item]));
+  const dates = overviewAnalyticsMetricIds.map((metric) => byMetric.get(metric)?.completeThrough ?? null);
+  return dates.every((date): date is string => date !== null) ? [...dates].sort()[0]! : null;
+};
 
 const platformOrder: Record<string, number> = {
   IOS: 0,

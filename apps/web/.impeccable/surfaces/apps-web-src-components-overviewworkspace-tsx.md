@@ -11,23 +11,25 @@ related_targets: ["apps/web/src/App.tsx","apps/web/src/components/Sidebar.tsx","
 
 - Scope: the `OverviewWorkspace` surface and its Sidebar/App integration.
 - Mode: Operate.
-- Audience and job: an app operator opening ASC Studio to understand the selected app’s release, TestFlight, Apple Ads, and recent workspace state, then enter the right existing workspace.
+- Audience and job: an app operator opening ASC Studio to understand the selected app’s recent performance, release, TestFlight, Apple Ads, and workspace state, then enter the right existing workspace.
 - Primary action: choose the lane that needs work; Refresh performs pure reads only.
 
 ## Content and constraints
 
-- Use live App Store Connect builds and all-platform versions, Apple Ads campaign status, unexpired pending plans, and local audit activity.
+- Use the selected app’s cached 30-day Analytics comparison, live App Store Connect builds and all-platform versions, Apple Ads campaign status, unexpired pending plans, and local audit activity.
+- The Analytics pulse is a local-cache read only. It never checks remote report status, starts a sync, or creates a report request from Overview.
 - Activity and pending plans are workspace-wide and must be labeled that way.
 - Treat lanes independently so one failed service does not hide successful data.
 - Do not call audited `sync` or validation operations from Overview.
-- Do not claim downloads, revenue, conversion, ratings, health scores, trends, or app-scoped activity.
+- Render analytics zero, missing, partial, and privacy-withheld values exactly as supplied; never turn missing data into zero or call estimated proceeds final revenue.
+- Do not claim ratings, health scores, causality, forecasts, or app-scoped activity.
 - Preserve the existing Releases landing default until ASC Studio has mobile navigation.
 
 ## Chosen composition
 
 - Direction: Operations Matrix, approved from `.impeccable/mocks/decision/overview-operations-matrix.webp`.
 - Seed: `186d157e`; chosen surface candidate 7 of 7.
-- Memorable moment: one asymmetric matrix puts Release and Apple Ads in wider lanes, TestFlight and recent workspace activity in narrower lanes, with one factual next action per lane.
+- Memorable moment: one full-width performance pulse leads an asymmetric operations matrix, which keeps Release and Apple Ads in wider lanes and TestFlight and recent workspace activity in narrower lanes.
 - Non-literal parts: the generated demo audit copy and “all systems operational” footer are not product facts. Real API results and an honest workspace-plan status replace them.
 
 ## Implementation inventory
@@ -36,6 +38,7 @@ related_targets: ["apps/web/src/App.tsx","apps/web/src/components/Sidebar.tsx","
 | --- | --- | --- |
 | Existing shell and sidebar | 276px desktop rail; current app/account controls; Overview active | Existing React, CSS, Lucide |
 | Header and demo banner | Existing 121px topbar; title/subtitle; secondary Refresh; incumbent demo notice | Semantic React and existing tokens |
+| Analytics performance pulse | Full-width first row; selected app; 30 days versus prior 30 days; total and first-time downloads, download rate, estimated proceeds; metric-specific availability and common coverage date; exact Analytics deep link | Cache-only Analytics overview API, semantic definition list, CSS Grid |
 | Operations matrix | Asymmetric two-column grid; wide Release/Ads lanes and narrow TestFlight/Activity lanes; stacks responsively | CSS Grid |
 | Release lane | Dominant panel; editable releases and localization readiness when available; clear Releases action | Semantic rows and API data |
 | TestFlight lane | Latest builds, processing/testing state, upload timing, group counts | Semantic rows and API data |
@@ -51,6 +54,7 @@ related_targets: ["apps/web/src/App.tsx","apps/web/src/components/Sidebar.tsx","
 - Ink and accents: incumbent `--text`, `--muted`, `--accent`, `--success`, `--warning`, and `--danger` remain authoritative.
 - Corners: 8px panels and 7px controls; 1px hairline borders; no panel shadows, gradients, glass, or decorative rasters.
 - Type: existing Inter/system UI ramp; topbar h1 is the largest text; compact 11–16px operating rows.
+- Analytics stays one continuous bordered metric rail with no miniature chart; the full Analytics workspace owns trend inspection, filters, and equivalent data tables.
 
 ## Unresolved decisions
 

@@ -17,7 +17,7 @@ import type {
   VersionLocalizationDraft,
   VersionSubmissionStatus,
 } from "@asc-studio/contracts";
-import { CheckSquare2, ChevronDown, FilePlus2, Images, Languages, RefreshCw, Send } from "lucide-react";
+import { CheckSquare2, ChevronDown, FilePlus2, Languages, RefreshCw, Send, Store } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api.js";
 import {
@@ -30,7 +30,11 @@ import {
 } from "../releaseMetadata.js";
 import { LocalizationEditor } from "./LocalizationEditor.js";
 import { LocalizationTable } from "./LocalizationTable.js";
-import { ScreenshotManager } from "./ScreenshotManager.js";
+import type {
+  StoreListingDraftSummary,
+  StoreListingScreenshotSummary,
+  StoreListingTarget,
+} from "./StoreListingWorkspace.js";
 import {
   CreateVersionDialog,
   LocalizationReviewDialog,
@@ -48,8 +52,10 @@ interface ReleaseWorkspaceProps {
   openAiSetupOpen: boolean;
   onReloadOpenAiConnection: () => Promise<void>;
   onManageOpenAi: () => void;
-  suggestedKeyword?: string | null;
-  onSuggestedKeywordUsed?: () => void;
+  target?: StoreListingTarget | null;
+  storeListingDraftSummary: StoreListingDraftSummary;
+  storeListingScreenshotSummary: StoreListingScreenshotSummary;
+  onOpenStoreListing: (target: StoreListingTarget) => void;
 }
 
 const emptyDrafts = new Map<AppStoreLocale, VersionLocalizationDraft>();
@@ -60,7 +66,9 @@ const versionToSelect = (
   versions: AppStoreVersion[],
   currentId: string | null,
   preferredVersion?: string,
-) => versions.find((version) => preferredVersion && version.versionString === preferredVersion)
+  targetId?: string,
+) => versions.find((version) => version.id === targetId)
+  ?? versions.find((version) => preferredVersion && version.versionString === preferredVersion)
   ?? versions.find((version) => version.id === currentId)
   ?? versions.find((version) => version.editable)
   ?? versions[0]
@@ -75,11 +83,13 @@ export const ReleaseWorkspace = ({
   openAiSetupOpen,
   onReloadOpenAiConnection,
   onManageOpenAi,
-  suggestedKeyword,
-  onSuggestedKeywordUsed,
+  target,
+  storeListingDraftSummary,
+  storeListingScreenshotSummary,
+  onOpenStoreListing,
 }: ReleaseWorkspaceProps) => {
   const [selectedPlatform, setSelectedPlatform] = useState<AppStorePlatform>(
-    () => releasePlatforms.find((platform) => app.platforms.includes(platform)) ?? "IOS",
+    () => target?.platform ?? releasePlatforms.find((platform) => app.platforms.includes(platform)) ?? "IOS",
   );
   const [versions, setVersions] = useState<AppStoreVersion[]>([]);
   const [builds, setBuilds] = useState<BuildSummary[]>([]);
@@ -109,10 +119,29 @@ export const ReleaseWorkspace = ({
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [readinessBusy, setReadinessBusy] = useState(false);
   const [readinessError, setReadinessError] = useState<string | null>(null);
-  const [releasePanel, setReleasePanel] = useState<"metadata" | "screenshots">("metadata");
-  const [screenshotPending, setScreenshotPending] = useState(false);
   const translateButtonRef = useRef<HTMLButtonElement>(null);
   const openAiSetupWasOpen = useRef(false);
+  const selectedVersionIdRef = useRef<string | null>(selectedVersionId);
+  const versionLoadGeneration = useRef(0);
+  const pendingTargetVersionId = useRef<string | null>(target?.versionId ?? null);
+
+  const chooseVersion = useCallback((versionId: string | null, manual = false) => {
+    if (manual) {
+      pendingTargetVersionId.current = null;
+      versionLoadGeneration.current += 1;
+    }
+    if (selectedVersionIdRef.current === versionId) return;
+    selectedVersionIdRef.current = versionId;
+    setLocalizations([]);
+    setSelectedLocale(null);
+    setSourceLocale(null);
+    setBuilds([]);
+    setSelectedBuildId(null);
+    setSubmissionStatus(null);
+    setLoadingLocalizations(Boolean(versionId));
+    setLoadingBuilds(Boolean(versionId));
+    setSelectedVersionId(versionId);
+  }, []);
 
   const selectedVersion = versions.find((version) => version.id === selectedVersionId) ?? null;
   const drafts = selectedVersionId ? draftsByVersion.get(selectedVersionId) ?? emptyDrafts : emptyDrafts;
@@ -131,6 +160,20 @@ export const ReleaseWorkspace = ({
     ))
     : [], [builds, selectedVersion?.platform, selectedVersion?.versionString]);
   const selectedBuild = compatibleBuilds.find((build) => build.id === selectedBuildId) ?? null;
+  const pendingStoreListingDrafts = selectedVersionId ? storeListingDraftSummary[selectedVersionId] ?? 0 : 0;
+  const pendingStoreListingScreenshots = selectedVersionId ? storeListingScreenshotSummary[selectedVersionId] ?? false : false;
+  const releaseScopeLocked = syncing
+    || mutationBusy
+    || Boolean(localizationPlan)
+    || Boolean(submissionPlan)
+    || createOpen
+    || translationOpen
+    || readinessOpen;
+  const releaseModalOpen = createOpen
+    || Boolean(localizationPlan)
+    || Boolean(submissionPlan)
+    || translationOpen
+    || readinessOpen;
 
   useEffect(() => {
     setSelectedBuildId((current) => (
@@ -152,35 +195,52 @@ export const ReleaseWorkspace = ({
     setEvents(response.events);
   }, []);
 
-  const screenshotsChanged = useCallback(async () => {
-    setReadiness(null);
-    await refreshEvents();
-  }, [refreshEvents]);
-
   const loadVersions = useCallback(async (preferredVersion?: string) => {
-    const firstPage = await api.versions(app.id, selectedPlatform, { limit: initialVersionLimit, paginate: false });
-    let nextVersions = firstPage.versions;
-    const selectedVersionMissing = selectedVersionId && !nextVersions.some((version) => version.id === selectedVersionId);
-    const preferredVersionMissing = preferredVersion && !nextVersions.some((version) => version.versionString === preferredVersion);
-    if (selectedVersionMissing || preferredVersionMissing) {
-      nextVersions = (await api.versions(app.id, selectedPlatform)).versions;
+    const generation = ++versionLoadGeneration.current;
+    let firstPage: Awaited<ReturnType<typeof api.versions>>;
+    try {
+      firstPage = await api.versions(app.id, selectedPlatform, { limit: initialVersionLimit, paginate: false });
+    } catch (error) {
+      if (generation !== versionLoadGeneration.current) return null;
+      throw error;
     }
-    const nextVersion = versionToSelect(nextVersions, selectedVersionId, preferredVersion);
+    if (generation !== versionLoadGeneration.current) return null;
+    let nextVersions = firstPage.versions;
+    const targetVersionId = pendingTargetVersionId.current;
+    const selectedVersionMissing = selectedVersionIdRef.current && !nextVersions.some((version) => version.id === selectedVersionIdRef.current);
+    const preferredVersionMissing = preferredVersion && !nextVersions.some((version) => version.versionString === preferredVersion);
+    const targetVersionMissing = targetVersionId && !nextVersions.some((version) => version.id === targetVersionId);
+    if (selectedVersionMissing || preferredVersionMissing || targetVersionMissing) {
+      const history = await api.versions(app.id, selectedPlatform);
+      if (generation !== versionLoadGeneration.current) return null;
+      nextVersions = history.versions;
+    }
+    const nextVersion = versionToSelect(nextVersions, selectedVersionIdRef.current, preferredVersion, targetVersionId ?? undefined);
+    if (nextVersion?.id === targetVersionId || targetVersionId) pendingTargetVersionId.current = null;
     setVersions(nextVersions);
-    setSelectedVersionId(nextVersion?.id ?? null);
+    chooseVersion(nextVersion?.id ?? null);
     void api.versions(app.id, selectedPlatform)
       .then((response) => {
+        if (generation !== versionLoadGeneration.current) return;
+        const pendingVersionId = pendingTargetVersionId.current;
+        const selected = versionToSelect(
+          response.versions,
+          selectedVersionIdRef.current,
+          preferredVersion,
+          pendingVersionId ?? undefined,
+        );
+        if (selected?.id === pendingVersionId || pendingVersionId) pendingTargetVersionId.current = null;
         setVersions(response.versions);
-        setSelectedVersionId((current) => versionToSelect(response.versions, current, preferredVersion)?.id ?? null);
+        chooseVersion(selected?.id ?? null);
       })
       .catch(() => undefined);
     return nextVersion;
-  }, [app.id, selectedPlatform, selectedVersionId]);
+  }, [app.id, chooseVersion, selectedPlatform]);
 
   useEffect(() => {
     let cancelled = false;
     setLoadingVersions(true);
-    setSelectedVersionId(null);
+    chooseVersion(null);
     setSelectedBuildId(null);
     setSelectedLocale(null);
     setSubmissionStatus(null);
@@ -188,28 +248,18 @@ export const ReleaseWorkspace = ({
     setBuilds([]);
     setBuildError(null);
     setFatalError(null);
-    void api.versions(app.id, selectedPlatform, { limit: initialVersionLimit, paginate: false })
-      .then((versionResponse) => {
-        if (cancelled) return;
-        setVersions(versionResponse.versions);
-        setSelectedVersionId(versionToSelect(versionResponse.versions, null)?.id ?? null);
-        setLoadingVersions(false);
-        void api.versions(app.id, selectedPlatform)
-          .then((historyResponse) => {
-            if (cancelled) return;
-            setVersions(historyResponse.versions);
-            setSelectedVersionId((current) => versionToSelect(historyResponse.versions, current)?.id ?? null);
-          })
-          .catch(() => undefined);
-      })
+    void loadVersions()
       .catch((error: unknown) => {
         if (!cancelled) setFatalError(error instanceof Error ? error.message : "ASC Studio could not load releases.");
       })
       .finally(() => {
         if (!cancelled) setLoadingVersions(false);
       });
-    return () => { cancelled = true; };
-  }, [app.id, selectedPlatform]);
+    return () => {
+      cancelled = true;
+      versionLoadGeneration.current += 1;
+    };
+  }, [app.id, chooseVersion, loadVersions, selectedPlatform]);
 
   useEffect(() => {
     let cancelled = false;
@@ -261,9 +311,12 @@ export const ReleaseWorkspace = ({
       .then((response) => {
         if (cancelled) return;
         setLocalizations(response.localizations);
-        const preferred = response.localizations.find((item) => item.locale === "en-US")?.locale ?? response.localizations[0]?.locale ?? null;
+        const preferred = response.localizations.find((item) => item.locale === target?.locale)?.locale
+          ?? response.localizations.find((item) => item.locale === "en-US")?.locale
+          ?? response.localizations[0]?.locale
+          ?? null;
         const compactViewport = window.matchMedia("(max-width: 620px)").matches;
-        setSelectedLocale(compactViewport ? null : preferred);
+        setSelectedLocale(compactViewport && !target?.locale ? null : preferred);
         setSourceLocale(preferred);
         setFatalError(null);
       })
@@ -274,7 +327,7 @@ export const ReleaseWorkspace = ({
         if (!cancelled) setLoadingLocalizations(false);
       });
     return () => { cancelled = true; };
-  }, [app.id, selectedVersionId]);
+  }, [app.id, selectedVersionId, target?.locale]);
 
   useEffect(() => {
     if (!selectedVersionId) {
@@ -319,7 +372,7 @@ export const ReleaseWorkspace = ({
     if (platform === selectedPlatform) return;
     setSelectedPlatform(platform);
     setVersions([]);
-    setSelectedVersionId(null);
+    chooseVersion(null, true);
     setSelectedBuildId(null);
     setSelectedLocale(null);
     setSourceLocale(null);
@@ -347,24 +400,6 @@ export const ReleaseWorkspace = ({
     });
   };
 
-  useEffect(() => {
-    if (!suggestedKeyword || !selectedDraft || !selectedVersion?.editable) return;
-    const terms = selectedDraft.keywords.split(",").map((value) => value.trim()).filter(Boolean);
-    if (terms.some((value) => value.toLocaleLowerCase("en-US") === suggestedKeyword.toLocaleLowerCase("en-US"))) {
-      onSuggestedKeywordUsed?.();
-      return;
-    }
-    const keywords = [...terms, suggestedKeyword].join(",");
-    if (keywords.length > 100) {
-      setFatalError(`“${suggestedKeyword}” would push ${selectedDraft.locale} keywords past Apple’s 100-character limit.`);
-      onSuggestedKeywordUsed?.();
-      return;
-    }
-    saveDraft({ ...selectedDraft, keywords });
-    setReleasePanel("metadata");
-    onSuggestedKeywordUsed?.();
-  }, [onSuggestedKeywordUsed, selectedDraft, selectedVersion?.editable, suggestedKeyword]);
-
   const revertDraft = (locale: AppStoreLocale) => {
     if (!selectedVersionId) return;
     setDraftsByVersion((current) => {
@@ -389,7 +424,7 @@ export const ReleaseWorkspace = ({
       const response = await api.planLocalizations({
         appId: app.id,
         versionId: selectedVersion.id,
-        localizations: [...drafts.values()],
+        localizations: [...drafts.values()].map((draft) => ({ ...draft, fields: ["whatsNew" as const] })),
       });
       setLocalizationPlan(response.plan);
     } catch (error) {
@@ -400,16 +435,17 @@ export const ReleaseWorkspace = ({
   };
 
   const confirmLocalizations = async () => {
-    if (!localizationPlan || !selectedVersionId) return;
+    if (!localizationPlan) return;
+    const planVersionId = localizationPlan.target.versionId;
     setMutationBusy(true);
     setMutationError(null);
     try {
       await api.confirmPlan(localizationPlan);
-      const response = await api.localizations(app.id, selectedVersionId);
-      setLocalizations(response.localizations);
+      const response = await api.localizations(app.id, planVersionId);
+      if (selectedVersionIdRef.current === planVersionId) setLocalizations(response.localizations);
       setDraftsByVersion((current) => {
         const next = new Map(current);
-        next.delete(selectedVersionId);
+        next.delete(planVersionId);
         return next;
       });
       setLocalizationPlan(null);
@@ -477,7 +513,7 @@ export const ReleaseWorkspace = ({
   };
 
   const reviewSubmission = async () => {
-    if (!selectedVersion || !selectedBuild || drafts.size > 0 || screenshotPending || submissionStatus?.id) return;
+    if (!selectedVersion || !selectedBuild || drafts.size > 0 || pendingStoreListingDrafts > 0 || pendingStoreListingScreenshots || submissionStatus?.id) return;
     setMutationBusy(true);
     setMutationError(null);
     setFatalError(null);
@@ -551,16 +587,16 @@ export const ReleaseWorkspace = ({
   const translationTargets = [...baselineByLocale.values()].filter((draft) => draft.locale !== sourceLocale);
   return (
     <>
-      <main className="workspace release-workspace">
+      <main className="workspace release-workspace" inert={releaseModalOpen ? true : undefined}>
         <header className="topbar release-topbar">
           <div><h1>{selectedVersion ? `Release ${selectedVersion.versionString}` : `${platformLabel(selectedPlatform)} releases`}</h1><p>Prepare metadata, choose a build, and check submission readiness.</p></div>
           <div className="topbar-actions">
             <button className="button secondary" type="button" onClick={() => void sync()} disabled={syncing} aria-label={syncing ? "Syncing releases" : "Sync releases"}>
               <RefreshCw size={17} className={syncing ? "spin" : undefined} /><span>{syncing ? "Syncing" : "Sync"}</span>
             </button>
-            {releasePanel === "metadata" ? <button className="button primary" type="button" disabled={!selectedVersion?.editable || drafts.size === 0 || mutationBusy} onClick={() => void reviewLocalizations()} aria-label={drafts.size ? `Review ${drafts.size} draft change${drafts.size === 1 ? "" : "s"}` : "Review metadata changes"}>
-              <CheckSquare2 size={17} /><span>Review metadata{drafts.size ? ` (${drafts.size})` : ""}</span>
-            </button> : null}
+            <button className="button primary" type="button" disabled={!selectedVersion?.editable || drafts.size === 0 || mutationBusy} onClick={() => void reviewLocalizations()} aria-label={drafts.size ? `Review ${drafts.size} release-note draft${drafts.size === 1 ? "" : "s"}` : "Review release notes"}>
+              <CheckSquare2 size={17} /><span>Review notes{drafts.size ? ` (${drafts.size})` : ""}</span>
+            </button>
           </div>
         </header>
 
@@ -569,8 +605,8 @@ export const ReleaseWorkspace = ({
 
         <div className="release-content">
           <section className="release-setup" aria-label="Release setup">
-            <label><small>Platform</small><span className="release-select"><select value={selectedPlatform} disabled={syncing || mutationBusy || screenshotPending} onChange={(event) => selectPlatform(event.target.value as AppStorePlatform)}>{releasePlatforms.map((platform) => <option value={platform} key={platform}>{platformLabel(platform)}</option>)}</select><ChevronDown size={15} /></span></label>
-            <label><small>Version</small><span className="release-select"><select value={selectedVersionId ?? ""} disabled={loadingVersions || versions.length === 0 || screenshotPending} onChange={(event) => setSelectedVersionId(event.target.value)}>{versions.map((version) => <option value={version.id} key={version.id}>{version.versionString}</option>)}</select><ChevronDown size={15} /></span></label>
+            <label><small>Platform</small><span className="release-select"><select value={selectedPlatform} disabled={loadingVersions || loadingLocalizations || releaseScopeLocked} onChange={(event) => selectPlatform(event.target.value as AppStorePlatform)}>{releasePlatforms.map((platform) => <option value={platform} key={platform}>{platformLabel(platform)}</option>)}</select><ChevronDown size={15} /></span></label>
+            <label><small>Version</small><span className="release-select"><select value={selectedVersionId ?? ""} disabled={loadingVersions || loadingLocalizations || versions.length === 0 || releaseScopeLocked} onChange={(event) => chooseVersion(event.target.value, true)}>{versions.map((version) => <option value={version.id} key={version.id}>{version.versionString}</option>)}</select><ChevronDown size={15} /></span></label>
             <div className="release-status"><small>Status</small><strong>{submissionStatus?.id ? versionStateLabel(submissionStatus.state) : selectedVersion ? versionStateLabel(selectedVersion.state) : "No version"}</strong></div>
             <div><small>Copied from</small><strong>{selectedVersion?.copiedFrom ?? "—"}</strong></div>
             <label title={buildError ?? undefined}><small>Submission build</small><span className="release-select"><select value={selectedBuildId ?? ""} disabled={!selectedVersion?.editable || loadingBuilds || compatibleBuilds.length === 0 || Boolean(submissionStatus?.id)} onChange={(event) => setSelectedBuildId(event.target.value)}>{loadingBuilds ? <option value="">Loading builds…</option> : buildError ? <option value="">Builds unavailable</option> : compatibleBuilds.length === 0 ? <option value="">No ready build</option> : compatibleBuilds.map((build) => <option value={build.id} key={build.id}>Build {build.buildNumber}</option>)}</select><ChevronDown size={15} /></span></label>
@@ -578,19 +614,25 @@ export const ReleaseWorkspace = ({
               setCreatePlan(null);
               setMutationError(null);
               setCreateOpen(true);
-            }} disabled={screenshotPending}><FilePlus2 size={16} />New version</button>
+            }}><FilePlus2 size={16} />New version</button>
           </section>
 
-          {selectedVersion ? <nav className="release-tabs" aria-label="Release content">
-            <button type="button" className={releasePanel === "metadata" ? "active" : ""} aria-current={releasePanel === "metadata" ? "page" : undefined} onClick={() => setReleasePanel("metadata")}><CheckSquare2 size={15} />Metadata</button>
-            <button type="button" className={releasePanel === "screenshots" ? "active" : ""} aria-current={releasePanel === "screenshots" ? "page" : undefined} onClick={() => setReleasePanel("screenshots")}><Images size={15} />Screenshots</button>
-          </nav> : null}
+          {selectedVersion ? <section className="release-store-listing-link">
+            <Store size={19} />
+            <div><strong>Store Listing is the canonical storefront editor</strong><span>{pendingStoreListingDrafts
+              ? `${pendingStoreListingDrafts} local storefront draft${pendingStoreListingDrafts === 1 ? "" : "s"} must be reviewed there before submission.`
+              : "Description, promotional text, keywords, URLs, and screenshots are managed there once."}</span></div>
+            <button className="button secondary" type="button" onClick={() => onOpenStoreListing({
+              versionId: selectedVersion.id,
+              platform: selectedVersion.platform,
+              locale: selectedLocale ?? undefined,
+            })}>Open Store Listing</button>
+          </section> : null}
 
           {loadingVersions ? (
             <div className="release-empty"><RefreshCw className="spin" size={30} /><h2>Loading releases</h2><p>Fetching the latest {platformLabel(selectedPlatform)} App Store version.</p></div>
           ) : selectedVersion ? (
-            <>
-            <div hidden={releasePanel !== "metadata"} className={selectedLocale && selectedBaseline && selectedDraft ? "release-editor-grid with-editor" : "release-editor-grid"}>
+            <div className={selectedLocale && selectedBaseline && selectedDraft ? "release-editor-grid with-editor" : "release-editor-grid"}>
               <section className="localizations-region">
                 <header className="localizations-header">
                   <div><h2>Localizations</h2><p>{localizations.length} {localizations.length === 1 ? "locale" : "locales"} · {drafts.size} edited</p></div>
@@ -612,28 +654,26 @@ export const ReleaseWorkspace = ({
                 />
               ) : null}
             </div>
-            <ScreenshotManager
-              appId={app.id}
-              version={selectedVersion}
-              localizations={localizations}
-              visible={releasePanel === "screenshots"}
-              onChanged={screenshotsChanged}
-              onPendingChange={setScreenshotPending}
-              key={selectedVersion.id}
-            />
-            </>
           ) : (
-            <div className="release-empty"><FilePlus2 size={30} /><h2>Create the next {platformLabel(selectedPlatform)} version</h2><p>Carry existing locales forward, then edit release notes, promotional text, and keywords in one place.</p><button className="button primary" type="button" onClick={() => setCreateOpen(true)}>New version</button></div>
+            <div className="release-empty"><FilePlus2 size={30} /><h2>Create the next {platformLabel(selectedPlatform)} version</h2><p>Carry the storefront forward, then coordinate release notes, build selection, readiness, and submission here.</p><button className="button primary" type="button" onClick={() => setCreateOpen(true)}>New version</button></div>
           )}
 
           <div className="release-dock">
-            <span className={drafts.size || screenshotPending ? "activity-dot warning" : "activity-dot success"} />
-            <strong>{submissionStatus?.id ? `Submitted · ${versionStateLabel(submissionStatus.state)}` : screenshotPending ? "Local screenshot changes" : drafts.size ? `${drafts.size} metadata draft${drafts.size === 1 ? "" : "s"}` : "No local drafts"}</strong>
+            <span className={drafts.size || pendingStoreListingDrafts || pendingStoreListingScreenshots ? "activity-dot warning" : "activity-dot success"} />
+            <strong>{submissionStatus?.id
+              ? `Submitted · ${versionStateLabel(submissionStatus.state)}`
+              : drafts.size
+                ? `${drafts.size} release-note draft${drafts.size === 1 ? "" : "s"}`
+                : pendingStoreListingScreenshots
+                  ? "Screenshot changes pending in Store Listing"
+                  : pendingStoreListingDrafts
+                    ? `${pendingStoreListingDrafts} storefront draft${pendingStoreListingDrafts === 1 ? "" : "s"} pending`
+                    : "No local release drafts"}</strong>
             <span className="saved-state">{submissionStatus?.submittedAt ? `Sent ${new Date(submissionStatus.submittedAt).toLocaleString()}` : "Saved locally"}</span>
             <span className="activity-spacer" />
             <button className="button secondary" type="button" onClick={() => setActivityOpen((open) => !open)}>View activity</button>
             <button className="button secondary" type="button" disabled={!selectedVersion || readinessBusy} onClick={() => void validate()} aria-label="Validate release"><CheckSquare2 size={16} />Validate</button>
-            <button className="button primary" type="button" disabled={!selectedVersion?.editable || !selectedBuild || drafts.size > 0 || screenshotPending || Boolean(submissionStatus?.id) || mutationBusy} onClick={() => void reviewSubmission()} aria-label="Review App Review submission"><Send size={16} />{submissionStatus?.id ? "Submitted" : "Submit for review"}</button>
+            <button className="button primary" type="button" disabled={!selectedVersion?.editable || !selectedBuild || drafts.size > 0 || pendingStoreListingDrafts > 0 || pendingStoreListingScreenshots || Boolean(submissionStatus?.id) || mutationBusy} onClick={() => void reviewSubmission()} aria-label="Review App Review submission"><Send size={16} />{submissionStatus?.id ? "Submitted" : "Submit for review"}</button>
             {activityOpen ? (
               <div className="release-activity-popover">
                 <header><strong>Recent activity</strong><button className="icon-button" type="button" onClick={() => setActivityOpen(false)} aria-label="Close activity">×</button></header>
@@ -674,7 +714,23 @@ export const ReleaseWorkspace = ({
         onGenerate={generateTranslations}
         onClose={() => setTranslationOpen(false)}
       /> : null}
-      {readinessOpen ? <ReadinessDialog report={readiness} demo={status?.mode === "demo"} busy={readinessBusy} error={readinessError} onRetry={() => void validate()} onClose={() => setReadinessOpen(false)} /> : null}
+      {readinessOpen ? <ReadinessDialog
+        report={readiness}
+        demo={status?.mode === "demo"}
+        busy={readinessBusy}
+        error={readinessError}
+        onRetry={() => void validate()}
+        onFix={(step) => {
+          setReadinessOpen(false);
+          onOpenStoreListing({
+            versionId: selectedVersion?.id,
+            platform: selectedVersion?.platform,
+            locale: step.locale as AppStoreLocale || selectedLocale || undefined,
+            field: step.field === "screenshots" ? "screenshots" : step.field as StoreListingTarget["field"],
+          });
+        }}
+        onClose={() => setReadinessOpen(false)}
+      /> : null}
     </>
   );
 };

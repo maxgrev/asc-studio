@@ -1001,10 +1001,44 @@ export const ReleaseMetadataSchema = z.object({
 });
 export type ReleaseMetadata = z.infer<typeof ReleaseMetadataSchema>;
 
-export const VersionLocalizationDraftSchema = ReleaseMetadataSchema.extend({
+export const StoreListingMetadataSchema = z.object({
+  description: z.string().max(4_000),
+  marketingUrl: z.string().max(4_000),
+  supportUrl: z.string().max(4_000),
+});
+export type StoreListingMetadata = z.infer<typeof StoreListingMetadataSchema>;
+
+export const VersionLocalizationDraftSchema = ReleaseMetadataSchema.merge(StoreListingMetadataSchema).extend({
   locale: AppStoreLocaleSchema,
 });
 export type VersionLocalizationDraft = z.infer<typeof VersionLocalizationDraftSchema>;
+
+export const VersionLocalizationFieldSchema = z.enum([
+  "description",
+  "whatsNew",
+  "promotionalText",
+  "keywords",
+  "marketingUrl",
+  "supportUrl",
+]);
+export type VersionLocalizationField = z.infer<typeof VersionLocalizationFieldSchema>;
+
+export const UpdateVersionLocalizationSchema = VersionLocalizationDraftSchema.extend({
+  fields: z.array(VersionLocalizationFieldSchema).min(1).max(6),
+}).superRefine((localization, context) => {
+  const fields = new Set<VersionLocalizationField>();
+  for (const [index, field] of localization.fields.entries()) {
+    if (fields.has(field)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Each localization field can appear only once.",
+        path: ["fields", index],
+      });
+    }
+    fields.add(field);
+  }
+});
+export type UpdateVersionLocalization = z.infer<typeof UpdateVersionLocalizationSchema>;
 
 export const ReleaseCopyFieldSchema = z.enum(["whatsNew", "promotionalText"]);
 export type ReleaseCopyField = z.infer<typeof ReleaseCopyFieldSchema>;
@@ -1124,7 +1158,7 @@ export type CreateVersionInput = z.infer<typeof CreateVersionInputSchema>;
 export const UpdateVersionLocalizationsInputSchema = z.object({
   appId: z.string().min(1),
   versionId: z.string().min(1),
-  localizations: z.array(VersionLocalizationDraftSchema).min(1).max(40),
+  localizations: z.array(UpdateVersionLocalizationSchema).min(1).max(40),
 }).superRefine((input, context) => {
   const locales = new Set<string>();
   for (const [index, localization] of input.localizations.entries()) {
@@ -1142,11 +1176,21 @@ export type UpdateVersionLocalizationsInput = z.infer<typeof UpdateVersionLocali
 
 export const VersionLocalizationPatchSchema = z.object({
   locale: AppStoreLocaleSchema,
+  description: z.string().max(4_000).optional(),
   whatsNew: z.string().max(4_000).optional(),
   promotionalText: z.string().max(170).optional(),
   keywords: z.string().max(100).optional(),
+  marketingUrl: z.string().max(4_000).optional(),
+  supportUrl: z.string().max(4_000).optional(),
 }).superRefine((patch, context) => {
-  if (patch.whatsNew === undefined && patch.promotionalText === undefined && patch.keywords === undefined) {
+  if (
+    patch.description === undefined
+    && patch.whatsNew === undefined
+    && patch.promotionalText === undefined
+    && patch.keywords === undefined
+    && patch.marketingUrl === undefined
+    && patch.supportUrl === undefined
+  ) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "At least one field must change." });
   }
 });
@@ -1315,13 +1359,16 @@ export type CreateVersionMutationPlan = z.infer<typeof CreateVersionMutationPlan
 export const LocalizationSnapshotSchema = z.object({
   id: z.string().nullable(),
   locale: AppStoreLocaleSchema,
+  description: z.string().max(10_000),
   whatsNew: z.string().max(10_000),
   promotionalText: z.string().max(10_000),
   keywords: z.string().max(10_000),
+  marketingUrl: z.string().max(4_000),
+  supportUrl: z.string().max(4_000),
 });
 export type LocalizationSnapshot = z.infer<typeof LocalizationSnapshotSchema>;
 
-export const DesiredLocalizationSnapshotSchema = ReleaseMetadataSchema.extend({
+export const DesiredLocalizationSnapshotSchema = ReleaseMetadataSchema.merge(StoreListingMetadataSchema).extend({
   id: z.string().nullable(),
   locale: AppStoreLocaleSchema,
 });

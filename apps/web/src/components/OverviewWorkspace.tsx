@@ -1,5 +1,7 @@
 import type {
   AgentStatus,
+  AnalyticsKpi,
+  AnalyticsOverviewResponse,
   AppleAdsCampaign,
   AppleAdsConnectionResponse,
   AppStoreVersion,
@@ -13,6 +15,7 @@ import {
   Activity,
   ArrowRight,
   BadgeDollarSign,
+  ChartNoAxesCombined,
   CircleAlert,
   Clock3,
   FileText,
@@ -24,6 +27,13 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import {
+  analyticsChangeTone,
+  availabilityLabel,
+  formatAnalyticsChange,
+  formatAnalyticsValue,
+  shortDate,
+} from "../analyticsData.js";
+import {
   localeNames,
   metadataIssues,
   platformLabel,
@@ -34,6 +44,9 @@ import {
   budgetSummary,
   campaignCounts,
   matchingBuild,
+  overviewAnalyticsCompleteThrough,
+  overviewAnalyticsMetricIds,
+  overviewAnalyticsQuery,
   pendingPlanCountLabel,
   relativeTime,
   selectPrimaryRelease,
@@ -46,7 +59,11 @@ interface OverviewWorkspaceProps {
   app: AppSummary;
   status: AgentStatus;
   appleAdsConnection: AppleAdsConnectionResponse;
+  analyticsPortfolioReady: boolean;
+  analyticsPortfolioError: string | null;
   onNavigate: (section: WorkspaceSection) => void;
+  onOpenAnalytics: () => void;
+  onRetryAnalyticsPortfolio: () => Promise<void>;
   onManageAppleServices: () => void;
 }
 
@@ -62,6 +79,7 @@ interface OverviewSnapshot {
 
 type OverviewSection = "releases" | "localizations" | "testflight" | "appleAds" | "activity" | "plans";
 type OverviewErrors = Partial<Record<OverviewSection, string>>;
+type OverviewAnalyticsPhase = "waiting" | "initial" | "refreshing" | "idle";
 
 const errorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback;
 
@@ -85,6 +103,14 @@ const eventArea = (operation: string) => {
 
 const toneForCampaign = (campaign: AppleAdsCampaign) => campaign.status.toUpperCase() === "ENABLED" ? "success" : "warning";
 
+const analyticsMetricSupportingText = (kpi: AnalyticsKpi) => {
+  const availability = kpi.current.availability;
+  if (availability === "UNAVAILABLE" || availability === "PRIVACY_WITHHELD") return availabilityLabel(availability);
+  const change = formatAnalyticsChange(kpi.change, kpi.unit);
+  if (availability === "PARTIAL") return change ? `${change} · Partial` : "Partial";
+  return change ?? "No comparable prior data";
+};
+
 const OverviewSkeleton = () => (
   <div className="overview-skeleton" aria-hidden="true">
     <span /><span /><span /><span />
@@ -107,7 +133,11 @@ export const OverviewWorkspace = ({
   app,
   status,
   appleAdsConnection,
+  analyticsPortfolioReady,
+  analyticsPortfolioError,
   onNavigate,
+  onOpenAnalytics,
+  onRetryAnalyticsPortfolio,
   onManageAppleServices,
 }: OverviewWorkspaceProps) => {
   const [snapshot, setSnapshot] = useState<OverviewSnapshot | null>(null);
@@ -116,6 +146,11 @@ export const OverviewWorkspace = ({
   const generation = useRef(0);
   const snapshotRef = useRef<OverviewSnapshot | null>(null);
   const loadedOnce = useRef(false);
+  const [analyticsSnapshot, setAnalyticsSnapshot] = useState<AnalyticsOverviewResponse | null>(null);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
+  const [analyticsPhase, setAnalyticsPhase] = useState<OverviewAnalyticsPhase>("waiting");
+  const analyticsGeneration = useRef(0);
+  const analyticsLoadedOnce = useRef(false);
   const adsConnected = appleAdsConnection.status.connected;
 
   const loadOverview = useCallback(async () => {
@@ -178,6 +213,43 @@ export const OverviewWorkspace = ({
     };
   }, [loadOverview]);
 
+  const loadAnalyticsPulse = useCallback(async () => {
+    if (!analyticsPortfolioReady) return;
+    const currentGeneration = ++analyticsGeneration.current;
+    setAnalyticsPhase(analyticsLoadedOnce.current ? "refreshing" : "initial");
+    setAnalyticsError(null);
+    try {
+      const response = await api.analyticsOverview(overviewAnalyticsQuery(app.id));
+      if (currentGeneration !== analyticsGeneration.current) return;
+      analyticsLoadedOnce.current = true;
+      setAnalyticsSnapshot(response);
+      setAnalyticsPhase("idle");
+    } catch (error) {
+      if (currentGeneration !== analyticsGeneration.current) return;
+      setAnalyticsError(errorMessage(error, "Analytics could not be loaded from the local report cache."));
+      setAnalyticsPhase("idle");
+    }
+  }, [analyticsPortfolioReady, app.id]);
+
+  useEffect(() => {
+    if (!analyticsPortfolioReady) {
+      analyticsGeneration.current += 1;
+      setAnalyticsPhase("waiting");
+      return;
+    }
+    void loadAnalyticsPulse();
+    return () => {
+      analyticsGeneration.current += 1;
+    };
+  }, [analyticsPortfolioReady, loadAnalyticsPulse]);
+
+  const refreshOverview = useCallback(async () => {
+    await Promise.allSettled([
+      loadOverview(),
+      analyticsPortfolioReady ? loadAnalyticsPulse() : Promise.resolve(),
+    ]);
+  }, [analyticsPortfolioReady, loadAnalyticsPulse, loadOverview]);
+
   const builds = useMemo(() => sortBuilds(snapshot?.builds ?? []), [snapshot?.builds]);
   const versions = useMemo(() => sortVersions(snapshot?.versions ?? []), [snapshot?.versions]);
   const primaryRelease = useMemo(() => selectPrimaryRelease(versions, builds), [versions, builds]);
@@ -190,24 +262,43 @@ export const OverviewWorkspace = ({
   const planCount = pendingPlanCountLabel(snapshot?.plans ?? [], plans.length);
   const plansCapped = (snapshot?.plans?.length ?? 0) >= 50;
   const loading = phase === "initial" && snapshot === null;
-  const errorCount = Object.keys(errors).length;
+  const analyticsKpis = useMemo(() => {
+    const byMetric = new Map(analyticsSnapshot?.kpis.map((kpi) => [kpi.metric, kpi]) ?? []);
+    return overviewAnalyticsMetricIds.flatMap((metric) => {
+      const kpi = byMetric.get(metric);
+      return kpi ? [kpi] : [];
+    });
+  }, [analyticsSnapshot]);
+  const analyticsHasData = analyticsKpis.some((kpi) => (
+    kpi.current.value !== null || kpi.current.availability === "PRIVACY_WITHHELD"
+  ));
+  const analyticsCompleteThrough = useMemo(
+    () => overviewAnalyticsCompleteThrough(analyticsSnapshot?.metricCoverage ?? []),
+    [analyticsSnapshot],
+  );
+  const analyticsLoading = analyticsPhase === "initial"
+    || analyticsPhase === "refreshing"
+    || !analyticsPortfolioReady && !analyticsPortfolioError;
+  const refreshing = phase === "refreshing" || analyticsPhase === "refreshing";
+  const workspaceBusy = phase !== "idle" || analyticsLoading;
+  const errorCount = Object.keys(errors).length + Number(Boolean(analyticsError || analyticsPortfolioError));
 
   return (
-    <main className="workspace overview-workspace" aria-busy={phase !== "idle"}>
+    <main className="workspace overview-workspace" aria-busy={workspaceBusy}>
       <header className="topbar overview-topbar">
         <div>
           <h1>Overview</h1>
-          <p>Release, TestFlight, and Apple Ads status for {app.name}.</p>
+          <p>Performance and operational status for {app.name}.</p>
         </div>
         <button
-          className={phase === "refreshing" ? "button secondary overview-refresh refreshing" : "button secondary overview-refresh"}
+          className={refreshing ? "button secondary overview-refresh refreshing" : "button secondary overview-refresh"}
           type="button"
-          disabled={phase !== "idle"}
-          aria-label={phase === "idle" ? "Refresh overview" : "Refreshing overview"}
-          onClick={() => void loadOverview()}
+          disabled={phase !== "idle" || analyticsPhase === "initial" || analyticsPhase === "refreshing"}
+          aria-label={refreshing ? "Refreshing overview" : "Refresh overview"}
+          onClick={() => void refreshOverview()}
         >
           <RefreshCw size={17} />
-          <span>{phase === "refreshing" ? "Refreshing" : "Refresh"}</span>
+          <span>{refreshing ? "Refreshing" : "Refresh"}</span>
         </button>
       </header>
 
@@ -219,9 +310,11 @@ export const OverviewWorkspace = ({
       ) : null}
 
       <p className="sr-only" aria-live="polite">
-        {phase === "refreshing"
+        {refreshing
           ? "Refreshing overview data."
-          : phase === "idle" && errorCount
+          : workspaceBusy
+            ? "Loading overview data."
+            : phase === "idle" && errorCount
             ? `Overview refreshed with ${errorCount} unavailable section${errorCount === 1 ? "" : "s"}.`
             : phase === "idle"
               ? "Overview data is current."
@@ -230,6 +323,76 @@ export const OverviewWorkspace = ({
 
       <div className="overview-content">
         <div className="overview-matrix">
+          <section className="overview-panel overview-analytics-panel" aria-labelledby="overview-analytics-title">
+            <header className="overview-panel-header overview-analytics-header">
+              <div>
+                <span className="overview-panel-icon"><ChartNoAxesCombined size={17} /></span>
+                <h2 id="overview-analytics-title">Analytics</h2>
+                <span className="overview-scope-label">Selected app · 30 days</span>
+              </div>
+              <button className="overview-panel-action" type="button" onClick={onOpenAnalytics}>
+                Open analytics <ArrowRight size={15} />
+              </button>
+            </header>
+
+            {!analyticsPortfolioReady ? analyticsPortfolioError ? (
+              <InlineError
+                message={analyticsPortfolioError}
+                label="the complete analytics portfolio"
+                onRetry={() => void onRetryAnalyticsPortfolio()}
+              />
+            ) : <OverviewSkeleton /> : analyticsLoading && !analyticsSnapshot ? (
+              <OverviewSkeleton />
+            ) : analyticsError && !analyticsSnapshot ? (
+              <InlineError message={analyticsError} label="analytics" onRetry={() => void loadAnalyticsPulse()} />
+            ) : analyticsSnapshot ? (
+              <>
+                {analyticsError ? <InlineError message={analyticsError} label="analytics" onRetry={() => void loadAnalyticsPulse()} /> : null}
+                {analyticsHasData && analyticsKpis.length === overviewAnalyticsMetricIds.length ? (
+                  <>
+                    <dl className="overview-analytics-rail">
+                      {analyticsKpis.map((kpi) => {
+                        const supportingText = analyticsMetricSupportingText(kpi);
+                        const tone = kpi.current.availability === "AVAILABLE" || kpi.current.availability === "PARTIAL"
+                          ? analyticsChangeTone(kpi.change)
+                          : "neutral";
+                        return (
+                          <div key={kpi.metric}>
+                            <dt>
+                              <span>{kpi.label}</span>
+                              {kpi.metric === "DOWNLOAD_RATE" && kpi.formula ? <small>{kpi.formula}</small> : null}
+                            </dt>
+                            <dd>
+                              <strong>{formatAnalyticsValue(kpi.current, kpi.unit)}</strong>
+                              <span className={`overview-analytics-change ${tone}`}>{supportingText}</span>
+                            </dd>
+                          </div>
+                        );
+                      })}
+                    </dl>
+                    <div className="overview-analytics-meta">
+                      <strong>{status.mode === "demo" ? "Sample data" : "Apple reports"}</strong>
+                      <span>{analyticsCompleteThrough
+                        ? `Complete through ${shortDate(analyticsCompleteThrough)}`
+                        : "Coverage varies by metric"}</span>
+                      <span>Compared with the prior 30 days</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="overview-service-empty overview-analytics-empty">
+                    <span className="status"><span />No cached performance data</span>
+                    <p>Open Analytics to set up reports, sync data, or inspect availability for this app.</p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="overview-service-empty overview-analytics-empty">
+                <span className="status"><span />Analytics unavailable</span>
+                <p>Open Analytics to inspect report setup and availability for this app.</p>
+              </div>
+            )}
+          </section>
+
           <section className="overview-panel overview-release-panel" aria-labelledby="overview-release-title">
             <header className="overview-panel-header">
               <div>

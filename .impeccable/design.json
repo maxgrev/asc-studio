@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-21T17:39:33Z",
+  "generatedAt": "2026-08-24T21:52:08Z",
   "title": "Design System: ASC Studio",
   "extensions": {
     "colorMeta": {
@@ -324,6 +324,11 @@
         "section": "layout"
       },
       {
+        "name": "The Actionable First View Rule",
+        "body": "A canonical workflow editor keeps the selected version and state, local-work count, and exact review action in the first viewport. On narrow screens, recompose those facts into a compact context row and status dock rather than hiding them.",
+        "section": "layout"
+      },
+      {
         "name": "The Flat-by-Default Rule",
         "body": "If a surface persists in the workspace, separate it with tone and a hairline; reserve elevation for dialogs.",
         "section": "elevation"
@@ -339,6 +344,7 @@
       "Do reserve blue for actions, focus, selection, and in-progress state.",
       "Do pair every semantic dot or color with a text label.",
       "Do use one-pixel hairlines and compact rows to organize operational data.",
+      "Do keep active version state, local-work count, and the exact review action visible in a canonical editor’s first viewport.",
       "Do preserve the 1220px, 820px, and 620px responsive behaviors when extending the shell.",
       "Do keep motion to short state changes in transform, opacity, background, or border."
     ],

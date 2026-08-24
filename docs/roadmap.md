@@ -18,8 +18,9 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Create a new editable App Store version
 - Carry stable metadata forward while leaving What's New empty
 - Pull version localizations
-- Edit promotional text, keywords, and What's New
-- Show locale-aware diffs and field limits
+- Edit localized What's New without duplicating storefront fields
+- Select a compatible build and show version and submission status
+- Show locale-aware release-note diffs and field limits
 - Reject expired plans, profile changes, and stale Apple data
 - Run structured submission-readiness checks
 - Add read-only version and localization MCP tools
@@ -45,19 +46,29 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Give `OPENAI_API_KEY` and `ASC_STUDIO_OPENAI_MODEL` precedence for unattended runs, with restart required only for environment changes
 - Share one dynamic connection across Releases, Reviews, and Apple accounts; keep demo mode storage-free and offline from OpenAI
 - Translate What’s New from one source locale into selected locale drafts
-- Translate promotional text only when the user includes it
-- Keep keywords out of translation requests and preserve every locale's current keywords
+- Keep every Store Listing field out of translation requests and preserve its current value
 - Validate model output against strict field, locale, and App Store length limits
 - Keep demo translation local and deterministic
 
-## 0.5 — Release screenshots — complete
+## 0.5 — Store Listing screenshot workflow — complete
 
+- Keep screenshots inside Store Listing’s canonical, top-level workspace rather than as a separate navigation slice
 - Read screenshot sets for one version localization and device type at a time
 - Support iOS, macOS, tvOS, and visionOS screenshot device sets
 - Check file type, dimensions, transparency, size, order, and the ten-file limit before planning
 - Add screenshots, remove selected screenshots, or replace a full set
 - Show exact uploads and removals, then re-read Apple state before confirmation
 - Expose screenshot sets through the read-only MCP server
+
+## Store Listing canonical editor — complete
+
+- Provide a separate top-level editor for version-localized description, promotional text, keywords, marketing and support URLs, and screenshots
+- Keep Releases responsible for versions, builds, What’s New, readiness, submission, and status
+- Persist copy drafts for the browser session and retain exact changed-field intent per locale so one workspace cannot overwrite a newer field owned by the other
+- Keep staged screenshot work alive across Copy & search/Screenshots switches, require explicit discard before leaving, and hard-block departure while confirmation applies
+- Surface pending Store Listing work in Releases and block submission until it is reviewed or reverted
+- Deep-link readiness remediation and Apple Ads keyword handoff to the exact Store Listing version, locale, and field
+- Keep version state, local draft count, and the review action visible in the responsive first viewport
 
 ## 0.6 — Direct Apple API provider — complete
 
@@ -131,7 +142,6 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 
 - Direct IPA/PKG upload through Apple's Build Uploads resources, with a local picker and progress
 - Add a glossary and a separate locale-specific keyword research workflow
-- Add description and support/marketing URL editing
 - App Review details and attachments
 - App preview videos with upload progress and processed-state checks
 - Cancel and release controls

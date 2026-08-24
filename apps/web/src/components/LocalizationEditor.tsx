@@ -14,8 +14,6 @@ interface LocalizationEditorProps {
 
 const limits: Record<MetadataField, number> = {
   whatsNew: 4_000,
-  promotionalText: 170,
-  keywords: 100,
 };
 
 export const LocalizationEditor = ({ baseline, draft, hasSavedDraft, onSave, onRevert, onClose }: LocalizationEditorProps) => {
@@ -59,12 +57,10 @@ export const LocalizationEditor = ({ baseline, draft, hasSavedDraft, onSave, onR
       </header>
       <div className="metadata-fields">
         {field("whatsNew", "What’s New", 7, "Describe the changes in this update.")}
-        {field("promotionalText", "Promotional text", 4, "A short message shown above the description.")}
-        <div className="keyword-editor-heading">
-          <strong>Locale-specific keywords</strong>
-          <p>Research and edit search terms for this storefront. Translation never changes this field.</p>
+        <div className="release-storefront-boundary">
+          <strong>Storefront copy lives in Store Listing</strong>
+          <p>Description, promotional text, keywords, URLs, and screenshots have one canonical editor.</p>
         </div>
-        {field("keywords", "Keywords", 4, "Comma-separated search terms.")}
       </div>
       <footer className="editor-footer">
         <button className="button secondary" type="button" disabled={!hasSavedDraft && !dirty} onClick={() => {

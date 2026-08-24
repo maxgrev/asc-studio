@@ -201,21 +201,34 @@ const snapshotFor = (
 ): LocalizationSnapshot => ({
   id: localization?.id ?? null,
   locale,
+  description: localization?.description ?? "",
   whatsNew: localization?.whatsNew ?? "",
   promotionalText: localization?.promotionalText ?? "",
   keywords: localization?.keywords ?? "",
+  marketingUrl: localization?.marketingUrl ?? "",
+  supportUrl: localization?.supportUrl ?? "",
 });
 
-const localizationFields = ["whatsNew", "promotionalText", "keywords"] as const;
+const localizationFields = [
+  "description",
+  "whatsNew",
+  "promotionalText",
+  "keywords",
+  "marketingUrl",
+  "supportUrl",
+] as const;
 
 const changedFieldCount = (before: LocalizationSnapshot, after: LocalizationSnapshot) =>
   localizationFields.filter((field) => before[field] !== after[field]).length;
 
 const patchFor = (before: LocalizationSnapshot, after: LocalizationSnapshot): VersionLocalizationPatch => ({
   locale: after.locale,
+  ...(before.description !== after.description ? { description: after.description } : {}),
   ...(before.whatsNew !== after.whatsNew ? { whatsNew: after.whatsNew } : {}),
   ...(before.promotionalText !== after.promotionalText ? { promotionalText: after.promotionalText } : {}),
   ...(before.keywords !== after.keywords ? { keywords: after.keywords } : {}),
+  ...(before.marketingUrl !== after.marketingUrl ? { marketingUrl: after.marketingUrl } : {}),
+  ...(before.supportUrl !== after.supportUrl ? { supportUrl: after.supportUrl } : {}),
 });
 
 const screenshotSnapshot = (asset: ScreenshotAsset): ScreenshotAssetSnapshot => ({
@@ -597,7 +610,10 @@ export class AscStudioService {
     const changed = input.localizations
       .map((draft) => {
         const before = snapshotFor(draft.locale, currentByLocale.get(draft.locale));
-        const after = { id: before.id, ...draft };
+        const after = draft.fields.reduce<LocalizationSnapshot>((snapshot, field) => ({
+          ...snapshot,
+          [field]: draft[field],
+        }), before);
         return { before, after, count: changedFieldCount(before, after) };
       })
       .filter((entry) => entry.count > 0)

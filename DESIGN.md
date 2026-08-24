@@ -198,6 +198,8 @@ Use the compact spacing rhythm in the frontmatter for internal gaps and padding.
 
 **The Preserve Context Rule.** Collapse navigation chrome and secondary labels before removing the status, scope, or units that make operational data trustworthy.
 
+**The Actionable First View Rule.** A canonical workflow editor keeps the selected version and state, local-work count, and exact review action in the first viewport. On narrow screens, recompose those facts into a compact context row and status dock rather than hiding them.
+
 ## Elevation & Depth
 
 ASC Studio is flat by default. Persistent panels, tables, docks, and inspectors establish depth with paired surfaces and 1px borders, not shadows. Dialogs are the elevated layer and use the dedicated dialog shadow; the rest of the workspace should remain visually anchored.
@@ -254,6 +256,13 @@ The form language is gently squared and compact. Core controls use the control a
 - **State:** Hover changes tone only; selection uses a soft blue row and a narrow blue inset edge.
 - **Content:** Keep units, locale codes, timestamps, and status labels close to the values they qualify.
 
+### Scoped Workflow Editors
+
+- **Hierarchy:** Use a compact platform/version scope strip, a small peer-mode switch, one bordered workbench, and a persistent status dock. Store Listing applies this pattern to Copy & search and Screenshots without turning either mode into a competing top-level surface.
+- **Master detail:** Keep locale identity and readiness in the rail, the canonical fields in the central editor, and any representative preview subordinate to editing and review.
+- **Pending work:** Pair the semantic status dot with a plain-language draft or staged-work count and keep the exact review action adjacent in the first viewport.
+- **Responsive behavior:** Remove the representative preview before operational context. At the mobile breakpoint, turn the locale rail horizontal, stack fields, keep form text at 16px, and move review into the compact context row and full-width status dock.
+
 ### Status Indicators
 
 - **Style:** A 9px semantic dot paired with a plain-language label.
@@ -290,6 +299,7 @@ The form language is gently squared and compact. Core controls use the control a
 - **Do** reserve blue for actions, focus, selection, and in-progress state.
 - **Do** pair every semantic dot or color with a text label.
 - **Do** use one-pixel hairlines and compact rows to organize operational data.
+- **Do** keep active version state, local-work count, and the exact review action visible in a canonical editor’s first viewport.
 - **Do** preserve the 1220px, 820px, and 620px responsive behaviors when extending the shell.
 - **Do** keep motion to short state changes in transform, opacity, background, or border.
 - **Do** render analytics gaps, partial values, formulas, and provenance explicitly.

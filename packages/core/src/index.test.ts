@@ -327,9 +327,12 @@ class FakeAscProvider implements AscProvider, AppleAdsProvider {
         };
         this.localizations.push(localization);
       }
+      if (patch.description !== undefined) localization.description = patch.description;
       if (patch.whatsNew !== undefined) localization.whatsNew = patch.whatsNew;
       if (patch.promotionalText !== undefined) localization.promotionalText = patch.promotionalText;
       if (patch.keywords !== undefined) localization.keywords = patch.keywords;
+      if (patch.marketingUrl !== undefined) localization.marketingUrl = patch.marketingUrl;
+      if (patch.supportUrl !== undefined) localization.supportUrl = patch.supportUrl;
     }
   }
 
@@ -578,9 +581,12 @@ class FakeAscProvider implements AscProvider, AppleAdsProvider {
     return {
       id: localization?.id ?? null,
       locale,
+      description: localization?.description ?? "",
       whatsNew: localization?.whatsNew ?? "",
       promotionalText: localization?.promotionalText ?? "",
       keywords: localization?.keywords ?? "",
+      marketingUrl: localization?.marketingUrl ?? "",
+      supportUrl: localization?.supportUrl ?? "",
     };
   }
 
@@ -951,9 +957,13 @@ describe("AscStudioService mutation plans", () => {
       versionId: "version-250",
       localizations: [{
         locale: "en-US",
+        description: "Keep every idea organized.",
         whatsNew: "A faster editor with better sync.",
         promotionalText: "Capture every idea faster.",
         keywords: "notes,ideas,tasks,writing",
+        marketingUrl: "https://example.com",
+        supportUrl: "https://example.com/support",
+        fields: ["whatsNew", "promotionalText", "keywords"],
       }],
     });
 
@@ -971,6 +981,82 @@ describe("AscStudioService mutation plans", () => {
     });
   });
 
+  it("plans Store Listing fields through the guarded localization path", async () => {
+    const { service } = createHarness();
+    const plan = await service.createUpdateVersionLocalizationsPlan({
+      appId: app.id,
+      versionId: "version-250",
+      localizations: [{
+        locale: "en-US",
+        description: "Keep every idea organized, searchable, and available on every device.",
+        whatsNew: "A faster editor.",
+        promotionalText: "Capture ideas fast.",
+        keywords: "notes,ideas,tasks",
+        marketingUrl: "https://example.com/orbit-notes",
+        supportUrl: "https://example.com/orbit-notes/support",
+        fields: ["description", "marketingUrl", "supportUrl"],
+      }],
+    });
+
+    expect(plan.operation).toBe("version.update_localizations");
+    if (plan.operation !== "version.update_localizations") throw new Error("Expected localization plan.");
+    expect(plan.after.localizations[0]).toMatchObject({
+      description: "Keep every idea organized, searchable, and available on every device.",
+      marketingUrl: "https://example.com/orbit-notes",
+      supportUrl: "https://example.com/orbit-notes/support",
+    });
+
+    await service.confirmPlan(plan.id, plan.digest);
+    await expect(service.listVersionLocalizations(app.id, "version-250")).resolves.toEqual([
+      expect.objectContaining({
+        description: "Keep every idea organized, searchable, and available on every device.",
+        marketingUrl: "https://example.com/orbit-notes",
+        supportUrl: "https://example.com/orbit-notes/support",
+      }),
+    ]);
+  });
+
+  it("preserves newer fields outside a localization update's explicit intent", async () => {
+    const { service } = createHarness();
+    const plan = await service.createUpdateVersionLocalizationsPlan({
+      appId: app.id,
+      versionId: "version-250",
+      localizations: [{
+        locale: "en-US",
+        description: "A focused Store Listing description.",
+        whatsNew: "Stale release notes from an earlier storefront draft.",
+        promotionalText: "Stale promotion",
+        keywords: "stale,keywords",
+        marketingUrl: "https://stale.example.com",
+        supportUrl: "https://stale.example.com/support",
+        fields: ["description"],
+      }],
+    });
+
+    expect(plan.operation).toBe("version.update_localizations");
+    if (plan.operation !== "version.update_localizations") throw new Error("Expected localization plan.");
+    expect(plan.after.localizations[0]).toMatchObject({
+      description: "A focused Store Listing description.",
+      whatsNew: "A faster editor.",
+      promotionalText: "Capture ideas fast.",
+      keywords: "notes,ideas,tasks",
+      marketingUrl: "https://example.com",
+      supportUrl: "https://example.com/support",
+    });
+
+    await service.confirmPlan(plan.id, plan.digest);
+    await expect(service.listVersionLocalizations(app.id, "version-250")).resolves.toEqual([
+      expect.objectContaining({
+        description: "A focused Store Listing description.",
+        whatsNew: "A faster editor.",
+        promotionalText: "Capture ideas fast.",
+        keywords: "notes,ideas,tasks",
+        marketingUrl: "https://example.com",
+        supportUrl: "https://example.com/support",
+      }),
+    ]);
+  });
+
   it("fails closed when localization metadata changes after review", async () => {
     const { provider, service, store } = createHarness();
     const plan = await service.createUpdateVersionLocalizationsPlan({
@@ -978,9 +1064,13 @@ describe("AscStudioService mutation plans", () => {
       versionId: "version-250",
       localizations: [{
         locale: "en-US",
+        description: "Keep every idea organized.",
         whatsNew: "A faster editor with better sync.",
         promotionalText: "Capture ideas fast.",
         keywords: "notes,ideas,tasks",
+        marketingUrl: "https://example.com",
+        supportUrl: "https://example.com/support",
+        fields: ["whatsNew"],
       }],
     });
     provider.setWhatsNew("Changed in App Store Connect.");

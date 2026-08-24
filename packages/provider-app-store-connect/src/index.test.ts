@@ -335,15 +335,18 @@ describe("AppStoreConnectProvider direct transport", () => {
 
   it("clears metadata through Apple's nullable fields and verifies the saved value", async () => {
     let promotionalText: string | null = "Old promotion";
+    let description = "Description";
+    let supportUrl = "https://example.com/support";
     let patchBody: unknown;
     const localizationPage = () => page([{
       type: "appStoreVersionLocalizations",
       id: "loc-en",
       attributes: {
         locale: "en-US",
-        description: "Description",
+        description,
         keywords: "notes,writing",
         promotionalText,
+        supportUrl,
         whatsNew: "Faster sync.",
       },
     }]);
@@ -353,6 +356,8 @@ describe("AppStoreConnectProvider direct transport", () => {
       if (url.pathname === "/v1/appStoreVersionLocalizations/loc-en" && init?.method === "PATCH") {
         patchBody = JSON.parse(String(init.body));
         promotionalText = null;
+        description = "A calmer writing space.";
+        supportUrl = "https://example.com/help";
         return json({ data: localizationPage().data[0] });
       }
       throw new Error(`Unexpected request: ${init?.method} ${url}`);
@@ -361,14 +366,32 @@ describe("AppStoreConnectProvider direct transport", () => {
 
     await provider.applyVersionLocalizationPatches(
       "version-1",
-      [{ locale: "en-US", promotionalText: "" }],
-      [{ id: "loc-en", locale: "en-US", whatsNew: "Faster sync.", promotionalText: "Old promotion", keywords: "notes,writing" }],
+      [{
+        locale: "en-US",
+        description: "A calmer writing space.",
+        promotionalText: "",
+        supportUrl: "https://example.com/help",
+      }],
+      [{
+        id: "loc-en",
+        locale: "en-US",
+        description: "Description",
+        whatsNew: "Faster sync.",
+        promotionalText: "Old promotion",
+        keywords: "notes,writing",
+        marketingUrl: "",
+        supportUrl: "https://example.com/support",
+      }],
     );
     expect(patchBody).toEqual({
       data: {
         type: "appStoreVersionLocalizations",
         id: "loc-en",
-        attributes: { promotionalText: null },
+        attributes: {
+          description: "A calmer writing space.",
+          promotionalText: null,
+          supportUrl: "https://example.com/help",
+        },
       },
     });
   });

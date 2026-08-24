@@ -157,9 +157,12 @@ const releaseSnapshot = (
 ): LocalizationSnapshot => ({
   id: localization?.id ?? null,
   locale,
+  description: localization?.description ?? "",
   whatsNew: localization?.whatsNew ?? "",
   promotionalText: localization?.promotionalText ?? "",
   keywords: localization?.keywords ?? "",
+  marketingUrl: localization?.marketingUrl ?? "",
+  supportUrl: localization?.supportUrl ?? "",
 });
 
 const screenshotImageUrl = (
@@ -701,9 +704,12 @@ export class AppStoreConnectProvider implements AscProvider, AnalyticsProvider {
     }
     for (const patch of patches) {
       const attributes = {
+        ...(patch.description !== undefined ? { description: toAppleValue(patch.description) } : {}),
         ...(patch.whatsNew !== undefined ? { whatsNew: toAppleValue(patch.whatsNew) } : {}),
         ...(patch.promotionalText !== undefined ? { promotionalText: toAppleValue(patch.promotionalText) } : {}),
         ...(patch.keywords !== undefined ? { keywords: toAppleValue(patch.keywords) } : {}),
+        ...(patch.marketingUrl !== undefined ? { marketingUrl: toAppleValue(patch.marketingUrl) } : {}),
+        ...(patch.supportUrl !== undefined ? { supportUrl: toAppleValue(patch.supportUrl) } : {}),
       };
       const existing = currentByLocale.get(patch.locale);
       if (existing) {
@@ -730,7 +736,7 @@ export class AppStoreConnectProvider implements AscProvider, AnalyticsProvider {
     for (const patch of patches) {
       const item = verified.get(patch.locale);
       if (!item) throw new Error(`App Store Connect did not save ${patch.locale}.`);
-      for (const field of ["whatsNew", "promotionalText", "keywords"] as const) {
+      for (const field of ["description", "whatsNew", "promotionalText", "keywords", "marketingUrl", "supportUrl"] as const) {
         if (patch[field] !== undefined && item[field] !== patch[field]) {
           throw new Error(`App Store Connect did not save ${field} for ${patch.locale}.`);
         }

@@ -4,6 +4,8 @@ import {
   activePlans,
   budgetSummary,
   campaignCounts,
+  overviewAnalyticsCompleteThrough,
+  overviewAnalyticsQuery,
   pendingPlanCountLabel,
   selectPrimaryRelease,
   sortBuilds,
@@ -139,5 +141,40 @@ describe("overview data helpers", () => {
     const active = activePlans(plans, Date.parse("2026-08-21T10:30:00.000Z"));
     expect(active).toHaveLength(0);
     expect(pendingPlanCountLabel(plans, active.length)).toBe("0+");
+  });
+
+  it("builds a cache-only 30-day selected-app analytics query after the displayed metrics' correction window", () => {
+    expect(overviewAnalyticsQuery("app", new Date(2026, 7, 24, 12))).toEqual({
+      schemaVersion: 1,
+      scope: "APP",
+      appIds: ["app"],
+      startDate: "2026-07-23",
+      endDate: "2026-08-21",
+      compare: "PREVIOUS_PERIOD",
+      granularity: "DAY",
+      breakdowns: [],
+      filters: { territories: [], sources: [], productPages: [], versions: [] },
+    });
+  });
+
+  it("reports a shared completeness date only when every overview metric has coverage", () => {
+    const coverage = [
+      ["DOWNLOADS", "2026-08-20"],
+      ["FIRST_TIME_DOWNLOADS", "2026-08-20"],
+      ["DOWNLOAD_RATE", "2026-08-19"],
+      ["PROCEEDS", "2026-08-21"],
+    ].map(([metric, completeThrough]) => ({
+      metric,
+      source: "APP_STORE_CONNECT_ANALYTICS_REPORTS",
+      formula: null,
+      expectedDelayDays: 2,
+      completeThrough,
+      availability: "AVAILABLE",
+      detail: "Complete.",
+      reportFamilies: [],
+    })) as Parameters<typeof overviewAnalyticsCompleteThrough>[0];
+
+    expect(overviewAnalyticsCompleteThrough(coverage)).toBe("2026-08-19");
+    expect(overviewAnalyticsCompleteThrough(coverage.slice(0, -1))).toBeNull();
   });
 });

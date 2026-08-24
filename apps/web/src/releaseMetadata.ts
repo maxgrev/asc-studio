@@ -47,20 +47,45 @@ export const localeNames: Record<AppStoreLocale, string> = {
   "zh-Hant": "Chinese (Traditional)",
 };
 
-export const metadataFields = ["whatsNew", "promotionalText", "keywords"] as const;
+export const metadataFields = ["whatsNew"] as const;
 export type MetadataField = (typeof metadataFields)[number];
 
-export const metadataFieldLabels: Record<MetadataField, string> = {
+export const localizationFields = [
+  "description",
+  "whatsNew",
+  "promotionalText",
+  "keywords",
+  "marketingUrl",
+  "supportUrl",
+] as const;
+export type LocalizationField = (typeof localizationFields)[number];
+
+export const storeListingFields = [
+  "description",
+  "promotionalText",
+  "keywords",
+  "marketingUrl",
+  "supportUrl",
+] as const;
+export type StoreListingField = (typeof storeListingFields)[number];
+
+export const metadataFieldLabels: Record<LocalizationField, string> = {
+  description: "Description",
   whatsNew: "What’s New",
   promotionalText: "Promotional text",
   keywords: "Keywords",
+  marketingUrl: "Marketing URL",
+  supportUrl: "Support URL",
 };
 
 export const draftFrom = (localization: VersionLocalization): VersionLocalizationDraft => ({
   locale: localization.locale,
+  description: localization.description,
   whatsNew: localization.whatsNew,
   promotionalText: localization.promotionalText,
   keywords: localization.keywords,
+  marketingUrl: localization.marketingUrl,
+  supportUrl: localization.supportUrl,
 });
 
 export const snapshotFrom = (localization: VersionLocalization): LocalizationSnapshot => ({
@@ -69,10 +94,22 @@ export const snapshotFrom = (localization: VersionLocalization): LocalizationSna
 });
 
 export const draftMatches = (left: VersionLocalizationDraft, right: VersionLocalizationDraft) =>
-  metadataFields.every((field) => left[field] === right[field]);
+  (
+    left.description === right.description
+    && left.whatsNew === right.whatsNew
+    && left.promotionalText === right.promotionalText
+    && left.keywords === right.keywords
+    && left.marketingUrl === right.marketingUrl
+    && left.supportUrl === right.supportUrl
+  );
 
 export interface MetadataIssue {
   field: MetadataField;
+  message: string;
+}
+
+export interface StoreListingIssue {
+  field: StoreListingField;
   message: string;
 }
 
@@ -80,8 +117,28 @@ export const metadataIssues = (draft: VersionLocalizationDraft): MetadataIssue[]
   const issues: MetadataIssue[] = [];
   if (!draft.whatsNew.trim()) issues.push({ field: "whatsNew", message: "Add release notes for this update." });
   if (draft.whatsNew.length > 4_000) issues.push({ field: "whatsNew", message: `Shorten release notes by ${draft.whatsNew.length - 4_000} characters.` });
+  return issues;
+};
+
+const validWebUrl = (value: string) => {
+  if (!value.trim()) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+};
+
+export const storeListingIssues = (draft: VersionLocalizationDraft): StoreListingIssue[] => {
+  const issues: StoreListingIssue[] = [];
+  if (!draft.description.trim()) issues.push({ field: "description", message: "Add a description for this storefront." });
+  if (draft.description.length > 4_000) issues.push({ field: "description", message: `Shorten the description by ${draft.description.length - 4_000} characters.` });
   if (draft.promotionalText.length > 170) issues.push({ field: "promotionalText", message: `Shorten promotional text by ${draft.promotionalText.length - 170} characters.` });
   if (draft.keywords.length > 100) issues.push({ field: "keywords", message: `Shorten keywords by ${draft.keywords.length - 100} characters.` });
+  if (!draft.supportUrl.trim()) issues.push({ field: "supportUrl", message: "Add a support URL for this storefront." });
+  else if (!validWebUrl(draft.supportUrl)) issues.push({ field: "supportUrl", message: "Use a complete http or https support URL." });
+  if (draft.marketingUrl.trim() && !validWebUrl(draft.marketingUrl)) issues.push({ field: "marketingUrl", message: "Use a complete http or https marketing URL." });
   return issues;
 };
 

@@ -1033,9 +1033,13 @@ describe("local-agent session boundary", () => {
         versionId: "demo-version-250",
         localizations: [{
           locale: "en-US",
+          description: "Capture and organize every idea in one private workspace.",
           whatsNew: "A faster editor, better search, and more reliable sync.",
           promotionalText: "Capture ideas faster and keep every note close.",
           keywords: "notes,writing,ideas,tasks,organizer,journal,productivity",
+          marketingUrl: "https://example.com/orbit-notes",
+          supportUrl: "https://example.com/orbit-notes/support",
+          fields: ["description", "whatsNew", "promotionalText", "keywords", "marketingUrl", "supportUrl"],
         }],
       }),
     });

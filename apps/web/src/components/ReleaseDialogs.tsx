@@ -13,12 +13,12 @@ import type {
   VersionLocalizationDraft,
 } from "@asc-studio/contracts";
 import { AlertTriangle, ArrowRight, CheckCircle2, Image, KeyRound, Languages, Send, ShieldCheck, X } from "lucide-react";
-import type { ReactNode } from "react";
-import { useState } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   localeNames,
+  localizationFields,
   metadataFieldLabels,
-  metadataFields,
   nextPatchVersion,
   platformLabel,
 } from "../releaseMetadata.js";
@@ -32,19 +32,68 @@ interface DialogFrameProps {
   children: ReactNode;
 }
 
-const DialogFrame = ({ title, subtitle, wide, busy, onClose, children }: DialogFrameProps) => (
-  <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
-    if (event.target === event.currentTarget && !busy) onClose();
-  }}>
-    <section className={wide ? "dialog release-dialog wide" : "dialog release-dialog"} role="dialog" aria-modal="true" aria-label={title}>
-      <header className="dialog-header">
-        <div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div>
-        <button className="icon-button" type="button" onClick={onClose} disabled={busy} aria-label="Close dialog"><X size={19} /></button>
-      </header>
-      {children}
-    </section>
-  </div>
-);
+const DialogFrame = ({ title, subtitle, wide, busy, onClose, children }: DialogFrameProps) => {
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const initialFocus = closeRef.current && !closeRef.current.disabled ? closeRef.current : dialogRef.current;
+    initialFocus?.focus();
+    return () => previousFocus?.focus();
+  }, []);
+
+  const keepFocusInside = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      if (!busy) onClose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+      "button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+    ) ?? []).filter((element) => element.offsetParent !== null);
+    if (!focusable.length) {
+      event.preventDefault();
+      dialogRef.current?.focus();
+      return;
+    }
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    if (!focusable.includes(document.activeElement as HTMLElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !busy) onClose();
+    }}>
+      <section
+        ref={dialogRef}
+        className={wide ? "dialog release-dialog wide" : "dialog release-dialog"}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        onKeyDown={keepFocusInside}
+      >
+        <header className="dialog-header">
+          <div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div>
+          <button ref={closeRef} className="icon-button" type="button" onClick={onClose} disabled={busy} aria-label="Close dialog"><X size={19} /></button>
+        </header>
+        {children}
+      </section>
+    </div>
+  );
+};
 
 interface CreateVersionDialogProps {
   appId: string;
@@ -121,7 +170,7 @@ export const LocalizationReviewDialog = ({ plan, busy, error, onConfirm, onClose
       {plan.after.localizations.map((after) => {
         const before = plan.before.localizations.find((item) => item.locale === after.locale);
         if (!before) return null;
-        const changed = metadataFields.filter((field) => before[field] !== after[field]);
+        const changed = localizationFields.filter((field) => before[field] !== after[field]);
         return (
           <section className="locale-diff" key={after.locale}>
             <header><strong>{localeNames[after.locale]}</strong><span>{after.locale}</span></header>
@@ -238,13 +287,14 @@ interface ReadinessDialogProps {
   busy: boolean;
   error: string | null;
   onRetry: () => void;
+  onFix?: (step: ValidationReport["remediation"]["steps"][number]) => void;
   onClose: () => void;
 }
 
-export const ReadinessDialog = ({ report, demo, busy, error, onRetry, onClose }: ReadinessDialogProps) => (
+export const ReadinessDialog = ({ report, demo, busy, error, onRetry, onFix, onClose }: ReadinessDialogProps) => (
   <DialogFrame title="Submission readiness" subtitle={demo ? "Sample results using the same validation contract." : "Live preflight results from Apple's public API."} busy={busy} onClose={onClose}>
     <div className="dialog-content readiness-content">
-      {busy ? <div className="readiness-loading"><span className="spinner" />Checking App Store metadata, build, review details, and availability…</div> : report ? (
+      {busy ? <div className="readiness-loading"><span className="spinner" />Checking App Store metadata, release notes, build, and availability…</div> : report ? (
         <>
           <div className={report.summary.blocking === 0 ? "readiness-summary ready" : "readiness-summary blocked"}>
             {report.summary.blocking === 0 ? <CheckCircle2 size={23} /> : <AlertTriangle size={23} />}
@@ -254,6 +304,9 @@ export const ReadinessDialog = ({ report, demo, busy, error, onRetry, onClose }:
             {report.remediation.steps.length ? report.remediation.steps.map((step) => (
               <li className={step.blocking ? "blocking" : "warning"} key={`${step.order}-${step.checkId}`}>
                 <span>{step.order}</span><div><strong>{step.message}</strong><p>{step.remediation}</p>{step.locale ? <small>{step.locale}{step.field ? ` · ${step.field}` : ""}</small> : null}</div>
+                {onFix && ["description", "promotionalText", "keywords", "marketingUrl", "supportUrl", "screenshots"].includes(step.field)
+                  ? <button className="button secondary remediation-fix" type="button" onClick={() => onFix(step)}>Open Store Listing</button>
+                  : null}
               </li>
             )) : <li className="all-clear"><CheckCircle2 size={18} />No fixes are required by the current report.</li>}
           </ol>
@@ -291,16 +344,11 @@ export const TranslationDialog = ({
   onGenerate,
   onClose,
 }: TranslationDialogProps) => {
-  const [includeWhatsNew, setIncludeWhatsNew] = useState(true);
-  const [includePromotionalText, setIncludePromotionalText] = useState(false);
   const [selectedLocales, setSelectedLocales] = useState(() => new Set(targets.map((target) => target.locale)));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fields: ReleaseCopyField[] = [
-    ...(includeWhatsNew ? ["whatsNew" as const] : []),
-    ...(includePromotionalText ? ["promotionalText" as const] : []),
-  ];
+  const fields: ReleaseCopyField[] = ["whatsNew"];
   const targetLocales = targets.filter((target) => selectedLocales.has(target.locale)).map((target) => target.locale);
   const selectedSourceIsEmpty = fields.some((field) => !source[field].trim());
   const allSelected = selectedLocales.size === targets.length;
@@ -379,20 +427,16 @@ export const TranslationDialog = ({
         </div>
 
         <section className="translation-field-picker" aria-labelledby="translation-fields-title">
-          <header><div><h3 id="translation-fields-title">Choose what to translate</h3><p>What’s New is selected by default. Promotional text stays unchanged unless you include it.</p></div></header>
-          <label className={includeWhatsNew ? "translation-field selected" : "translation-field"}>
-            <input type="checkbox" checked={includeWhatsNew} onChange={(event) => setIncludeWhatsNew(event.target.checked)} />
+          <header><div><h3 id="translation-fields-title">Translate What’s New</h3><p>Release translation is intentionally limited to the notes for this version.</p></div></header>
+          <label className="translation-field selected">
+            <input type="checkbox" checked readOnly />
             <span><strong>What’s New</strong><small>{source.whatsNew.length} / 4,000</small><em>{source.whatsNew || "Write the source release notes first."}</em></span>
-          </label>
-          <label className={includePromotionalText ? "translation-field selected" : "translation-field"}>
-            <input type="checkbox" checked={includePromotionalText} onChange={(event) => setIncludePromotionalText(event.target.checked)} />
-            <span><strong>Promotional text</strong><small>{source.promotionalText.length} / 170 · optional</small><em>{source.promotionalText || "Write the source promotional text first."}</em></span>
           </label>
         </section>
 
         <div className="keyword-boundary">
           <ShieldCheck size={19} />
-          <p><strong>Keywords are kept separate</strong><span>This action never reads or changes keywords. Keep researching and editing them for each locale.</span></p>
+          <p><strong>Storefront copy stays in Store Listing</strong><span>This action never reads or changes descriptions, promotional text, keywords, URLs, or screenshots.</span></p>
         </div>
 
         <section className="translation-targets" aria-labelledby="translation-targets-title">

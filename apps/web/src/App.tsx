@@ -1,6 +1,8 @@
 import type {
   AgentStatus,
   AppleAdsConnectionResponse,
+  AppStoreLocale,
+  AppStorePlatform,
   AppStoreConnectAccount,
   AppSummary,
   OpenAiConnectionResponse,
@@ -17,14 +19,45 @@ import { OverviewWorkspace } from "./components/OverviewWorkspace.js";
 import { ReleaseWorkspace } from "./components/ReleaseWorkspace.js";
 import { ReviewsWorkspace } from "./components/ReviewsWorkspace.js";
 import { Sidebar, type WorkspaceSection } from "./components/Sidebar.js";
+import {
+  readStoreListingDraftSummary,
+  StoreListingWorkspace,
+  type StoreListingDraftSummary,
+  type StoreListingScreenshotSummary,
+  type StoreListingTarget,
+} from "./components/StoreListingWorkspace.js";
 import { TestFlightWorkspace } from "./components/TestFlightWorkspace.js";
 
 const initialAppLimit = 25;
-const workspaceSections: WorkspaceSection[] = ["overview", "analytics", "testflight", "releases", "apple-ads", "reviews"];
+const workspaceSections: WorkspaceSection[] = ["overview", "analytics", "testflight", "releases", "store-listing", "apple-ads", "reviews"];
 const initialWorkspaceSection = () => {
   const value = new URLSearchParams(window.location.search).get("section");
   return workspaceSections.includes(value as WorkspaceSection) ? value as WorkspaceSection : "releases";
 };
+const storeListingPlatforms = new Set<AppStorePlatform>(["IOS", "MAC_OS", "TV_OS", "VISION_OS"]);
+const storeListingFields = new Set<NonNullable<StoreListingTarget["field"]>>([
+  "description",
+  "promotionalText",
+  "keywords",
+  "marketingUrl",
+  "supportUrl",
+  "screenshots",
+]);
+const storeTargetFromLocation = (): StoreListingTarget | null => {
+  const parameters = new URLSearchParams(window.location.search);
+  const versionId = parameters.get("listingVersion") ?? undefined;
+  const platformValue = parameters.get("listingPlatform") as AppStorePlatform | null;
+  const locale = parameters.get("listingLocale") as AppStoreLocale | null;
+  const fieldValue = parameters.get("listingField") as StoreListingTarget["field"] | null;
+  const target: StoreListingTarget = {
+    ...(versionId ? { versionId } : {}),
+    ...(platformValue && storeListingPlatforms.has(platformValue) ? { platform: platformValue } : {}),
+    ...(locale ? { locale } : {}),
+    ...(fieldValue && storeListingFields.has(fieldValue) ? { field: fieldValue } : {}),
+  };
+  return Object.keys(target).length ? target : null;
+};
+const locationPath = () => `${window.location.pathname}${window.location.search}${window.location.hash}`;
 type AppleCredentialScope = "app-store-connect" | "apple-ads";
 interface ShellFailure {
   message: string;
@@ -76,12 +109,20 @@ export const App = () => {
   const [section, setSection] = useState<WorkspaceSection>(initialWorkspaceSection);
   const [testFlightInspectorOpen, setTestFlightInspectorOpen] = useState(false);
   const [metadataKeywordSuggestion, setMetadataKeywordSuggestion] = useState<string | null>(null);
+  const [storeNavigationTarget, setStoreNavigationTarget] = useState<StoreListingTarget | null>(storeTargetFromLocation);
+  const [storeListingDraftSummary, setStoreListingDraftSummary] = useState<StoreListingDraftSummary>({});
+  const [storeListingScreenshotSummary, setStoreListingScreenshotSummary] = useState<StoreListingScreenshotSummary>({});
+  const [storeListingScreenshotApplyingSummary, setStoreListingScreenshotApplyingSummary] = useState<StoreListingScreenshotSummary>({});
+  const [storeListingSession, setStoreListingSession] = useState(0);
   const [loading, setLoading] = useState(true);
   const [fatalError, setFatalError] = useState<ShellFailure | null>(null);
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
   const [connectionsDialogTarget, setConnectionsDialogTarget] = useState<"general" | "apple-ads" | "openai" | null>(null);
   const loadGeneration = useRef(0);
   const openAiLoadGeneration = useRef(0);
+  const acceptedLocation = useRef(locationPath());
+  const hasPendingStoreListingScreenshots = Object.values(storeListingScreenshotSummary).some(Boolean);
+  const isApplyingStoreListingScreenshots = Object.values(storeListingScreenshotApplyingSummary).some(Boolean);
 
   const loadOpenAiConnection = useCallback(async () => {
     const generation = ++openAiLoadGeneration.current;
@@ -107,18 +148,88 @@ export const App = () => {
     void loadOpenAiConnection();
   }, [loadOpenAiConnection]);
 
+  const confirmScreenshotDeparture = useCallback((message = "Discard the staged screenshot changes and leave Store Listing? Uploaded staging files will be removed.") => {
+    if (section !== "store-listing") return true;
+    if (isApplyingStoreListingScreenshots) {
+      window.alert("Screenshot changes are being applied. Stay in Store Listing until App Store Connect confirms the update.");
+      return false;
+    }
+    if (!hasPendingStoreListingScreenshots) return true;
+    return window.confirm(message);
+  }, [hasPendingStoreListingScreenshots, isApplyingStoreListingScreenshots, section]);
+
+  const discardScreenshotSession = useCallback(() => {
+    setStoreListingScreenshotSummary({});
+    setStoreListingScreenshotApplyingSummary({});
+    setStoreListingSession((current) => current + 1);
+  }, []);
+
+  const openAccountSetup = useCallback(() => {
+    if (!confirmScreenshotDeparture("Account setup can reload Store Listing and discard staged screenshot changes. Continue to account setup?")) return false;
+    setAccountDialogOpen(true);
+    return true;
+  }, [confirmScreenshotDeparture]);
+
   const navigate = useCallback((nextSection: WorkspaceSection) => {
+    if (nextSection !== "store-listing" && !confirmScreenshotDeparture()) return;
+    if (nextSection !== "store-listing" && hasPendingStoreListingScreenshots) discardScreenshotSession();
+    setSection(nextSection);
+    if (nextSection === "store-listing") setStoreNavigationTarget(null);
+    const parameters = new URLSearchParams(window.location.search);
+    parameters.set("section", nextSection);
+    for (const key of ["listingVersion", "listingPlatform", "listingLocale", "listingField"]) parameters.delete(key);
+    const nextLocation = `${window.location.pathname}?${parameters}${window.location.hash}`;
+    window.history.pushState(window.history.state, "", nextLocation);
+    acceptedLocation.current = nextLocation;
+  }, [confirmScreenshotDeparture, discardScreenshotSession, hasPendingStoreListingScreenshots]);
+
+  const navigateStoreWorkflow = useCallback((nextSection: "store-listing" | "releases", target: StoreListingTarget) => {
+    if (nextSection === "releases" && !confirmScreenshotDeparture()) return;
+    if (nextSection === "releases" && hasPendingStoreListingScreenshots) discardScreenshotSession();
+    setStoreNavigationTarget(target);
     setSection(nextSection);
     const parameters = new URLSearchParams(window.location.search);
     parameters.set("section", nextSection);
+    for (const key of ["listingVersion", "listingPlatform", "listingLocale", "listingField"]) parameters.delete(key);
+    if (target.versionId) parameters.set("listingVersion", target.versionId);
+    if (target.platform) parameters.set("listingPlatform", target.platform);
+    if (target.locale) parameters.set("listingLocale", target.locale);
+    if (target.field) parameters.set("listingField", target.field);
+    const nextLocation = `${window.location.pathname}?${parameters}${window.location.hash}`;
+    window.history.pushState(window.history.state, "", nextLocation);
+    acceptedLocation.current = nextLocation;
+  }, [confirmScreenshotDeparture, discardScreenshotSession, hasPendingStoreListingScreenshots]);
+
+  const openAnalyticsForApp = useCallback((appId: string) => {
+    const parameters = new URLSearchParams(window.location.search);
+    parameters.set("section", "analytics");
+    parameters.set("analyticsApp", appId);
+    parameters.set("range", "30d");
+    parameters.set("compare", "PREVIOUS_PERIOD");
+    parameters.set("metric", "DOWNLOADS");
+    parameters.set("breakdown", "TERRITORY");
+    ["analyticsTerritory", "analyticsSource", "analyticsProductPage", "analyticsVersion"]
+      .forEach((parameter) => parameters.delete(parameter));
     window.history.pushState(window.history.state, "", `${window.location.pathname}?${parameters}${window.location.hash}`);
+    acceptedLocation.current = locationPath();
+    setSelectedAppId(appId);
+    setSection("analytics");
   }, []);
 
   useEffect(() => {
-    const restoreLocation = () => setSection(initialWorkspaceSection());
+    const restoreLocation = () => {
+      if (!confirmScreenshotDeparture()) {
+        window.history.pushState(window.history.state, "", acceptedLocation.current);
+        return;
+      }
+      if (hasPendingStoreListingScreenshots) discardScreenshotSession();
+      setSection(initialWorkspaceSection());
+      setStoreNavigationTarget(storeTargetFromLocation());
+      acceptedLocation.current = locationPath();
+    };
     window.addEventListener("popstate", restoreLocation);
     return () => window.removeEventListener("popstate", restoreLocation);
-  }, []);
+  }, [confirmScreenshotDeparture, discardScreenshotSession, hasPendingStoreListingScreenshots]);
 
   const loadShell = useCallback(async () => {
     const generation = ++loadGeneration.current;
@@ -224,8 +335,40 @@ export const App = () => {
 
   const app = apps.find((candidate) => candidate.id === selectedAppId) ?? null;
 
+  useEffect(() => {
+    setStoreListingDraftSummary(app ? readStoreListingDraftSummary(app.id) : {});
+    setStoreListingScreenshotSummary({});
+    setStoreListingScreenshotApplyingSummary({});
+  }, [app?.id]);
+
+  const changeApp = useCallback((appId: string) => {
+    if (!confirmScreenshotDeparture()) return;
+    if (hasPendingStoreListingScreenshots) discardScreenshotSession();
+    setSelectedAppId(appId);
+  }, [confirmScreenshotDeparture, discardScreenshotSession, hasPendingStoreListingScreenshots]);
+
+  const updateScreenshotSummary = useCallback((versionId: string, pending: boolean, applying: boolean) => {
+    setStoreListingScreenshotSummary((current) => {
+      if (pending && current[versionId]) return current;
+      if (!pending && !current[versionId]) return current;
+      const next = { ...current };
+      if (pending) next[versionId] = true;
+      else delete next[versionId];
+      return next;
+    });
+    setStoreListingScreenshotApplyingSummary((current) => {
+      if (applying && current[versionId]) return current;
+      if (!applying && !current[versionId]) return current;
+      const next = { ...current };
+      if (applying) next[versionId] = true;
+      else delete next[versionId];
+      return next;
+    });
+  }, []);
+
   const refreshAfterAccountChange = async () => {
     loadGeneration.current += 1;
+    discardScreenshotSession();
     setApps([]);
     setSelectedAppId(null);
     setFatalError(null);
@@ -234,6 +377,7 @@ export const App = () => {
 
   const switchAccount = async (connectionId: string) => {
     if (connectionId === status?.connectionId) return;
+    if (!confirmScreenshotDeparture()) return;
     loadGeneration.current += 1;
     try {
       await api.activateAppleAccount(connectionId);
@@ -245,6 +389,7 @@ export const App = () => {
   };
 
   const removeAccount = async (connectionId: string) => {
+    if (!confirmScreenshotDeparture()) return;
     loadGeneration.current += 1;
     try {
       await api.removeAppleAccount(connectionId);
@@ -289,10 +434,10 @@ export const App = () => {
         accounts={accounts}
         status={status}
         activeSection={section}
-        onAppChange={setSelectedAppId}
+        onAppChange={changeApp}
         onNavigate={navigate}
         onAccountChange={switchAccount}
-        onAddAccount={() => setAccountDialogOpen(true)}
+        onAddAccount={() => { openAccountSetup(); }}
         onRemoveAccount={removeAccount}
         appleAdsStatus={appleAdsConnection?.status ?? null}
         onManageConnections={() => openConnections("general")}
@@ -331,7 +476,11 @@ export const App = () => {
           app={app}
           status={status}
           appleAdsConnection={appleAdsConnection}
+          analyticsPortfolioReady={portfolioAppsReady}
+          analyticsPortfolioError={portfolioAppsError}
           onNavigate={navigate}
+          onOpenAnalytics={() => openAnalyticsForApp(app.id)}
+          onRetryAnalyticsPortfolio={retryPortfolioApps}
           onManageAppleServices={() => openConnections("general")}
           key={`overview-${status.connectionId ?? "none"}-${appleAdsConnection.connection.adAccountId ?? "none"}-${app.id}`}
         />
@@ -361,10 +510,22 @@ export const App = () => {
         />
       ) : section === "testflight" ? (
         <TestFlightWorkspace app={app} status={status} onInspectorChange={setTestFlightInspectorOpen} key={`testflight-${status?.connectionId ?? "none"}-${app.id}`} />
+      ) : section === "store-listing" ? (
+        <StoreListingWorkspace
+          app={app}
+          status={status}
+          target={storeNavigationTarget}
+          suggestedKeyword={metadataKeywordSuggestion}
+          onSuggestedKeywordUsed={() => setMetadataKeywordSuggestion(null)}
+          onOpenRelease={(target) => navigateStoreWorkflow("releases", target)}
+          onDraftSummaryChange={setStoreListingDraftSummary}
+          onScreenshotPendingChange={updateScreenshotSummary}
+          key={`store-listing-${status?.connectionId ?? "none"}-${app.id}-${storeListingSession}`}
+        />
       ) : section === "apple-ads" ? (
         <AppleAdsWorkspace app={app} status={status} onManageConnection={() => openConnections("apple-ads")} onUseInMetadata={(keyword) => {
           setMetadataKeywordSuggestion(keyword);
-          navigate("releases");
+          navigateStoreWorkflow("store-listing", { field: "keywords" });
         }} key={`apple-ads-${status?.connectionId ?? "none"}-${appleAdsConnection?.connection.adAccountId ?? "none"}-${app.id}`} />
       ) : section === "reviews" ? (
         <ReviewsWorkspace
@@ -388,8 +549,10 @@ export const App = () => {
           openAiSetupOpen={connectionsDialogTarget === "openai"}
           onReloadOpenAiConnection={loadOpenAiConnection}
           onManageOpenAi={() => openConnections("openai")}
-          suggestedKeyword={metadataKeywordSuggestion}
-          onSuggestedKeywordUsed={() => setMetadataKeywordSuggestion(null)}
+          target={storeNavigationTarget}
+          storeListingDraftSummary={storeListingDraftSummary}
+          storeListingScreenshotSummary={storeListingScreenshotSummary}
+          onOpenStoreListing={(target) => navigateStoreWorkflow("store-listing", target)}
           key={`releases-${status?.connectionId ?? "none"}-${app.id}`}
         />
       )}
@@ -418,8 +581,7 @@ export const App = () => {
         onClose={() => setConnectionsDialogTarget(null)}
         onAppleAdsChange={(connection) => setAppleAdsConnection(connection)}
         onManageAppStoreConnect={() => {
-          setConnectionsDialogTarget(null);
-          setAccountDialogOpen(true);
+          if (openAccountSetup()) setConnectionsDialogTarget(null);
         }}
       /> : null}
     </div>

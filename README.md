@@ -2,13 +2,13 @@
 
 ASC Studio is a local-first App Store Connect and Apple Ads control plane with a desktop-grade web interface and an MCP server. It connects straight to Apple's public APIs. It does not install, invoke, or parse another App Store tool.
 
-This repository now contains eight complete vertical slices:
+Complete workflows in this repository include:
 
 - A TestFlight control room for builds, filters, build details, tester groups, and reviewed group assignments.
-- A multi-platform release workspace for iOS, macOS, tvOS, and visionOS version creation, localized What's New, promotional text, keywords, exact diffs, and submission-readiness checks.
+- A multi-platform Releases workspace for iOS, macOS, tvOS, and visionOS version creation, build selection, localized What’s New, submission-readiness checks, review submission, and submission status.
 - A guarded App Review path that selects a processed build, previews attachment and submission, checks for stale Apple data, confirms once, and reads the resulting submission state.
-- GUI- or environment-managed BYOK writing assistance that turns one source locale into checked release-copy drafts and produces grounded customer-review reply drafts without reading or changing keywords.
-- Per-locale, per-device screenshot sets with local file checks, add or replace modes, exact review plans, stale-data checks, and guarded upload or deletion.
+- GUI- or environment-managed BYOK writing assistance that turns one source locale’s What’s New into checked release-note drafts and produces grounded customer-review reply drafts without reading or changing storefront fields.
+- A top-level Store Listing workspace that is the canonical editor for version-localized description, promotional text, keywords, marketing and support URLs, and per-locale, per-device screenshot sets. Copy edits are session-durable local drafts; screenshot changes use local file checks, add or replace modes, exact review plans, stale-data checks, and guarded upload or deletion.
 - An app-scoped written-customer-review inbox with rating, territory, and exact published-response filters; loaded-review search; Apple cursor pagination; a full-review inspector; per-review session drafts; guarded create-or-replace public responses; and optional OpenAI reply drafting.
 - A portfolio-first Analytics workspace that combines every app in the active organization, compares periods, ranks the apps behind a change, and preserves the same metric and time context when drilling into territory, source, page type, or version evidence.
 - An Apple Ads workspace that combines app suggestions with country-and-genre search popularity, reports on campaign performance, and manages paused-first campaigns, ad groups, keywords, status, budgets, and bids through reviewed plans.
@@ -119,15 +119,18 @@ npm run local
 
 `OPENAI_API_KEY` overrides a saved GUI key and disables GUI replacement or removal while it is active. `ASC_STUDIO_OPENAI_MODEL` likewise overrides the saved or default model for that process. Environment credentials are not copied into Keychain; they remain subject to the security of the launching process and any referenced files. Environment changes require a restart; GUI-managed changes do not. Removing the environment variables and restarting reveals any previously saved GUI connection again. This follows [OpenAI's API key safety guidance](https://help.openai.com/en/articles/5112595-best-practices-for-api-key-safety). OpenAI API billing remains separate from ChatGPT subscriptions.
 
-In the release workspace:
+Releases and Store Listing deliberately have separate ownership. **Releases** owns version creation, build selection, What’s New, readiness, review submission, and submission status. **Store Listing** owns version-localized description, promotional text, keywords, marketing and support URLs, and screenshots.
+
+Store Listing copy edits survive workspace navigation for the current browser session and retain exact per-field mutation intent. Planning merges only those intended fields into current App Store Connect state, so a stale draft from one workspace cannot overwrite a newer field owned by the other. Screenshot work remains staged when switching between **Copy & search** and **Screenshots**. Leaving Store Listing with staged screenshot work requires explicit discard confirmation, and departure is blocked while a confirmed screenshot plan is being applied. Releases surfaces pending Store Listing work and blocks submission until it is reviewed or reverted; readiness remediation opens the exact Store Listing version, locale, and field, while Apple Ads keyword handoff opens Keywords.
+
+To translate release notes in Releases:
 
 1. Edit and save What’s New in the source locale, usually English.
 2. Press **Translate**.
-3. Pick What’s New, promotional text, or both. Promotional text starts off because it often carries forward unchanged.
-4. Pick the target locales and generate translations.
-5. Review the local drafts, then use the existing metadata review and confirmation flow to send them to App Store Connect.
+3. Pick the target locales and generate translations.
+4. Review the local drafts, then use the existing metadata review and confirmation flow to send them to App Store Connect.
 
-Keywords stay outside this action. Each locale keeps its current keyword set until you edit that locale yourself.
+What’s New is the only field included in release translation. Description, promotional text, keywords, and URLs stay outside the model request and remain unchanged until edited in Store Listing.
 
 In the Reviews workspace, select a review with a title or body and press **Draft with OpenAI**. The browser sends only the selected app and review IDs to the local agent. The agent re-reads that exact review from the active App Store Connect provider, then makes two live OpenAI Responses calls with `store: false`. The generation call sends only the review's rating, title, and body and accepts only a strict `{responseBody}` result. A separate verification call receives that proposed response and returns a private literal-English safety gloss plus four strict checks: app-side claims, troubleshooting or contact, rating manipulation, and canned or AI-style wording. The local agent discards the gloss and checks; the browser receives only a reply that passes verification. OpenAI's API data policies still govern request processing.
 
@@ -185,7 +188,7 @@ Analytics facts and sync state are cached locally in SQLite, scoped by Apple iss
 
 The one-time bearer secret stays in the URL fragment, moves into browser session storage, and is removed from the address bar after bootstrap. A plain tab without that session cannot call the agent API.
 
-The current live write paths can add a build to a TestFlight group; create an editable iOS, macOS, tvOS, or visionOS App Store version; apply selected locale changes; add, replace, or delete screenshots for one locale and device set; attach a processed build for the same platform; submit a version to App Review; create or replace a public response to a written customer review; and create or update the Apple Ads resources listed above. ASC Studio first creates a ten-minute plan, shows the exact before and after state, binds confirmation to that plan and active connection, re-reads Apple data, and stops if anything changed.
+The current live write paths can add a build to a TestFlight group; create an editable iOS, macOS, tvOS, or visionOS App Store version; apply explicitly selected localization fields; add, replace, or delete screenshots for one locale and device set; attach a processed build for the same platform; submit a version to App Review; create or replace a public response to a written customer review; and create or update the Apple Ads resources listed above. ASC Studio first creates a ten-minute plan, shows the exact before and after state, binds confirmation to that plan and active connection, re-reads Apple data, and stops if anything changed.
 
 ## Connect Codex through MCP
 
@@ -260,8 +263,8 @@ The App Store Connect provider creates ten-minute ES256 JWTs, sends typed JSON:A
 - Apple Ads writes currently cover paused-first campaign creation, campaign updates, manual-CPT ad-group creation, and keyword creation or updates. Deletes, negative keywords, custom product page ads, audience targeting, recommendations, and shared budgets need separate reviewed slices.
 - Build attachment and review submission use Apple's public relationships and review-submission resources. Cancellation, phased release controls, App Review detail editing, and review attachments still need their own slices.
 - Writing assistance uses a workspace-wide BYOK OpenAI connection configured in **Connections → Writing assistance** or, for unattended runs, through `OPENAI_API_KEY`. Managed ChatGPT sign-in is not part of this slice.
-- Release translation covers What’s New and promotional text. Apple Ads research can hand one selected term to the active locale draft, but full locale-by-locale keyword research still needs its own workflow.
-- Long descriptions stay unchanged when metadata is copied. A full Store Listing editor comes after the frequent update fields.
+- Release translation covers What’s New only. Apple Ads research can hand one selected term directly to Store Listing’s active Keywords field, but full locale-by-locale keyword research still needs its own workflow.
+- Store Listing edits version-localized description, promotional text, keywords, marketing and support URLs, and screenshots. App-level name, subtitle, and other app-info localizations are not part of this editor.
 - Screenshot upload supports PNG and JPEG files up to 20 MB, validates known device-set dimensions and transparency before planning, and caps each set at ten files. App preview videos need a separate processed-media workflow.
 - Upload uses Apple's reserve, signed-chunk upload, commit, process, and reorder flow. Resumable job streams come later.
 - Reviews are app-scoped written feedback. The App Store Connect customer-review API does not provide an aggregate overall rating or total rating count, locale or language, platform or app version, or server-side text search. The displayed total is the number of matching written reviews, and search covers only reviews already loaded in the browser.

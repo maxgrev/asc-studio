@@ -19,8 +19,9 @@ interface ScreenshotManagerProps {
   version: AppStoreVersion;
   localizations: VersionLocalization[];
   visible: boolean;
+  locked?: boolean;
   onChanged: () => Promise<void>;
-  onPendingChange: (pending: boolean) => void;
+  onPendingChange: (pending: boolean, applying: boolean) => void;
 }
 
 interface DeviceOption {
@@ -54,6 +55,7 @@ export const ScreenshotManager = ({
   version,
   localizations,
   visible,
+  locked = false,
   onChanged,
   onPendingChange,
 }: ScreenshotManagerProps) => {
@@ -70,9 +72,13 @@ export const ScreenshotManager = ({
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewAssetId, setPreviewAssetId] = useState<string | null>(null);
   const stagedUploadsRef = useRef(new Map<string, string>());
+  const mountedRef = useRef(true);
+  const applyingRef = useRef(false);
+  const assetLoadGeneration = useRef(0);
 
   const selectedLocalization = localizations.find((localization) => localization.id === selectedLocalizationId)
     ?? preferredLocalization;
@@ -82,10 +88,11 @@ export const ScreenshotManager = ({
   const resultCount = assets.length - effectiveDeleteCount + staged.length;
   const availableSlots = 10 - (strategy === "replace" ? 0 : assets.length - deleteIds.size) - staged.length;
   const hasPendingChanges = staged.length > 0 || deleteIds.size > 0 || plan !== null || (strategy === "replace" && assets.length > 0);
-  const controlsLocked = hasPendingChanges || uploading || busy;
+  const controlsLocked = locked || hasPendingChanges || loading || uploading || busy;
   const previewIndex = previewAssetId ? assets.findIndex((asset) => asset.id === previewAssetId) : -1;
 
   const loadAssets = async () => {
+    const generation = ++assetLoadGeneration.current;
     if (!selectedLocalization) {
       setAssets([]);
       return;
@@ -94,47 +101,62 @@ export const ScreenshotManager = ({
     setError(null);
     try {
       const response = await api.screenshots(appId, version.id, selectedLocalization.id, displayType);
-      setAssets(response.screenshots);
+      if (mountedRef.current && generation === assetLoadGeneration.current) setAssets(response.screenshots);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "ASC Studio could not load screenshots.");
+      if (mountedRef.current && generation === assetLoadGeneration.current) {
+        setError(nextError instanceof Error ? nextError.message : "ASC Studio could not load screenshots.");
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && generation === assetLoadGeneration.current) setLoading(false);
     }
   };
 
   useEffect(() => {
     let cancelled = false;
+    const generation = ++assetLoadGeneration.current;
     if (!selectedLocalization) {
       setAssets([]);
-      return () => { cancelled = true; };
+      return () => {
+        cancelled = true;
+        if (generation === assetLoadGeneration.current) assetLoadGeneration.current += 1;
+      };
     }
     setLoading(true);
     setError(null);
     void api.screenshots(appId, version.id, selectedLocalization.id, displayType)
       .then((response) => {
-        if (!cancelled) setAssets(response.screenshots);
+        if (!cancelled && generation === assetLoadGeneration.current) setAssets(response.screenshots);
       })
       .catch((nextError: unknown) => {
-        if (!cancelled) setError(nextError instanceof Error ? nextError.message : "ASC Studio could not load screenshots.");
+        if (!cancelled && generation === assetLoadGeneration.current) setError(nextError instanceof Error ? nextError.message : "ASC Studio could not load screenshots.");
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && generation === assetLoadGeneration.current) setLoading(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (generation === assetLoadGeneration.current) assetLoadGeneration.current += 1;
+    };
   }, [appId, displayType, selectedLocalization?.id, version.id]);
 
   useEffect(() => {
-    onPendingChange(hasPendingChanges);
-  }, [hasPendingChanges, onPendingChange]);
+    onPendingChange(hasPendingChanges || uploading || busy, applying);
+  }, [applying, busy, hasPendingChanges, onPendingChange, uploading]);
 
-  useEffect(() => () => {
-    for (const [uploadId, fileName] of stagedUploadsRef.current) {
-      void api.discardScreenshotUpload({ uploadId, fileName }).catch(() => undefined);
-    }
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      assetLoadGeneration.current += 1;
+      if (applyingRef.current) return;
+      for (const [uploadId, fileName] of stagedUploadsRef.current) {
+        void api.discardScreenshotUpload({ uploadId, fileName }).catch(() => undefined);
+      }
+    };
   }, []);
 
   const stageFiles = async (files: File[]) => {
-    if (!version.editable || files.length === 0 || uploading) return;
+    if (!version.editable || !selectedLocalization || files.length === 0 || locked || uploading || plan) return;
     if (files.length > availableSlots) {
       setError(`This set has room for ${Math.max(availableSlots, 0)} more screenshot${availableSlots === 1 ? "" : "s"}.`);
       return;
@@ -155,6 +177,10 @@ export const ScreenshotManager = ({
     try {
       const results = await Promise.allSettled(files.map((file) => api.stageScreenshot(file, displayType)));
       const responses = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+      if (!mountedRef.current) {
+        await Promise.allSettled(responses.map((response) => api.discardScreenshotUpload(response.upload)));
+        return;
+      }
       for (const response of responses) {
         stagedUploadsRef.current.set(response.upload.uploadId, response.upload.fileName);
       }
@@ -162,9 +188,9 @@ export const ScreenshotManager = ({
       const failed = results.find((result) => result.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "ASC Studio could not stage the screenshots.");
+      if (mountedRef.current) setError(nextError instanceof Error ? nextError.message : "ASC Studio could not stage the screenshots.");
     } finally {
-      setUploading(false);
+      if (mountedRef.current) setUploading(false);
     }
   };
 
@@ -195,7 +221,7 @@ export const ScreenshotManager = ({
   };
 
   const review = async () => {
-    if (!selectedLocalization || resultCount > 10 || (!staged.length && !deleteIds.size && strategy !== "replace")) return;
+    if (locked || plan || !selectedLocalization || resultCount > 10 || (!staged.length && !deleteIds.size && strategy !== "replace")) return;
     setBusy(true);
     setError(null);
     try {
@@ -219,32 +245,45 @@ export const ScreenshotManager = ({
 
   const confirm = async () => {
     if (!plan) return;
+    applyingRef.current = true;
+    onPendingChange(true, true);
+    setApplying(true);
     setBusy(true);
     setError(null);
     try {
       await api.confirmPlan(plan);
       stagedUploadsRef.current.clear();
+      if (!mountedRef.current) return;
       setStaged([]);
       setDeleteIds(new Set());
       setStrategy("append");
       setPlan(null);
       await Promise.all([loadAssets(), onChanged()]);
     } catch (nextError) {
+      if (!mountedRef.current) return;
       if (nextError instanceof ApiError && ["plan_expired", "stale_plan", "plan_not_confirmable"].includes(nextError.code)) {
         setPlan(null);
       }
       setError(nextError instanceof Error ? nextError.message : "The screenshot update failed.");
     } finally {
+      applyingRef.current = false;
+      if (!mountedRef.current) {
+        const trackedUploads = [...stagedUploadsRef.current].map(([uploadId, fileName]) => ({ uploadId, fileName }));
+        stagedUploadsRef.current.clear();
+        await Promise.allSettled(trackedUploads.map((upload) => api.discardScreenshotUpload(upload)));
+        return;
+      }
+      setApplying(false);
       setBusy(false);
     }
   };
 
   return (
     <>
-      <section className="screenshots-region" hidden={!visible} aria-label="App Store screenshots">
+      <section className="screenshots-region" hidden={!visible} inert={plan ? true : undefined} aria-label="App Store screenshots">
         <header className="screenshots-header">
           <div><h2>Screenshots</h2><p>Manage one locale and device set at a time.</p></div>
-          <button className="button secondary" type="button" disabled={controlsLocked || loading} onClick={() => { setPreviewAssetId(null); void loadAssets(); }}><RefreshCw size={15} />Refresh</button>
+          <button className="button secondary" type="button" disabled={!selectedLocalization || controlsLocked || loading} onClick={() => { setPreviewAssetId(null); void loadAssets(); }}><RefreshCw size={15} />Refresh</button>
         </header>
 
         <div className="screenshot-toolbar">
@@ -254,12 +293,12 @@ export const ScreenshotManager = ({
           </label>
           <label className="screenshot-field">
             <span className="screenshot-field-label">Device set</span>
-            <span className="screenshot-select"><select value={displayType} disabled={controlsLocked} onChange={(event) => { setPreviewAssetId(null); setDisplayType(event.target.value as ScreenshotDisplayType); }}>{optionFamilies.length ? optionFamilies.map((family) => <optgroup label={family} key={family}>{options.filter((option) => option.family === family).map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</optgroup>) : options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select><ChevronDown size={14} /></span>
+            <span className="screenshot-select"><select value={displayType} disabled={!selectedLocalization || controlsLocked} onChange={(event) => { setPreviewAssetId(null); setDisplayType(event.target.value as ScreenshotDisplayType); }}>{optionFamilies.length ? optionFamilies.map((family) => <optgroup label={family} key={family}>{options.filter((option) => option.family === family).map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</optgroup>) : options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select><ChevronDown size={14} /></span>
           </label>
           <div className="screenshot-dimension-hint"><strong>{selectedOption.label}</strong><span>{selectedOption.hint}</span></div>
           <div className="screenshot-strategy" aria-label="Upload mode">
-            <button type="button" className={strategy === "append" ? "active" : ""} aria-pressed={strategy === "append"} disabled={!version.editable || busy || uploading} onClick={() => setStrategy("append")}>Add</button>
-            <button type="button" className={strategy === "replace" ? "active" : ""} aria-pressed={strategy === "replace"} disabled={!version.editable || busy || uploading} onClick={() => { setStrategy("replace"); setDeleteIds(new Set()); }}>Replace set</button>
+            <button type="button" className={strategy === "append" ? "active" : ""} aria-pressed={strategy === "append"} disabled={!version.editable || !selectedLocalization || locked || busy || uploading || Boolean(plan)} onClick={() => setStrategy("append")}>Add</button>
+            <button type="button" className={strategy === "replace" ? "active" : ""} aria-pressed={strategy === "replace"} disabled={!version.editable || !selectedLocalization || locked || busy || uploading || Boolean(plan)} onClick={() => { setStrategy("replace"); setDeleteIds(new Set()); }}>Replace set</button>
           </div>
         </div>
 
@@ -289,21 +328,21 @@ export const ScreenshotManager = ({
                         {scheduled ? <span className="screenshot-removal">Remove</span> : null}
                       </button>
                       <div className="screenshot-card-copy"><strong title={asset.fileName}>{asset.fileName}</strong><small>{asset.width && asset.height ? `${asset.width} × ${asset.height}` : "Dimensions unavailable"} · {asset.fileSize ? megabytes(asset.fileSize) : "Size unavailable"}</small></div>
-                      <button className="icon-button" type="button" aria-label={deleteIds.has(asset.id) ? `Keep ${asset.fileName}` : `Remove ${asset.fileName}`} disabled={!version.editable || strategy === "replace" || busy} onClick={() => toggleDelete(asset.id)}><Trash2 size={16} /></button>
+                      <button className="icon-button" type="button" aria-label={deleteIds.has(asset.id) ? `Keep ${asset.fileName}` : `Remove ${asset.fileName}`} disabled={!version.editable || strategy === "replace" || locked || busy || Boolean(plan)} onClick={() => toggleDelete(asset.id)}><Trash2 size={16} /></button>
                     </article>
                   );
                 })}
               </div>
             ) : (
-              <div className="screenshot-empty"><ImageIcon size={24} /><strong>No screenshots in this set</strong><span>Add at least one before submitting this platform version.</span></div>
+              <div className="screenshot-empty"><ImageIcon size={24} /><strong>{selectedLocalization ? "No screenshots in this set" : "No storefront localization"}</strong><span>{selectedLocalization ? "Add at least one before submitting this platform version." : "Add a localization in App Store Connect before uploading screenshots."}</span></div>
             )}
           </section>
 
           <section className={staged.length ? "screenshot-set queued-set" : "screenshot-set queued-set empty"}>
             <header><div><h3>Ready to upload</h3><p>{staged.length ? `${staged.length} staged locally · review the order below` : "PNG or JPEG · no transparency · up to 10 per set"}</p></div><strong className={resultCount > 10 ? "count-invalid" : ""}>{resultCount}/10 after changes</strong></header>
-            <label className={!version.editable ? "screenshot-dropzone disabled" : availableSlots <= 0 ? "screenshot-dropzone full" : "screenshot-dropzone"} aria-disabled={!version.editable || availableSlots <= 0} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (availableSlots > 0) void stageFiles(Array.from(event.dataTransfer.files)); }}>
-              <input type="file" accept="image/png,image/jpeg" multiple disabled={!version.editable || uploading || busy || availableSlots <= 0} onChange={(event) => { void stageFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} />
-              {uploading ? <><span className="spinner" /><strong>Checking and staging files…</strong></> : availableSlots <= 0 ? <><CheckCircle2 size={25} /><strong>All 10 slots are filled</strong><span>Remove a screenshot or switch to Replace set to upload a new sequence.</span></> : <><ImagePlus size={25} /><strong>Drop screenshots here or choose files</strong><span>ASC Studio checks the actual image data, dimensions, and transparency.</span></>}
+            <label className={!version.editable || !selectedLocalization || locked || plan ? "screenshot-dropzone disabled" : availableSlots <= 0 ? "screenshot-dropzone full" : "screenshot-dropzone"} aria-disabled={!version.editable || !selectedLocalization || locked || Boolean(plan) || availableSlots <= 0} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (selectedLocalization && !locked && availableSlots > 0 && !plan) void stageFiles(Array.from(event.dataTransfer.files)); }}>
+              <input type="file" accept="image/png,image/jpeg" multiple disabled={!version.editable || !selectedLocalization || locked || uploading || busy || Boolean(plan) || availableSlots <= 0} onChange={(event) => { void stageFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} />
+              {!selectedLocalization ? <><ImageIcon size={25} /><strong>Add a storefront localization first</strong><span>Screenshots must belong to a locale in App Store Connect.</span></> : uploading ? <><span className="spinner" /><strong>Checking and staging files…</strong></> : availableSlots <= 0 ? <><CheckCircle2 size={25} /><strong>All 10 slots are filled</strong><span>Remove a screenshot or switch to Replace set to upload a new sequence.</span></> : <><ImagePlus size={25} /><strong>Drop screenshots here or choose files</strong><span>ASC Studio checks the actual image data, dimensions, and transparency.</span></>}
             </label>
             {staged.length ? (
               <ol className="staged-screenshot-list">
@@ -311,9 +350,9 @@ export const ScreenshotManager = ({
                   <li key={upload.uploadId}>
                     <span className="staged-order">{index + 1}</span>
                     <div><strong>{upload.fileName}</strong><small>{upload.width} × {upload.height} · {megabytes(upload.fileSize)}</small></div>
-                    <button className="icon-button" type="button" aria-label={`Move ${upload.fileName} up`} disabled={index === 0 || busy} onClick={() => moveStaged(index, -1)}><ArrowUp size={15} /></button>
-                    <button className="icon-button" type="button" aria-label={`Move ${upload.fileName} down`} disabled={index === staged.length - 1 || busy} onClick={() => moveStaged(index, 1)}><ArrowDown size={15} /></button>
-                    <button className="icon-button danger" type="button" aria-label={`Discard ${upload.fileName}`} disabled={busy} onClick={() => removeStaged(upload)}><Trash2 size={15} /></button>
+                    <button className="icon-button" type="button" aria-label={`Move ${upload.fileName} up`} disabled={index === 0 || locked || busy || Boolean(plan)} onClick={() => moveStaged(index, -1)}><ArrowUp size={15} /></button>
+                    <button className="icon-button" type="button" aria-label={`Move ${upload.fileName} down`} disabled={index === staged.length - 1 || locked || busy || Boolean(plan)} onClick={() => moveStaged(index, 1)}><ArrowDown size={15} /></button>
+                    <button className="icon-button danger" type="button" aria-label={`Discard ${upload.fileName}`} disabled={locked || busy || Boolean(plan)} onClick={() => removeStaged(upload)}><Trash2 size={15} /></button>
                   </li>
                 ))}
               </ol>
@@ -322,8 +361,8 @@ export const ScreenshotManager = ({
         </div>
 
         <footer className="screenshot-footer">
-          <div><strong>{hasPendingChanges ? "Local screenshot changes" : "Screenshot set matches App Store Connect"}</strong><span>{hasPendingChanges ? "Review an exact plan before upload." : "Select another locale or device set to inspect it."}</span></div>
-          <button className={hasPendingChanges ? "button primary" : "button secondary"} type="button" disabled={!version.editable || busy || uploading || resultCount > 10 || (!staged.length && !deleteIds.size && strategy !== "replace")} onClick={() => void review()}><Upload size={16} />{busy ? "Preparing plan…" : "Review changes"}</button>
+          <div><strong>{!selectedLocalization ? "Localization required" : hasPendingChanges ? "Local screenshot changes" : "Screenshot set matches App Store Connect"}</strong><span>{!selectedLocalization ? "Create a storefront localization before managing screenshots." : hasPendingChanges ? "Review an exact plan before upload." : "Select another locale or device set to inspect it."}</span></div>
+          <button className={hasPendingChanges ? "button primary" : "button secondary"} type="button" disabled={!version.editable || !selectedLocalization || locked || busy || uploading || Boolean(plan) || resultCount > 10 || (!staged.length && !deleteIds.size && strategy !== "replace")} onClick={() => void review()}><Upload size={16} />{busy ? "Preparing plan…" : "Review changes"}</button>
         </footer>
       </section>
 
