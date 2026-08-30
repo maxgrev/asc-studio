@@ -325,7 +325,7 @@
       },
       {
         "name": "The Actionable First View Rule",
-        "body": "A canonical workflow editor keeps the selected version and state, local-work count, and exact review action in the first viewport. On narrow screens, recompose those facts into a compact context row and status dock rather than hiding them.",
+        "body": "Releases keeps the selected platform, version, build, state, local-work count, and exact review action in the first viewport. On narrow screens, recompose those facts into compact context and keep labeled readiness and submit actions in a persistent safe-area dock.",
         "section": "layout"
       },
       {
@@ -344,7 +344,9 @@
       "Do reserve blue for actions, focus, selection, and in-progress state.",
       "Do pair every semantic dot or color with a text label.",
       "Do use one-pixel hairlines and compact rows to organize operational data.",
-      "Do keep active version state, local-work count, and the exact review action visible in a canonical editor’s first viewport.",
+      "Do keep version-scoped localized content, screenshots, build context, readiness, submission, and status together in Releases.",
+      "Do keep active platform, version, build, state, local-work count, and the exact review action visible in Releases’ first viewport.",
+      "Do keep labeled readiness and submit actions in a persistent safe-area dock on mobile.",
       "Do preserve the 1220px, 820px, and 620px responsive behaviors when extending the shell.",
       "Do keep motion to short state changes in transform, opacity, background, or border."
     ],

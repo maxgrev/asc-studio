@@ -4,18 +4,19 @@ import type {
   AnalyticsFacets,
   AnalyticsFilters,
   AnalyticsMetricId,
-  AnalyticsOverviewResponse,
+  AnalyticsOverviewResponseV2,
+  AnalyticsPortfolioCatalogResponse,
   AnalyticsReportAccessType,
-  AnalyticsStatusResponse,
-  AppSummary,
-  CreateAnalyticsReportRequestMutationPlan,
+  AnalyticsPortfolioSource,
+  AnalyticsPortfolioSourceCoverage,
+  AnalyticsPortfolioStatusResponse,
+  CreateAnalyticsPortfolioReportRequestMutationPlan,
 } from "@asc-studio/contracts";
 import {
   AlertTriangle,
   AppWindow,
   ArrowRight,
   CalendarDays,
-  CheckCircle2,
   Clock3,
   Database,
   Info,
@@ -40,6 +41,7 @@ import {
   analyticsFilterCount,
   analyticsFiltersFromSearchParams,
   analyticsMetricLabels,
+  analyticsPortfolioMembershipKey,
   analyticsQueryKey,
   availabilityLabel,
   chartPoints,
@@ -55,10 +57,8 @@ import {
 } from "../analyticsData.js";
 
 interface AnalyticsWorkspaceProps {
-  apps: AppSummary[];
-  selectedApp: AppSummary;
   status: AgentStatus;
-  onAppChange: (appId: string) => void;
+  accountsFingerprint: string;
 }
 
 type LoadPhase = "initial" | "refreshing" | "idle";
@@ -122,6 +122,18 @@ const appInitials = (name: string) => name
   .slice(0, 2)
   .map((part) => part[0]?.toLocaleUpperCase())
   .join("") || "A";
+
+const sourceLabel = (source: AnalyticsPortfolioSource) => source.accounts
+  .map((account) => account.profileName)
+  .join(" / ");
+
+const coverageLabel = (coverage: AnalyticsPortfolioSourceCoverage) => {
+  if (coverage.state === "NO_DATA") return "No analytics yet";
+  if (coverage.state === "SYNCING") return "Syncing";
+  if (coverage.state === "PARTIAL") return "Partial data";
+  if (coverage.state === "ERROR") return "Couldn't load";
+  return "Ready";
+};
 
 const AnalyticsSkeleton = () => (
   <div className="analytics-skeleton" aria-hidden="true">
@@ -212,7 +224,7 @@ const AnalyticsFiltersDialog = ({ applied, facets, onApply, onClose }: Analytics
 };
 
 interface AnalyticsPlanDialogProps {
-  plan: CreateAnalyticsReportRequestMutationPlan;
+  plan: CreateAnalyticsPortfolioReportRequestMutationPlan;
   demo: boolean;
   busy: boolean;
   error: string | null;
@@ -279,7 +291,7 @@ const AnalyticsPlanDialog = ({ plan, demo, busy, error, onClose, onConfirm }: An
             <div><dt>App</dt><dd>{plan.target.appName}</dd></div>
             <div><dt>Report access</dt><dd>{reportAccessLabel(plan.target.accessType)}</dd></div>
             <div><dt>Existing matches</dt><dd>{plan.before.matchingReportRequestIds.length}</dd></div>
-            <div><dt>Apple account</dt><dd>{plan.context.profile ?? "Active connection"}</dd></div>
+            <div><dt>Apple account</dt><dd>{plan.context.profile ?? "Resolved Apple account"}</dd></div>
           </dl>
           <div className="analytics-plan-warning">
             <AlertTriangle size={18} />
@@ -303,7 +315,7 @@ const AnalyticsPlanDialog = ({ plan, demo, busy, error, onClose, onConfirm }: An
 };
 
 interface AnalyticsChartProps {
-  snapshot: AnalyticsOverviewResponse;
+  snapshot: AnalyticsOverviewResponseV2;
   metric: AnalyticsMetricId;
   onMetricChange: (metric: AnalyticsMetricId) => void;
 }
@@ -437,7 +449,7 @@ const AnalyticsChart = ({ snapshot, metric, onMetricChange }: AnalyticsChartProp
   );
 };
 
-export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onAppChange }: AnalyticsWorkspaceProps) => {
+export const AnalyticsWorkspace = ({ status: agentStatus, accountsFingerprint }: AnalyticsWorkspaceProps) => {
   const initialScope = typeof window === "undefined" ? "all" : new URLSearchParams(window.location.search).get("analyticsApp") ?? "all";
   const initialFilters = typeof window === "undefined" ? emptyAnalyticsFilters() : analyticsFiltersFromSearchParams(new URLSearchParams(window.location.search));
   const [scopeId, setScopeId] = useState<ScopeId>(initialScope);
@@ -451,30 +463,41 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
   ));
   const [filters, setFilters] = useState<AnalyticsFilters>(initialFilters);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [analyticsStatus, setAnalyticsStatus] = useState<AnalyticsStatusResponse | null>(null);
-  const [portfolioSnapshot, setPortfolioSnapshot] = useState<AnalyticsOverviewResponse | null>(null);
-  const [snapshot, setSnapshot] = useState<AnalyticsOverviewResponse | null>(null);
+  const [catalog, setCatalog] = useState<AnalyticsPortfolioCatalogResponse | null>(null);
+  const [analyticsStatus, setAnalyticsStatus] = useState<AnalyticsPortfolioStatusResponse | null>(null);
+  const [portfolioSnapshot, setPortfolioSnapshot] = useState<AnalyticsOverviewResponseV2 | null>(null);
+  const [snapshot, setSnapshot] = useState<AnalyticsOverviewResponseV2 | null>(null);
   const [resolvedQueryKey, setResolvedQueryKey] = useState<string | null>(null);
   const [phase, setPhase] = useState<LoadPhase>("initial");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
-  const [setupAppId, setSetupAppId] = useState(selectedApp.id);
-  const [snapshotAppId, setSnapshotAppId] = useState(selectedApp.id);
-  const [plan, setPlan] = useState<CreateAnalyticsReportRequestMutationPlan | null>(null);
+  const [setupAppId, setSetupAppId] = useState("");
+  const [snapshotAppId, setSnapshotAppId] = useState("");
+  const [plan, setPlan] = useState<CreateAnalyticsPortfolioReportRequestMutationPlan | null>(null);
   const [planBusy, setPlanBusy] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
   const generation = useRef(0);
+  const portfolioContextGeneration = useRef(0);
   const syncGeneration = useRef(0);
-  const analyticsStatusRef = useRef<AnalyticsStatusResponse | null>(null);
-  const snapshotRef = useRef<AnalyticsOverviewResponse | null>(null);
-  const portfolioRef = useRef<AnalyticsOverviewResponse | null>(null);
+  const resolvedAccountsFingerprintRef = useRef<string | null>(null);
+  const catalogRef = useRef<AnalyticsPortfolioCatalogResponse | null>(null);
+  const analyticsStatusRef = useRef<AnalyticsPortfolioStatusResponse | null>(null);
+  const snapshotRef = useRef<AnalyticsOverviewResponseV2 | null>(null);
+  const portfolioRef = useRef<AnalyticsOverviewResponseV2 | null>(null);
   const resolvedQueryKeyRef = useRef<string | null>(null);
-  const shellScopeRef = useRef<string | null>(null);
+  const apps = catalog?.apps ?? [];
   const appIds = useMemo(() => apps.map((app) => app.id), [apps]);
   const appIdsKey = appIds.join("\u001f");
+  const portfolioMembership = useMemo(() => analyticsPortfolioMembershipKey(appIds), [appIds]);
   const filtersKey = JSON.stringify(filters);
-  const desiredQueryKey = analyticsQueryKey({ appIds, scopeId, range, compare, filters });
+  const desiredQueryKey = `${analyticsQueryKey({
+    portfolioMembership,
+    scopeId,
+    range,
+    compare,
+    filters,
+  })}\u001f${catalog?.catalogRevision ?? "catalog-pending"}`;
   const desiredQueryKeyRef = useRef(desiredQueryKey);
   desiredQueryKeyRef.current = desiredQueryKey;
 
@@ -483,15 +506,11 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
   useEffect(() => {
     if (scopeId === "all") return;
     if (!apps.some((app) => app.id === scopeId)) {
+      if (!catalog) return;
       setScopeId("all");
       setBreakdown("APP");
-      return;
     }
-    if (shellScopeRef.current !== scopeId) {
-      shellScopeRef.current = scopeId;
-      onAppChange(scopeId);
-    }
-  }, [apps, onAppChange, scopeId]);
+  }, [appIdsKey, catalog, scopeId]);
 
   useEffect(() => {
     const allowed = availableBreakdowns(scopeId);
@@ -503,6 +522,7 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
     const parameters = new URLSearchParams(window.location.search);
     parameters.set("section", "analytics");
     parameters.set("analyticsApp", scopeId);
+    parameters.delete("analyticsAccount");
     parameters.set("range", range);
     parameters.set("compare", compare);
     parameters.set("metric", metric);
@@ -533,35 +553,77 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
     };
     window.addEventListener("popstate", restoreLocation);
     return () => window.removeEventListener("popstate", restoreLocation);
-  }, [apps]);
+  }, [appIdsKey]);
 
   const chooseScope = (nextScope: ScopeId) => {
     if (nextScope === scopeId) return;
     setScopeId(nextScope);
     setBreakdown(nextScope === "all" ? "APP" : "TERRITORY");
-    if (nextScope !== "all") {
-      shellScopeRef.current = nextScope;
-      onAppChange(nextScope);
-    }
     if (typeof window !== "undefined") {
       const parameters = new URLSearchParams(window.location.search);
       parameters.set("section", "analytics");
       parameters.set("analyticsApp", nextScope);
+      parameters.delete("analyticsAccount");
       parameters.set("breakdown", nextScope === "all" ? "APP" : "TERRITORY");
       window.history.pushState(window.history.state, "", `${window.location.pathname}?${parameters}${window.location.hash}`);
     }
   };
 
-  const refreshAnalyticsStatus = useCallback(async () => {
-    const nextStatus = await api.analyticsStatus();
+  const refreshPortfolioContext = useCallback(async () => {
+    const currentGeneration = ++portfolioContextGeneration.current;
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const nextCatalog = await api.analyticsPortfolio();
+        const nextStatus = await api.analyticsPortfolioStatus();
+        if (currentGeneration !== portfolioContextGeneration.current) return;
+        if (nextCatalog.catalogRevision !== nextStatus.catalogRevision) continue;
+        try {
+          const pendingPlans = await api.analyticsPortfolioPlans();
+          if (currentGeneration !== portfolioContextGeneration.current) return;
+          setPlan((current) => pendingPlans.plans.find((candidate) => candidate.id === current?.id)
+            ?? pendingPlans.plans[0]
+            ?? null);
+          setPlanError(null);
+        } catch (pendingPlanError) {
+          if (currentGeneration !== portfolioContextGeneration.current) return;
+          setPlanError(pendingPlanError instanceof Error
+            ? `Saved Analytics requests could not be restored: ${pendingPlanError.message}`
+            : "Saved Analytics requests could not be restored.");
+        }
+        catalogRef.current = nextCatalog;
+        analyticsStatusRef.current = nextStatus;
+        resolvedAccountsFingerprintRef.current = accountsFingerprint;
+        setCatalog(nextCatalog);
+        setAnalyticsStatus(nextStatus);
+        return;
+      }
+      throw new Error("Connected accounts changed while Analytics was loading. Refresh to use one consistent portfolio snapshot.");
+    } catch (portfolioError) {
+      if (currentGeneration !== portfolioContextGeneration.current) return;
+      throw portfolioError;
+    }
+  }, [accountsFingerprint]);
+
+  const reloadCachedAnalyticsStatus = useCallback(async () => {
+    const currentGeneration = portfolioContextGeneration.current;
+    const nextStatus = await api.analyticsPortfolioStatus();
+    if (currentGeneration !== portfolioContextGeneration.current) return;
+    const currentCatalog = catalogRef.current;
+    if (!currentCatalog || nextStatus.catalogRevision !== currentCatalog.catalogRevision) {
+      throw new Error("The connected-account portfolio changed while Analytics was updating. Check the accounts again.");
+    }
     analyticsStatusRef.current = nextStatus;
     setAnalyticsStatus(nextStatus);
-    return nextStatus;
   }, []);
 
-  const loadAnalytics = useCallback(async (refresh = false) => {
+  const loadAnalytics = useCallback(async () => {
+    const currentCatalog = catalogRef.current;
     const nextStatus = analyticsStatusRef.current;
-    if (!appIds.length || !nextStatus) return;
+    if (!currentCatalog || !nextStatus) return;
+    if (!currentCatalog.apps.length) {
+      setPhase("idle");
+      return;
+    }
     const requestedQueryKey = desiredQueryKey;
     const currentGeneration = ++generation.current;
     setPhase(resolvedQueryKeyRef.current === requestedQueryKey && snapshotRef.current ? "refreshing" : "initial");
@@ -571,9 +633,9 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
       const endDate = nextStatus.freshness.dataThrough ?? todayIsoDate();
       const period = analyticsDateRange(range, endDate);
       const portfolioQuery = {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
         scope: "PORTFOLIO" as const,
-        appIds,
+        selection: { kind: "ALL_CONNECTED" as const },
         ...period,
         compare,
         granularity: "DAY" as const,
@@ -586,11 +648,21 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
         scopeAppId ? api.analyticsOverview({
           ...portfolioQuery,
           scope: "APP" as const,
-          appIds: [scopeAppId],
+          selection: { kind: "APP" as const, appId: scopeAppId },
           breakdowns: ["TERRITORY", "SOURCE", "PRODUCT_PAGE", "VERSION"] as AnalyticsBreakdownDimension[],
         }) : Promise.resolve(null),
       ]);
       if (currentGeneration !== generation.current || requestedQueryKey !== desiredQueryKeyRef.current) return;
+      const revisionsMatch = nextPortfolio.catalogRevision === currentCatalog.catalogRevision
+        && (!nextSelected || nextSelected.catalogRevision === currentCatalog.catalogRevision);
+      const portfolioMembershipMatches = analyticsPortfolioMembershipKey(nextPortfolio.apps.map((app) => app.id))
+        === analyticsPortfolioMembershipKey(currentCatalog.apps.map((app) => app.id));
+      const selectedMembershipMatches = !nextSelected || scopeAppId === null
+        || (nextSelected.apps.length === 1 && nextSelected.apps[0]?.id === scopeAppId);
+      if (!revisionsMatch || !portfolioMembershipMatches || !selectedMembershipMatches) {
+        await refreshPortfolioContext();
+        return;
+      }
       const nextSnapshot = nextSelected ?? nextPortfolio;
       portfolioRef.current = nextPortfolio;
       snapshotRef.current = nextSnapshot;
@@ -599,7 +671,6 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
       setSnapshot(nextSnapshot);
       setResolvedQueryKey(requestedQueryKey);
       setPhase("idle");
-      if (refresh) setNotice("Analytics view refreshed from the local report cache.");
     } catch (loadError) {
       if (currentGeneration !== generation.current || requestedQueryKey !== desiredQueryKeyRef.current) return;
       setError(loadError instanceof Error ? loadError.message : "Analytics could not be loaded.");
@@ -610,43 +681,51 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
       }
       setPhase("idle");
     }
-  }, [appIdsKey, compare, desiredQueryKey, filtersKey, range, scopeId]);
+  }, [compare, desiredQueryKey, filtersKey, range, refreshPortfolioContext, scopeId]);
 
-  const loadAnalyticsRef = useRef(loadAnalytics);
-  loadAnalyticsRef.current = loadAnalytics;
-
-  const retryAnalytics = useCallback(async () => {
-    if (analyticsStatusRef.current) {
-      await loadAnalytics(true);
-      return;
-    }
-    setPhase("initial");
+  const checkPortfolio = useCallback(async () => {
+    setPhase(snapshotRef.current ? "refreshing" : "initial");
     setError(null);
     try {
-      await refreshAnalyticsStatus();
-    } catch (statusError) {
-      setError(statusError instanceof Error ? statusError.message : "Analytics status could not be loaded.");
+      await refreshPortfolioContext();
+    } catch (portfolioError) {
+      setError(portfolioError instanceof Error ? portfolioError.message : "The connected-account analytics portfolio could not be loaded.");
       setPhase("idle");
     }
-  }, [loadAnalytics, refreshAnalyticsStatus]);
+  }, [refreshPortfolioContext]);
 
   useEffect(() => {
-    void refreshAnalyticsStatus().catch((statusError: unknown) => {
-      setError(statusError instanceof Error ? statusError.message : "Analytics status could not be loaded.");
+    if (resolvedAccountsFingerprintRef.current !== accountsFingerprint) {
+      catalogRef.current = null;
+      analyticsStatusRef.current = null;
+      snapshotRef.current = null;
+      portfolioRef.current = null;
+      resolvedQueryKeyRef.current = null;
+      setCatalog(null);
+      setAnalyticsStatus(null);
+      setPortfolioSnapshot(null);
+      setSnapshot(null);
+      setResolvedQueryKey(null);
+    }
+    setPhase(snapshotRef.current ? "refreshing" : "initial");
+    setError(null);
+    void refreshPortfolioContext().catch((portfolioError: unknown) => {
+      setError(portfolioError instanceof Error ? portfolioError.message : "The connected-account analytics portfolio could not be loaded.");
       setPhase("idle");
     });
-  }, [refreshAnalyticsStatus]);
+  }, [accountsFingerprint, refreshPortfolioContext]);
 
   useEffect(() => {
-    if (!analyticsStatus) return;
+    if (!catalog || !analyticsStatus) return;
     void loadAnalytics();
     return () => {
       generation.current += 1;
     };
-  }, [analyticsStatus !== null, loadAnalytics]);
+  }, [catalog, analyticsStatus, loadAnalytics]);
 
   useEffect(() => () => {
     generation.current += 1;
+    portfolioContextGeneration.current += 1;
     syncGeneration.current += 1;
   }, []);
 
@@ -657,23 +736,35 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
     setError(null);
     setNotice(null);
     try {
-      let result = await api.syncAnalytics({ schemaVersion: 1, appIds, force: true });
+      let result = await api.syncAnalyticsPortfolio({
+        schemaVersion: 2,
+        selection: { kind: "ALL_CONNECTED" },
+        force: true,
+      });
       for (let attempt = 0; attempt < 60 && (result.state === "QUEUED" || result.state === "RUNNING"); attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 1_000));
         if (currentGeneration !== syncGeneration.current) return;
-        result = await api.analyticsSync(result.runId);
+        result = await api.analyticsPortfolioSync(result.runId);
       }
       if (currentGeneration !== syncGeneration.current) return;
-      if (result.state === "FAILED") throw new Error(result.error ?? "Apple analytics reports could not be synced.");
+      const failedSourceNames = result.sources
+        .filter((source) => source.state === "FAILED" || source.state === "PARTIAL")
+        .map((source) => {
+          const catalogSource = catalogRef.current?.sources.find((candidate) => candidate.id === source.sourceId);
+          return catalogSource?.accounts.map((account) => account.profileName).join(" / ") ?? "One connected account";
+        });
+      if (result.state === "FAILED") {
+        const failedAccounts = failedSourceNames.length ? ` Affected accounts: ${failedSourceNames.join(", ")}.` : "";
+        throw new Error(`${result.error ?? "Apple analytics reports could not be synced."}${failedAccounts}`);
+      }
       if (result.state === "QUEUED" || result.state === "RUNNING") {
-        setNotice("Sync continues in the background. Refresh the view in a few minutes to check for newly available reports.");
+        setNotice("The update is still running. ASC Studio will keep the current view intact while it finishes.");
         return;
       }
       setNotice(result.state === "PARTIAL"
-        ? "Sync finished with some report families unavailable. Existing complete data remains usable."
+        ? `Sync finished with partial account coverage${failedSourceNames.length ? `: ${failedSourceNames.join(", ")}` : ""}. Existing complete data remains usable.`
         : `Synced ${result.observationCount.toLocaleString()} analytics observations.`);
-      await refreshAnalyticsStatus();
-      await loadAnalyticsRef.current();
+      await reloadCachedAnalyticsStatus();
     } catch (syncError) {
       if (currentGeneration === syncGeneration.current) setError(syncError instanceof Error ? syncError.message : "Analytics could not be synced.");
     } finally {
@@ -682,6 +773,10 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
   };
 
   const prepareReportRequest = async (accessType: AnalyticsReportAccessType, appId = accessType === "ONGOING" ? setupAppId : snapshotAppId) => {
+    if (!appId) {
+      setPlanError("Choose an app before preparing an analytics report request.");
+      return;
+    }
     if (analyticsStatus?.state === "SYNCING") {
       setPlanError("Wait for the current analytics sync to finish before changing report requests.");
       return;
@@ -689,7 +784,7 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
     setPlanBusy(true);
     setPlanError(null);
     try {
-      const response = await api.planAnalyticsReportRequest({ appId, accessType });
+      const response = await api.planAnalyticsReportRequest({ schemaVersion: 2, appId, accessType });
       setPlan(response.plan);
     } catch (prepareError) {
       setPlanError(prepareError instanceof Error ? prepareError.message : "The analytics request could not be prepared.");
@@ -703,13 +798,12 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
     setPlanBusy(true);
     setPlanError(null);
     try {
-      await api.confirmPlan(plan);
+      await api.confirmAnalyticsReportRequest(plan);
       setPlan(null);
       setNotice(agentStatus.mode === "demo"
         ? "Demo analytics reports enabled in isolated sample data."
         : "Analytics request created at Apple. Reports can take time to appear before the first sync.");
-      await refreshAnalyticsStatus();
-      await loadAnalyticsRef.current();
+      await refreshPortfolioContext();
     } catch (confirmError) {
       setPlanError(confirmError instanceof Error ? confirmError.message : "The analytics request could not be confirmed.");
     } finally {
@@ -732,6 +826,25 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
       if (rightValue === null || rightValue === undefined) return -1;
       return rightValue - leftValue || left.index - right.index;
     });
+  const sourceById = new Map((catalog?.sources ?? []).map((source) => [source.id, source]));
+  const rosterGroups = (catalog?.sources ?? []).map((source) => ({
+    source,
+    apps: rosterApps.filter(({ app }) => app.sourceId === source.id),
+  }));
+  const accountCount = (catalog?.sources ?? []).reduce((total, source) => total + source.accounts.length, 0);
+  const selectedSource = selectedScopeApp ? sourceById.get(selectedScopeApp.sourceId) ?? null : null;
+  const activeSourceCoverage = currentPortfolioSnapshot?.sourceCoverage ?? analyticsStatus?.sources ?? [];
+  const coverageProblems = activeSourceCoverage.filter((source) => source.state !== "READY");
+  const coverageProblemLabels = coverageProblems.map((coverage) => {
+    const source = sourceById.get(coverage.sourceId);
+    return `${source ? sourceLabel(source) : "Connected account"}: ${coverageLabel(coverage)}`;
+  });
+  for (const source of catalog?.sources.filter((candidate) => candidate.state !== "READY") ?? []) {
+    if (!coverageProblemLabels.some((candidate) => candidate.startsWith(`${sourceLabel(source)}:`))) {
+      coverageProblemLabels.push(`${sourceLabel(source)}: ${source.state === "ERROR" ? "Couldn't check" : "Partial app roster"}`);
+    }
+  }
+  const uniqueCoverageProblemLabels = [...new Set(coverageProblemLabels)];
   const activeBreakdown = currentSnapshot?.breakdowns.find((candidate) => candidate.dimension === breakdown && candidate.metric === metric)
     ?? null;
   const compatibleBreakdowns = Array.from(new Set((currentSnapshot?.breakdowns ?? [])
@@ -763,12 +876,161 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
   const enabledAppIds = new Set(reportRequests
     .filter((request) => request.accessType === "ONGOING" && !request.stoppedDueToInactivity)
     .map((request) => request.appId));
-  const missingApps = apps.filter((app) => !enabledAppIds.has(app.id));
+  const inspectionByAppId = new Map((analyticsStatus?.reportRequestInspections ?? [])
+    .map((inspection) => [inspection.appId, inspection]));
+  const missingApps = analyticsStatus ? apps.filter((app) => (
+    inspectionByAppId.get(app.id)?.state === "INSPECTED" && !enabledAppIds.has(app.id)
+  )) : [];
+  const unknownSetupApps = analyticsStatus ? apps.filter((app) => (
+    inspectionByAppId.get(app.id)?.state !== "INSPECTED"
+  )) : [];
+  const missingAppIds = new Set(missingApps.map((app) => app.id));
+  const unknownSetupAppIds = new Set(unknownSetupApps.map((app) => app.id));
   const hasAnyValue = currentSnapshot?.kpis.some((kpi) => kpi.current.value !== null) ?? false;
-  const loading = resolvedQueryKey !== desiredQueryKey || (phase === "initial" && !currentSnapshot);
-  const scopeTitle = scopeId === "all" ? "Portfolio overview" : selectedScopeApp?.name ?? selectedApp.name;
+  const hasAnyPortfolioValue = currentPortfolioSnapshot?.kpis.some((kpi) => kpi.current.value !== null) ?? false;
+  const loading = phase !== "idle" && (
+    !catalog || !analyticsStatus || apps.length > 0 && resolvedQueryKey !== desiredQueryKey
+  );
+  const scopeTitle = scopeId === "all" ? "All accounts" : selectedScopeApp?.name ?? "App unavailable";
   const activeFilterCount = analyticsFilterCount(filters);
   const analyticsSyncing = analyticsStatus?.state === "SYNCING" || syncBusy;
+  const setupAttentionCount = missingApps.length + unknownSetupApps.length;
+  const setupNeedsAttention = setupAttentionCount > 0;
+  const initialLoading = loading && !currentPortfolioSnapshot;
+  const recoveryMode = !initialLoading && activeFilterCount === 0 && !hasAnyPortfolioValue;
+  const hasCoverageConcern = Boolean(
+    error
+    || catalog && !catalog.complete
+    || uniqueCoverageProblemLabels.length
+    || setupNeedsAttention
+    || analyticsStatus?.state === "ERROR"
+    || analyticsStatus?.state === "PARTIAL"
+    || analyticsStatus?.state === "WAITING_FOR_DATA"
+    || analyticsStatus?.state === "SYNCING"
+    || currentSnapshot?.freshness.partial,
+  );
+
+  const recoverySources = rosterGroups.map(({ source, apps: sourceApps }) => {
+    const missingCount = sourceApps.filter(({ app }) => missingAppIds.has(app.id)).length;
+    const unknownCount = sourceApps.filter(({ app }) => unknownSetupAppIds.has(app.id)).length;
+    const setupCheckDetails = [...new Set(sourceApps.flatMap(({ app }) => {
+      const inspection = inspectionByAppId.get(app.id);
+      return inspection?.state === "UNKNOWN" ? [inspection.detail] : [];
+    }))];
+    const sourceCoverage = activeSourceCoverage.find((candidate) => candidate.sourceId === source.id);
+    const attentionParts = [
+      missingCount ? `${missingCount} ${missingCount === 1 ? "app needs" : "apps need"} reports enabled` : "",
+      unknownCount ? `${unknownCount} setup ${unknownCount === 1 ? "check" : "checks"} didn't finish` : "",
+    ].filter(Boolean);
+    if (attentionParts.length) {
+      return {
+        id: source.id,
+        name: sourceLabel(source),
+        appCount: sourceApps.length,
+        tone: "attention",
+        label: "Setup needs attention",
+        detail: attentionParts.join(" · "),
+        technicalDetail: setupCheckDetails.join(" ") || sourceCoverage?.detail || source.detail,
+      };
+    }
+    if (sourceCoverage?.state === "SYNCING") {
+      return {
+        id: source.id,
+        name: sourceLabel(source),
+        appCount: sourceApps.length,
+        tone: "working",
+        label: "Checking for data",
+        detail: "ASC Studio is checking Apple's reports now.",
+        technicalDetail: sourceCoverage.detail,
+      };
+    }
+    if (source.state === "ERROR" || sourceCoverage?.state === "ERROR") {
+      return {
+        id: source.id,
+        name: sourceLabel(source),
+        appCount: sourceApps.length,
+        tone: "attention",
+        label: "Couldn't reach Apple",
+        detail: "The saved connection is still here. Try the check again.",
+        technicalDetail: sourceCoverage?.detail ?? source.detail,
+      };
+    }
+    if (sourceCoverage?.state === "NO_DATA" || analyticsStatus?.state === "WAITING_FOR_DATA") {
+      return {
+        id: source.id,
+        name: sourceLabel(source),
+        appCount: sourceApps.length,
+        tone: "waiting",
+        label: "Waiting for data",
+        detail: "Setup is ready; Apple hasn't supplied a complete report yet.",
+        technicalDetail: sourceCoverage?.detail ?? source.detail,
+      };
+    }
+    return {
+      id: source.id,
+      name: sourceLabel(source),
+      appCount: sourceApps.length,
+      tone: "ready",
+      label: sourceApps.length ? "Ready to update" : "No apps found",
+      detail: sourceApps.length ? "No portfolio values are stored yet." : "Apple returned no apps for this account.",
+      technicalDetail: sourceCoverage?.detail ?? source.detail,
+    };
+  });
+
+  const recoveryTitle = unknownSetupApps.length
+    ? "Check analytics setup"
+    : missingApps.length
+      ? "Finish analytics setup"
+      : error || analyticsStatus?.state === "ERROR"
+        ? "We couldn't update analytics"
+        : analyticsStatus?.state === "WAITING_FOR_DATA"
+          ? "Apple is preparing your analytics"
+          : !apps.length
+            ? "No apps are available yet"
+            : "No analytics data yet";
+  const recoveryCopy = setupNeedsAttention
+    ? `Your Apple connections are saved. Analytics Reports are enabled separately for each app, so ${setupAttentionCount} ${setupAttentionCount === 1 ? "app needs" : "apps need"} a setup check before the portfolio can fill in.`
+    : error || analyticsStatus?.state === "ERROR"
+      ? "Your saved connections and any existing data are untouched. Try the check again."
+      : analyticsStatus?.state === "WAITING_FOR_DATA"
+        ? "Setup is complete. Apple's first report can take time to appear; ASC Studio will keep existing data intact while it waits."
+        : !apps.length
+          ? "ASC Studio couldn't find any apps across the connected Apple accounts. Check again without switching accounts."
+          : "The portfolio is ready, but no reported values have arrived. Check Apple for the latest data.";
+  const recoveryActionLabel = setupNeedsAttention
+    ? unknownSetupApps.length ? "Check setup again" : "Review setup"
+    : error || analyticsStatus?.state === "ERROR" || !apps.length
+      ? "Try again"
+      : "Update data";
+  const recoveryActionBusy = setupNeedsAttention && unknownSetupApps.length
+    ? phase !== "idle"
+    : setupNeedsAttention && missingApps.length
+      ? planBusy
+      : analyticsSyncing || phase !== "idle";
+
+  const reviewSetup = () => {
+    if (unknownSetupApps.length) {
+      void checkPortfolio();
+      return;
+    }
+    if (missingApps.length && setupAppId) {
+      void prepareReportRequest("ONGOING", setupAppId);
+      return;
+    }
+    void checkPortfolio();
+  };
+
+  const runRecoveryAction = () => {
+    if (setupNeedsAttention) {
+      reviewSetup();
+      return;
+    }
+    if (error || analyticsStatus?.state === "ERROR" || !apps.length) {
+      void checkPortfolio();
+      return;
+    }
+    void syncReports();
+  };
 
   useEffect(() => {
     if (!missingApps.length) return;
@@ -789,9 +1051,9 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
       <header className="topbar analytics-topbar">
         <div>
           <h1>Analytics</h1>
-          <p>Portfolio performance and the app-level drivers behind it.</p>
+          <p>Portfolio performance across all your Apple accounts.</p>
         </div>
-        <div className="topbar-actions analytics-topbar-actions">
+        {!initialLoading && !recoveryMode ? <div className="topbar-actions analytics-topbar-actions">
           <label className="analytics-topbar-select">
             <CalendarDays size={17} />
             <span className="sr-only">Date range</span>
@@ -811,13 +1073,10 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
           <button className={activeFilterCount ? "button secondary analytics-filter-trigger active" : "button secondary analytics-filter-trigger"} type="button" onClick={() => setFiltersOpen(true)} aria-label={activeFilterCount ? `Filters, ${activeFilterCount} active` : "Filters"} aria-haspopup="dialog" aria-expanded={filtersOpen}>
             <ListFilter size={17} /><span>Filters{activeFilterCount ? ` (${activeFilterCount})` : ""}</span>{activeFilterCount ? <b>{activeFilterCount}</b> : null}
           </button>
-          <button className="button secondary" type="button" onClick={() => void syncReports()} disabled={analyticsSyncing || !appIds.length} aria-label={syncBusy ? "Syncing analytics reports" : agentStatus.mode === "demo" ? "Sync sample analytics reports" : "Sync analytics reports from Apple"} title={agentStatus.mode === "demo" ? "Refresh deterministic analytics sample reports" : "Download and ingest available reports from Apple"}>
-            <Database size={17} /><span>{syncBusy ? "Syncing…" : agentStatus.mode === "demo" ? "Sync sample reports" : "Sync from Apple"}</span>
+          <button className="button secondary" type="button" onClick={() => void syncReports()} disabled={analyticsSyncing || phase !== "idle" || !apps.length} aria-label={analyticsSyncing ? "Updating analytics for all accounts" : "Update analytics for all connected accounts"} title={agentStatus.mode === "demo" ? "Refresh the deterministic sample reports" : "Check Apple for new reports and refresh this view"}>
+            <RefreshCw size={17} /><span>{analyticsSyncing ? "Updating…" : "Update data"}</span>
           </button>
-          <button className="button secondary" type="button" onClick={() => void retryAnalytics()} disabled={phase !== "idle"} aria-label={phase === "refreshing" ? "Refreshing analytics view" : "Refresh analytics view from local cache"} title="Refresh this view from the local analytics cache">
-            <RefreshCw size={17} /><span>{phase === "refreshing" ? "Refreshing…" : "Refresh view"}</span>
-          </button>
-        </div>
+        </div> : null}
       </header>
 
       {agentStatus.mode === "demo" ? (
@@ -828,86 +1087,174 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
       ) : null}
 
       <p className="sr-only" aria-live="polite">
-        {syncBusy ? "Syncing analytics reports from Apple."
+        {syncBusy ? "Syncing analytics reports for every connected account."
           : phase === "refreshing" ? "Refreshing the analytics view."
             : error ? `Analytics error: ${error}`
               : phase === "idle" ? "Analytics view ready." : "Loading analytics."}
       </p>
 
-      {error ? <div className="analytics-alert error" role="alert"><AlertTriangle size={17} /><span>{error}</span><button type="button" onClick={retryAnalytics}>Retry</button></div> : null}
-      {notice ? <div className="analytics-alert notice" role="status"><CheckCircle2 size={17} /><span>{notice}</span><button type="button" aria-label="Dismiss notice" onClick={() => setNotice(null)}><X size={15} /></button></div> : null}
-      {analyticsStatus?.state === "WAITING_FOR_DATA" ? <div className="analytics-alert waiting"><Clock3 size={17} /><span>{analyticsStatus.detail}</span></div> : null}
-      {analyticsStatus?.state === "SYNCING" ? <div className="analytics-alert waiting" role="status"><RefreshCw size={17} /><span>{analyticsStatus.detail}</span></div> : null}
-      {analyticsStatus?.state === "ERROR" ? <div className="analytics-alert error" role="alert"><AlertTriangle size={17} /><span>{analyticsStatus.detail}</span></div> : null}
-      {analyticsStatus?.state === "PARTIAL" || currentSnapshot?.freshness.partial ? <div className="analytics-alert partial"><Info size={17} /><span>Some report families or dates are still processing. Partial values are labeled and missing values remain blank.</span></div> : null}
-
-      {missingApps.length ? (
-        <section className="analytics-setup-strip" aria-labelledby="analytics-setup-title">
-          <div>
-            <span className="analytics-setup-icon"><Database size={18} /></span>
-            <div><h2 id="analytics-setup-title">Enable reports for {missingApps.length} {missingApps.length === 1 ? "app" : "apps"}</h2><p>Apple requires a separate Analytics Reports request for each app. Confirm them one at a time; existing apps remain usable.</p></div>
-          </div>
-          <div className="analytics-setup-actions">
-            <label><span className="sr-only">App to enable</span><select value={setupAppId} onChange={(event) => setSetupAppId(event.target.value)} disabled={analyticsSyncing}>{missingApps.map((app) => <option value={app.id} key={app.id}>{app.name}</option>)}</select></label>
-            <button className="button primary compact" type="button" onClick={() => void prepareReportRequest("ONGOING")} disabled={planBusy || analyticsSyncing}>Enable ongoing</button>
-            <button className="button secondary compact" type="button" onClick={() => void prepareReportRequest("ONE_TIME_SNAPSHOT", setupAppId)} disabled={planBusy || analyticsSyncing}>Historical snapshot</button>
-          </div>
-          {planError && !plan ? <p className="analytics-setup-error" role="alert">{planError}</p> : null}
+      {initialLoading ? (
+        <section className="analytics-recovery-shell" aria-label="Loading analytics">
+          <div className="analytics-recovery-card loading"><AnalyticsSkeleton /></div>
         </section>
+      ) : recoveryMode ? (
+        <section className="analytics-recovery-shell" aria-labelledby="analytics-recovery-title">
+          <div className="analytics-recovery-card">
+            <div className="analytics-recovery-intro">
+              <span className="analytics-recovery-icon" aria-hidden="true"><Database size={24} /></span>
+              <div>
+                <span className="analytics-eyebrow">Portfolio setup</span>
+                <h2 id="analytics-recovery-title">{recoveryTitle}</h2>
+                <p>{recoveryCopy}</p>
+              </div>
+            </div>
+
+            {recoverySources.length ? <div className="analytics-recovery-sources" aria-label="Analytics status by Apple account">
+              {recoverySources.map((source) => (
+                <div className="analytics-recovery-source" key={source.id}>
+                  <div><strong>{source.name}</strong><small>{source.appCount} {source.appCount === 1 ? "app" : "apps"}</small></div>
+                  <div className={`analytics-recovery-source-state ${source.tone}`}><span><i aria-hidden="true" />{source.label}</span><small>{source.detail}</small></div>
+                </div>
+              ))}
+            </div> : null}
+
+            <div className="analytics-recovery-footer">
+              <div>
+                <strong>{unknownSetupApps.length ? "We'll check Apple again before changing anything." : missingApps.length ? "We'll review one app at a time." : setupNeedsAttention ? "We'll check setup across every account." : "This checks every connected account."}</strong>
+                <span>{unknownSetupApps.length
+                  ? `${unknownSetupApps.length} ${unknownSetupApps.length === 1 ? "app has" : "apps have"} a setup check that didn't finish. Apps that already need reports will remain ready for review afterward.`
+                  : missingApps.length
+                  ? `First up: ${missingApps.find((app) => app.id === setupAppId)?.name ?? missingApps[0]?.name ?? "the first app that needs setup"}. Every Apple change still requires confirmation.`
+                  : setupNeedsAttention ? "This check does not create or change anything at Apple." : "No app or account switching is required."}</span>
+              </div>
+              <button className="button primary" type="button" onClick={runRecoveryAction} disabled={recoveryActionBusy || !unknownSetupApps.length && setupNeedsAttention && missingApps.length > 0 && !setupAppId}>
+                {recoveryActionBusy ? unknownSetupApps.length ? "Checking…" : missingApps.length ? "Preparing…" : setupNeedsAttention ? "Checking…" : "Updating…" : recoveryActionLabel}<ArrowRight size={16} />
+              </button>
+            </div>
+
+            {planError && !plan ? <p className="analytics-recovery-error" role="alert">{planError}</p> : null}
+
+            <details className="analytics-recovery-details">
+              <summary>What ASC Studio checked</summary>
+              <p>{setupNeedsAttention
+                ? "An Admin key can authorize Analytics access, but Apple keeps the Analytics Reports request separate for each app. ASC Studio checks both before it creates or reads a report."
+                : "ASC Studio checks the saved Apple connections, each app's report request, and locally stored report data as separate steps."}</p>
+              <dl>
+                <div><dt>Apple accounts</dt><dd>{accountCount || "None found"}</dd></div>
+                <div><dt>Apps</dt><dd>{apps.length || "None found"}</dd></div>
+                <div><dt>Reports enabled</dt><dd>{enabledAppIds.size}</dd></div>
+                <div><dt>Need setup</dt><dd>{setupAttentionCount}</dd></div>
+              </dl>
+              {recoverySources.length ? <ul>{recoverySources.map((source) => <li key={source.id}><strong>{source.name}</strong><span>{source.technicalDetail}</span></li>)}</ul> : null}
+              {error ? <p><strong>Latest error:</strong> {error}</p> : null}
+              {!error && analyticsStatus?.detail ? <p><strong>Latest check:</strong> {analyticsStatus.detail}</p> : null}
+              {notice ? <p><strong>Latest update:</strong> {notice}</p> : null}
+            </details>
+          </div>
+        </section>
+      ) : <>
+      {hasCoverageConcern || notice ? (
+        <div className={`analytics-coverage-summary${error || analyticsStatus?.state === "ERROR" ? " error" : ""}`} role={error || analyticsStatus?.state === "ERROR" ? "alert" : "status"}>
+          {error || analyticsStatus?.state === "ERROR" ? <AlertTriangle size={18} /> : analyticsStatus?.state === "SYNCING" ? <RefreshCw size={18} /> : <Info size={18} />}
+          <div>
+            <strong>{error || analyticsStatus?.state === "ERROR"
+              ? "Analytics couldn't update"
+              : analyticsStatus?.state === "SYNCING"
+                ? "Updating analytics"
+                : setupNeedsAttention
+                  ? `${setupAttentionCount} ${setupAttentionCount === 1 ? "app needs" : "apps need"} attention`
+                  : hasCoverageConcern
+                    ? "Some portfolio data is still catching up"
+                    : "Analytics updated"}</strong>
+            <span>{error || analyticsStatus?.state === "ERROR"
+              ? "Existing numbers are safe. Use Update data to try again."
+              : analyticsStatus?.state === "SYNCING"
+                ? "Checking every connected account for new Apple reports."
+                : setupNeedsAttention
+                  ? `${missingApps.length ? `${missingApps.length} ${missingApps.length === 1 ? "app needs" : "apps need"} reports enabled` : ""}${missingApps.length && unknownSetupApps.length ? " · " : ""}${unknownSetupApps.length ? `${unknownSetupApps.length} setup ${unknownSetupApps.length === 1 ? "check didn't" : "checks didn't"} finish` : ""}. Available values stay visible; missing data is not counted as zero.`
+                  : hasCoverageConcern
+                    ? "Available values stay visible; missing account or report data is never counted as zero."
+                    : notice}</span>
+          </div>
+          {setupNeedsAttention ? <button className="button secondary compact" type="button" onClick={reviewSetup} disabled={recoveryActionBusy || !unknownSetupApps.length && missingApps.length > 0 && !setupAppId}>{unknownSetupApps.length ? "Check setup" : "Review setup"}</button> : null}
+        </div>
       ) : null}
 
       <div className="analytics-scope-select-wrap">
         <label>
           <span>View</span>
           <select value={scopeId} onChange={(event) => chooseScope(event.target.value)}>
-            <option value="all">All apps · Portfolio</option>
-            {apps.map((app) => <option value={app.id} key={app.id}>{app.name}</option>)}
+            <option value="all">All accounts · {accountCount} {accountCount === 1 ? "account" : "accounts"} · {apps.length} {apps.length === 1 ? "app" : "apps"}</option>
+            {rosterGroups.map(({ source, apps: sourceApps }) => <optgroup label={sourceLabel(source)} key={source.id}>{sourceApps.map(({ app }) => <option value={app.id} key={app.id}>{app.name}</option>)}</optgroup>)}
           </select>
         </label>
       </div>
 
       <div className="analytics-content">
-        <aside className="analytics-roster" aria-label="Portfolio apps">
+        <aside className="analytics-roster" aria-label="Apps across all connected accounts">
           <header>
-            <div><span className="analytics-eyebrow">Portfolio pulse</span><h2>Apps</h2></div>
-            <span>{apps.length}</span>
+            <div><span className="analytics-eyebrow">Portfolio pulse</span><h2>All accounts</h2><small>{accountCount} {accountCount === 1 ? "account" : "accounts"} · {apps.length} {apps.length === 1 ? "app" : "apps"}</small></div>
           </header>
           <div className="analytics-roster-list">
-            <button className={scopeId === "all" ? "analytics-roster-item selected portfolio" : "analytics-roster-item portfolio"} type="button" onClick={() => chooseScope("all")} aria-pressed={scopeId === "all"} aria-label={`All apps, ${portfolioKpi ? formatAnalyticsValueWithAvailability(portfolioKpi.current, portfolioKpi.unit) : "Unavailable"}`}>
+            <button className={scopeId === "all" ? "analytics-roster-item selected portfolio" : "analytics-roster-item portfolio"} type="button" onClick={() => chooseScope("all")} aria-pressed={scopeId === "all"} aria-label={`All connected accounts, ${accountCount} accounts and ${apps.length} apps, ${portfolioKpi ? formatAnalyticsValueWithAvailability(portfolioKpi.current, portfolioKpi.unit) : "No analytics yet"}`}>
               <span className="analytics-app-mark portfolio"><AppWindow size={20} /></span>
-              <span className="analytics-roster-copy"><strong>All apps</strong><small>Portfolio total</small></span>
-              <span className="analytics-roster-value"><strong>{portfolioKpi ? formatAnalyticsValue(portfolioKpi.current, portfolioKpi.unit) : "—"}</strong><small className={portfolioKpi?.current.availability === "AVAILABLE" || portfolioKpi?.current.availability === "PARTIAL" ? analyticsChangeTone(portfolioKpi.change) : "neutral"}>{portfolioKpi ? metricSupportingText(portfolioKpi.current.availability, formatAnalyticsChange(portfolioKpi.change, portfolioKpi.unit)) : "Unavailable"}</small></span>
+              <span className="analytics-roster-copy"><strong>All accounts</strong><small>{accountCount} {accountCount === 1 ? "account" : "accounts"} · {apps.length} {apps.length === 1 ? "app" : "apps"}</small></span>
+              <span className="analytics-roster-value"><strong>{portfolioKpi ? formatAnalyticsValue(portfolioKpi.current, portfolioKpi.unit) : "—"}</strong><small className={portfolioKpi?.current.availability === "AVAILABLE" || portfolioKpi?.current.availability === "PARTIAL" ? analyticsChangeTone(portfolioKpi.change) : "neutral"}>{portfolioKpi ? metricSupportingText(portfolioKpi.current.availability, formatAnalyticsChange(portfolioKpi.change, portfolioKpi.unit)) : "No analytics yet"}</small></span>
             </button>
-            {rosterApps.map(({ app, contribution }) => {
-              const previous = contribution?.previousValue ?? null;
-              const change = contribution?.absoluteChange === null || contribution?.absoluteChange === undefined ? null : {
-                absolute: contribution.absoluteChange,
-                relative: previous === 0 || previous === null ? null : contribution.absoluteChange / previous,
-              };
-              const unit = rankingMetric === "PROCEEDS" ? "CURRENCY_USD" : "COUNT";
-              return (
-                <button className={scopeId === app.id ? "analytics-roster-item selected" : "analytics-roster-item"} type="button" key={app.id} onClick={() => chooseScope(app.id)} aria-pressed={scopeId === app.id} aria-label={`${app.name}, ${formatAnalyticsValueWithAvailability(contribution ? { value: contribution.currentValue, availability: contribution.currentAvailability } : null, unit)}`}>
-                  <span className="analytics-app-mark">{appInitials(app.name)}</span>
-                  <span className="analytics-roster-copy"><strong>{app.name}</strong><small>{app.bundleId}</small></span>
-                  <span className="analytics-roster-value"><strong>{formatAnalyticsValue(contribution ? { value: contribution.currentValue, availability: contribution.currentAvailability } : null, unit)}</strong><small className={contribution?.currentAvailability === "AVAILABLE" || contribution?.currentAvailability === "PARTIAL" ? analyticsChangeTone(change) : "neutral"}>{contribution ? metricSupportingText(contribution.currentAvailability, formatAnalyticsChange(change, unit), "No comparison") : "Unavailable"}</small></span>
-                </button>
-              );
+            {rosterGroups.map(({ source, apps: sourceApps }) => {
+              const sourceCoverage = activeSourceCoverage.find((candidate) => candidate.sourceId === source.id);
+              const sourceState = sourceCoverage ? coverageLabel(sourceCoverage) : source.state === "READY" ? "Ready" : source.state === "PARTIAL" ? "Partial app roster" : "Couldn't check";
+              const failedAccountDetail = source.accounts
+                .filter((account) => account.state === "ERROR")
+                .map((account) => `${account.profileName}: ${account.detail}`)
+                .join(" ");
+              return <section className="analytics-roster-group" aria-labelledby={`analytics-source-${source.id}`} key={source.id}>
+                <header>
+                  <strong id={`analytics-source-${source.id}`} title={sourceLabel(source)}>{sourceLabel(source)}</strong>
+                  <span className={sourceCoverage?.state === "ERROR" || source.state === "ERROR" ? "error" : sourceCoverage?.state === "READY" && source.state === "READY" ? "ready" : "partial"}>{sourceState}</span>
+                </header>
+                {failedAccountDetail ? <p>{failedAccountDetail}</p> : source.state !== "READY" ? <p>{source.detail}</p> : null}
+                {sourceApps.length ? sourceApps.map(({ app, contribution }) => {
+                  const previous = contribution?.previousValue ?? null;
+                  const change = contribution?.absoluteChange === null || contribution?.absoluteChange === undefined ? null : {
+                    absolute: contribution.absoluteChange,
+                    relative: previous === 0 || previous === null ? null : contribution.absoluteChange / previous,
+                  };
+                  const unit = rankingMetric === "PROCEEDS" ? "CURRENCY_USD" : "COUNT";
+                  return (
+                    <button className={scopeId === app.id ? "analytics-roster-item selected" : "analytics-roster-item"} type="button" key={app.id} onClick={() => chooseScope(app.id)} aria-pressed={scopeId === app.id} aria-label={`${app.name}, ${sourceLabel(source)}, ${formatAnalyticsValueWithAvailability(contribution ? { value: contribution.currentValue, availability: contribution.currentAvailability } : null, unit)}`}>
+                      <span className="analytics-app-mark">{appInitials(app.name)}</span>
+                      <span className="analytics-roster-copy"><strong>{app.name}</strong><small>{app.bundleId}</small></span>
+                      <span className="analytics-roster-value"><strong>{formatAnalyticsValue(contribution ? { value: contribution.currentValue, availability: contribution.currentAvailability } : null, unit)}</strong><small className={contribution?.currentAvailability === "AVAILABLE" || contribution?.currentAvailability === "PARTIAL" ? analyticsChangeTone(change) : "neutral"}>{contribution ? metricSupportingText(contribution.currentAvailability, formatAnalyticsChange(change, unit), "No comparison") : "No analytics yet"}</small></span>
+                    </button>
+                  );
+                }) : source.state === "READY" ? <p>{source.detail}</p> : null}
+              </section>;
             })}
           </div>
-          <footer>Ranked by {analyticsMetricLabels[rankingMetric]}. Rates are recomputed from portfolio totals.</footer>
+          <footer>Apps are ranked within each account source by {analyticsMetricLabels[rankingMetric]}. Rates are recomputed from all-account totals.</footer>
         </aside>
 
         <div className="analytics-evidence">
           <section className="analytics-panel analytics-summary" aria-labelledby="analytics-summary-title">
             <header className="analytics-summary-header">
               <div>
-                <span className="analytics-eyebrow">{scopeId === "all" ? `${apps.length} apps` : selectedScopeApp?.bundleId}</span>
+                <span className="analytics-eyebrow">{scopeId === "all" ? `${accountCount} ${accountCount === 1 ? "account" : "accounts"} · ${apps.length} ${apps.length === 1 ? "app" : "apps"}` : `${selectedSource ? sourceLabel(selectedSource) : "Connected account"} · ${selectedScopeApp?.bundleId ?? "App"}`}</span>
                 <h2 id="analytics-summary-title">{scopeTitle}</h2>
-                <p>{scopeId === "all" ? "Combined performance across the active App Store Connect portfolio." : "App performance with the same date, comparison, and metric context."}</p>
+                <p>{scopeId === "all" ? "Combined performance across every connected App Store Connect account." : "App performance with the same date, comparison, and metric context; the operational account is unchanged."}</p>
               </div>
               <span className="analytics-data-mode">{agentStatus.mode === "demo" ? "Sample data" : "Apple reports"}</span>
             </header>
-            {loading ? <AnalyticsSkeleton /> : currentSnapshot ? (
+            {!loading && catalog && !apps.length ? (
+              <div className="analytics-empty-state analytics-portfolio-empty" role={catalog.complete ? "status" : "alert"}>
+                <AlertTriangle size={24} />
+                <div>
+                  <h2>{catalog.complete ? "No apps across the connected accounts" : "No complete account roster is available"}</h2>
+                  <p>{catalog.complete ? "The connected App Store Connect accounts do not currently expose any apps." : "ASC Studio will not present missing accounts as a zero-value portfolio. Retry the account roster when those connections are available."}</p>
+                </div>
+                <button className="button secondary" type="button" onClick={() => void checkPortfolio()}>Try again</button>
+              </div>
+            ) : loading ? <AnalyticsSkeleton /> : currentSnapshot ? (
               <div className="analytics-metric-rail">
                 {metricOrder.map((metricId) => {
                   const kpi = currentSnapshot.kpis.find((candidate) => candidate.metric === metricId);
@@ -922,7 +1269,16 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
                   );
                 })}
               </div>
-            ) : <AnalyticsSkeleton />}
+            ) : (
+              <div className="analytics-empty-state" role="alert">
+                <AlertTriangle size={24} />
+                <div>
+                  <h2>Analytics is unavailable</h2>
+                  <p>{error ?? "The connected-account portfolio could not be loaded."}</p>
+                </div>
+                <button className="button secondary" type="button" onClick={() => void checkPortfolio()}>Try again</button>
+              </div>
+            )}
           </section>
 
           {!loading && currentSnapshot && !hasAnyValue ? (
@@ -935,7 +1291,7 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
               {activeFilterCount ? (
                 <button className="button secondary" type="button" onClick={() => setFilters(emptyAnalyticsFilters())}>Clear filters</button>
               ) : (
-                <button className="button secondary" type="button" onClick={() => void syncReports()} disabled={analyticsSyncing}>Sync reports</button>
+                <button className="button secondary" type="button" onClick={() => void syncReports()} disabled={analyticsSyncing}>Update data</button>
               )}
             </section>
           ) : null}
@@ -955,6 +1311,8 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
                     <thead><tr><th scope="col">App</th><th scope="col">Current</th><th scope="col">Previous</th><th scope="col">Change</th><th scope="col">{contributionsUseShare ? "Share of change" : "Change driver"}</th></tr></thead>
                     <tbody>{rankedContributions.slice(0, 20).map((contribution, index) => {
                       const unit = rankingMetric === "PROCEEDS" ? "CURRENCY_USD" : "COUNT";
+                      const contributionApp = apps.find((app) => app.id === contribution.appId);
+                      const contributionSource = contributionApp ? sourceById.get(contributionApp.sourceId) : null;
                       const driverValue = contributionsUseShare ? contribution.shareOfPortfolioChange : contribution.absoluteChange;
                       const driverWidth = driverValue === null || !maximumContributionDriver ? 0 : Math.min(50, Math.abs(driverValue) / maximumContributionDriver * 50);
                       const change = contribution.absoluteChange === null ? null : {
@@ -963,7 +1321,7 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
                       };
                       return (
                         <tr key={contribution.appId}>
-                          <th scope="row" data-label="App"><span className="analytics-rank">{index + 1}</span><button type="button" onClick={() => chooseScope(contribution.appId)}>{contribution.appName}<ArrowRight size={14} /></button></th>
+                          <th scope="row" data-label="App"><span className="analytics-rank">{index + 1}</span><button type="button" onClick={() => chooseScope(contribution.appId)}><span>{contribution.appName}{contributionSource ? <small>{sourceLabel(contributionSource)}</small> : null}</span><ArrowRight size={14} /></button></th>
                           <td data-label="Current">{formatAnalyticsValueWithAvailability({ value: contribution.currentValue, availability: contribution.currentAvailability }, unit)}</td>
                           <td data-label="Previous">{formatAnalyticsValueWithAvailability(contribution.previousAvailability ? { value: contribution.previousValue, availability: contribution.previousAvailability } : null, unit)}</td>
                           <td data-label="Change"><span className={contribution.currentAvailability === "AVAILABLE" || contribution.currentAvailability === "PARTIAL" ? analyticsChangeTone(change) : "neutral"}>{metricSupportingText(contribution.currentAvailability, formatAnalyticsChange(change, unit), "—")}</span></td>
@@ -998,20 +1356,28 @@ export const AnalyticsWorkspace = ({ apps, selectedApp, status: agentStatus, onA
             <section className="analytics-freshness" aria-labelledby="analytics-freshness-title">
               <header><h2 id="analytics-freshness-title">Freshness &amp; coverage</h2><span>{currentSnapshot.provenance.reportNames.length} report {currentSnapshot.provenance.reportNames.length === 1 ? "family" : "families"}</span></header>
               <div className="analytics-coverage-grid">
+                <p><AppWindow size={18} /><span><strong>{scopeId === "all" ? "Portfolio scope" : "App scope"}</strong><small>{scopeId === "all" ? `${accountCount} ${accountCount === 1 ? "account" : "accounts"} · ${apps.length} ${apps.length === 1 ? "app" : "apps"}` : `${selectedScopeApp?.name ?? "App unavailable"} · ${selectedSource ? sourceLabel(selectedSource) : "Connected account"}`}</small></span></p>
                 <p><Clock3 size={18} /><span><strong>Data through</strong><small>{currentSnapshot.freshness.dataThrough ? shortDate(currentSnapshot.freshness.dataThrough) : "No complete date yet"}</small></span></p>
                 <p><RefreshCw size={18} /><span><strong>Local cache</strong><small>{relativeDateTime(currentSnapshot.freshness.syncedAt)}</small></span></p>
                 <p><ShieldCheck size={18} /><span><strong>Privacy</strong><small>{currentSnapshot.privacy.mayIncludePrivacyAdjustments ? "Apple privacy processing applies" : "No privacy adjustment flagged"}</small></span></p>
               </div>
-              <details><summary>Source and limitations</summary><p>{currentSnapshot.freshness.detail} {currentSnapshot.privacy.detail} Estimated proceeds can differ from final payments.</p>{currentSnapshot.provenance.reportNames.length ? <ul>{currentSnapshot.provenance.reportNames.map((name) => <li key={name}>{name}</li>)}</ul> : null}</details>
-              <div className="analytics-snapshot-action">
-                <div><strong>Need older history?</strong><small>Request a one-time historical snapshot without changing ongoing daily reports.</small></div>
-                <label><span className="sr-only">App for historical snapshot</span><select value={snapshotAppId} onChange={(event) => setSnapshotAppId(event.target.value)} disabled={analyticsSyncing}>{apps.map((app) => <option value={app.id} key={app.id}>{app.name}</option>)}</select></label>
-                <button className="button secondary compact" type="button" onClick={() => void prepareReportRequest("ONE_TIME_SNAPSHOT", snapshotAppId)} disabled={planBusy || analyticsSyncing}>Request snapshot</button>
-              </div>
+              <details><summary>Accounts, sources, and limitations</summary><p>{currentSnapshot.freshness.detail} {currentSnapshot.privacy.detail} Estimated proceeds can differ from final payments.</p><ul className="analytics-source-coverage-list">{currentSnapshot.sourceCoverage.map((coverage) => {
+                const source = sourceById.get(coverage.sourceId);
+                return <li key={coverage.sourceId}><strong>{source ? sourceLabel(source) : "Connected account"}</strong><span>{coverageLabel(coverage)} · {coverage.detail}</span></li>;
+              })}</ul>{currentSnapshot.provenance.reportNames.length ? <ul>{currentSnapshot.provenance.reportNames.map((name) => <li key={name}>{name}</li>)}</ul> : null}</details>
+              <details className="analytics-snapshot-details">
+                <summary>Advanced: request older history</summary>
+                <div className="analytics-snapshot-action">
+                  <div><strong>One-time historical snapshot</strong><small>Ask Apple for older history without changing ongoing daily reports.</small></div>
+                  <label><span className="sr-only">App and account for historical snapshot</span><select value={snapshotAppId} onChange={(event) => setSnapshotAppId(event.target.value)} disabled={analyticsSyncing}>{rosterGroups.map(({ source, apps: sourceApps }) => <optgroup label={sourceLabel(source)} key={source.id}>{sourceApps.map(({ app }) => <option value={app.id} key={app.id}>{app.name}</option>)}</optgroup>)}</select></label>
+                  <button className="button secondary compact" type="button" onClick={() => void prepareReportRequest("ONE_TIME_SNAPSHOT", snapshotAppId)} disabled={planBusy || analyticsSyncing || !snapshotAppId}>Review request</button>
+                </div>
+              </details>
             </section>
           ) : null}
         </div>
       </div>
+      </>}
 
       {plan ? <AnalyticsPlanDialog
         plan={plan}

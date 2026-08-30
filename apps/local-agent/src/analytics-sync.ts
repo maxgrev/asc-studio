@@ -89,6 +89,10 @@ export class AnalyticsSyncCoordinator {
     return this.dependencies.store.getAnalyticsSyncRun(runId);
   }
 
+  isActive(issuerId: string) {
+    return this.active.has(issuerId);
+  }
+
   async waitForIdle(issuerId: string) {
     await this.active.get(issuerId)?.task;
   }

@@ -1,5 +1,6 @@
 import {
   GenerateReleaseCopyTranslationsInputSchema,
+  GeneratedReleaseCopyTranslationsResponseSchema,
   type GenerateReleaseCopyTranslationsInput,
 } from "@asc-studio/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,7 +24,18 @@ const input: GenerateReleaseCopyTranslationsInput = GenerateReleaseCopyTranslati
   fields: ["whatsNew"],
   source: {
     whatsNew: "A faster editor and more reliable sync.",
+  },
+});
+
+const allFieldsInput: GenerateReleaseCopyTranslationsInput = GenerateReleaseCopyTranslationsInputSchema.parse({
+  sourceLocale: "en-US",
+  targetLocales: ["de-DE", "fr-FR"],
+  fields: ["description", "whatsNew", "promotionalText", "keywords"],
+  source: {
+    description: "Capture, organize, and find every idea in one calm workspace.",
+    whatsNew: "A faster editor and more reliable sync.",
     promotionalText: "Capture ideas fast.",
+    keywords: "notes,tasks,writing,ideas",
   },
 });
 
@@ -41,11 +53,27 @@ describe("release-copy translators", () => {
 
     expect(translations).toHaveLength(2);
     expect(translations[0]).toMatchObject({ locale: "de-DE", whatsNew: expect.stringContaining("Demo-Übersetzung") });
+    expect(translations[0]).not.toHaveProperty("description");
     expect(translations[0]).not.toHaveProperty("promotionalText");
     expect(translations[0]).not.toHaveProperty("keywords");
   });
 
-  it("sends a strict keyword-free schema to OpenAI and validates its output", async () => {
+  it("supports every translatable field in demo mode without leaking unselected fields", async () => {
+    const translator = new DemoReleaseCopyTranslator();
+
+    const translations = await translator.generate(allFieldsInput);
+
+    expect(() => GeneratedReleaseCopyTranslationsResponseSchema.parse({ translations })).not.toThrow();
+    expect(translations[0]).toMatchObject({
+      locale: "de-DE",
+      description: expect.stringContaining("Demo-Übersetzung"),
+      whatsNew: expect.stringContaining("Demo-Übersetzung"),
+      promotionalText: expect.stringContaining("Demo-Übersetzung"),
+      keywords: expect.stringContaining("notes,tasks,writing,ideas"),
+    });
+  });
+
+  it("sends a strict field-scoped schema to OpenAI and validates its output", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({
       output_text: JSON.stringify({
         translations: [
@@ -70,6 +98,109 @@ describe("release-copy translators", () => {
     expect(request?.redirect).toBe("error");
     expect(body.input).not.toContain("keywords");
     expect(JSON.stringify(body.text.format.schema)).not.toContain("keywords");
+  });
+
+  it("adapts keywords, validates all four requested fields, and restores requested locale order", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => openAiOutput({
+      translations: [
+        {
+          locale: "fr-FR",
+          description: "Capturez et retrouvez chaque idée dans un espace calme.",
+          whatsNew: "Un éditeur plus rapide et une synchronisation plus fiable.",
+          promotionalText: "Capturez vos idées rapidement.",
+          keywords: "notes,tâches,écriture,idées",
+        },
+        {
+          locale: "de-DE",
+          description: "Erfassen und finden Sie jede Idee in einem ruhigen Arbeitsbereich.",
+          whatsNew: "Ein schnellerer Editor und eine zuverlässigere Synchronisierung.",
+          promotionalText: "Ideen schnell festhalten.",
+          keywords: "notizen,aufgaben,schreiben,ideen",
+        },
+      ],
+    }));
+    const translator = new OpenAiReleaseCopyTranslator("test-key", "test-model", fetchMock as unknown as typeof fetch);
+
+    const translations = await translator.generate(allFieldsInput);
+
+    expect(translations.map((translation) => translation.locale)).toEqual(["de-DE", "fr-FR"]);
+    expect(translations[0]).toMatchObject({ keywords: "notizen,aufgaben,schreiben,ideen" });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      instructions: string;
+      input: string;
+      text: { format: { schema: { properties: { translations: { items: { properties: Record<string, unknown>; required: string[] } } } } } };
+    };
+    expect(body.instructions).toContain("adapt it for local App Store search behavior");
+    expect(body.instructions).toContain("ASCII-comma-separated list");
+    expect(JSON.parse(body.input)).toEqual(allFieldsInput);
+    expect(Object.keys(body.text.format.schema.properties.translations.items.properties)).toEqual([
+      "locale",
+      "description",
+      "whatsNew",
+      "promotionalText",
+      "keywords",
+    ]);
+    expect(body.text.format.schema.properties.translations.items.required).toEqual([
+      "locale",
+      "description",
+      "whatsNew",
+      "promotionalText",
+      "keywords",
+    ]);
+  });
+
+  it("batches large locale sets safely and returns nothing when a later batch fails", async () => {
+    const batchedInput = GenerateReleaseCopyTranslationsInputSchema.parse({
+      sourceLocale: "en-US",
+      targetLocales: ["de-DE", "fr-FR", "es-ES", "it", "ja"],
+      fields: ["whatsNew"],
+      source: { whatsNew: "A faster editor." },
+    });
+    const fetchMock = vi.fn(async (_request: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { input: string };
+      const requestInput = JSON.parse(body.input) as GenerateReleaseCopyTranslationsInput;
+      if (fetchMock.mock.calls.length === 2) return new Response("unavailable", { status: 503 });
+      return openAiOutput({
+        translations: [...requestInput.targetLocales].reverse().map((locale) => ({ locale, whatsNew: `Localized ${locale}` })),
+      });
+    });
+    const translator = new OpenAiReleaseCopyTranslator("test-key", "test-model", fetchMock as unknown as typeof fetch);
+
+    await expect(translator.generate(batchedInput)).rejects.toMatchObject({
+      code: "translation_provider_error",
+      status: 502,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const chunkLocales = fetchMock.mock.calls.map((call) => {
+      const body = JSON.parse(String(call[1]?.body)) as { input: string };
+      return (JSON.parse(body.input) as GenerateReleaseCopyTranslationsInput).targetLocales;
+    });
+    expect(chunkLocales).toEqual([
+      ["de-DE", "fr-FR", "es-ES", "it"],
+      ["ja"],
+    ]);
+  });
+
+  it("preserves requested order across successful OpenAI batches", async () => {
+    const batchedInput = GenerateReleaseCopyTranslationsInputSchema.parse({
+      sourceLocale: "en-US",
+      targetLocales: ["de-DE", "fr-FR", "es-ES", "it", "ja"],
+      fields: ["whatsNew"],
+      source: { whatsNew: "A faster editor." },
+    });
+    const fetchMock = vi.fn(async (_request: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { input: string };
+      const requestInput = JSON.parse(body.input) as GenerateReleaseCopyTranslationsInput;
+      return openAiOutput({
+        translations: [...requestInput.targetLocales].reverse().map((locale) => ({ locale, whatsNew: `Localized ${locale}` })),
+      });
+    });
+    const translator = new OpenAiReleaseCopyTranslator("test-key", "test-model", fetchMock as unknown as typeof fetch);
+
+    const translations = await translator.generate(batchedInput);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(translations.map((translation) => translation.locale)).toEqual(batchedInput.targetLocales);
   });
 
   it("rejects unrequested fields in provider output", async () => {

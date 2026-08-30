@@ -28,6 +28,37 @@ const plan: MutationPlan = {
   error: null,
 };
 
+const portfolioAnalyticsPlan: MutationPlan = {
+  id: "portfolio-analytics-plan-1",
+  operation: "analytics.report_request.create",
+  risk: "mutation",
+  state: "awaiting_confirmation",
+  createdAt: "2026-08-30T19:00:00.000Z",
+  expiresAt: "2026-08-30T19:10:00.000Z",
+  digest: "portfolio-analytics-digest-1",
+  summary: "Create a one-time Analytics report request for Field Log.",
+  context: {
+    profile: "Inactive reports key",
+    connectionId: "raw-inactive-connection",
+    appleAdsAdAccountId: null,
+    appleAdsMode: null,
+  },
+  target: {
+    appId: "raw-inactive-app",
+    appName: "Field Log",
+    accessType: "ONE_TIME_SNAPSHOT",
+  },
+  before: {
+    matchingReportRequestIds: [],
+    activeOngoingReportRequestIds: [],
+  },
+  after: {
+    appId: "raw-inactive-app",
+    accessType: "ONE_TIME_SNAPSHOT",
+  },
+  error: null,
+};
+
 const audit: Omit<AuditEvent, "sequence"> = {
   id: "event-1",
   timestamp: "2026-07-31T19:00:00.000Z",
@@ -82,6 +113,75 @@ describe("SqlitePlanStore", () => {
     expect(await firstStore.getPlan(plan.id)).toEqual(running);
     firstStore.close();
     secondStore.close();
+  });
+
+  it("commits a portfolio Analytics plan and its V2 marker atomically and rolls both back on marker failure", async () => {
+    const path = createDatabasePath();
+    const firstStore = new SqlitePlanStore(path);
+    await firstStore.savePortfolioAnalyticsPlan(portfolioAnalyticsPlan, "raw-inactive-issuer");
+
+    const reopened = new SqlitePlanStore(path);
+    expect(await reopened.getPlan(portfolioAnalyticsPlan.id)).toEqual(portfolioAnalyticsPlan);
+    expect(reopened.getPortfolioAnalyticsPlanIssuer(portfolioAnalyticsPlan.id)).toBe("raw-inactive-issuer");
+    firstStore.close();
+    reopened.close();
+
+    const rollbackPath = createDatabasePath();
+    const rollbackStore = new SqlitePlanStore(rollbackPath);
+    const triggerWriter = new DatabaseSync(rollbackPath);
+    triggerWriter.exec(`
+      CREATE TRIGGER reject_portfolio_analytics_marker
+      BEFORE INSERT ON portfolio_analytics_plan_markers
+      BEGIN
+        SELECT RAISE(ABORT, 'fixture marker failure');
+      END;
+    `);
+    triggerWriter.close();
+
+    await expect(rollbackStore.savePortfolioAnalyticsPlan(
+      { ...portfolioAnalyticsPlan, id: "portfolio-analytics-plan-rollback" },
+      "raw-inactive-issuer",
+    )).rejects.toThrow("fixture marker failure");
+    expect(await rollbackStore.getPlan("portfolio-analytics-plan-rollback")).toBeNull();
+    expect(rollbackStore.getPortfolioAnalyticsPlanIssuer("portfolio-analytics-plan-rollback")).toBeNull();
+    rollbackStore.close();
+  });
+
+  it("persists expired portfolio plans once and keeps a valid pending sibling after reopen", async () => {
+    const path = createDatabasePath();
+    const store = new SqlitePlanStore(path);
+    const expired = {
+      ...portfolioAnalyticsPlan,
+      id: "expired-portfolio-analytics-plan",
+      expiresAt: "2026-08-30T18:59:59.000Z",
+    } satisfies MutationPlan;
+    const valid = {
+      ...portfolioAnalyticsPlan,
+      id: "valid-portfolio-analytics-plan",
+      expiresAt: "2030-08-30T19:10:00.000Z",
+    } satisfies MutationPlan;
+    await store.savePortfolioAnalyticsPlan(expired, "raw-inactive-issuer");
+    await store.savePortfolioAnalyticsPlan(valid, "raw-inactive-issuer");
+
+    expect(store.expirePortfolioAnalyticsPlans("2026-08-30T19:00:00.000Z")).toBe(1);
+    expect(await store.getPlan(expired.id)).toMatchObject({
+      state: "expired",
+      error: "The confirmation window expired.",
+    });
+    expect((await store.listPortfolioAnalyticsPlans("awaiting_confirmation", 50)).map(({ plan }) => plan.id))
+      .toEqual([valid.id]);
+    expect(store.getPortfolioAnalyticsPlanIssuer(expired.id)).toBe("raw-inactive-issuer");
+    store.close();
+
+    const reopened = new SqlitePlanStore(path);
+    expect(reopened.expirePortfolioAnalyticsPlans("2026-08-30T19:00:00.000Z")).toBe(0);
+    expect(await reopened.getPlan(expired.id)).toMatchObject({
+      state: "expired",
+      error: "The confirmation window expired.",
+    });
+    expect((await reopened.listPortfolioAnalyticsPlans("awaiting_confirmation", 50)).map(({ plan }) => plan.id))
+      .toEqual([valid.id]);
+    reopened.close();
   });
 
   it("rejects a stored plan that does not match the shared schema", async () => {

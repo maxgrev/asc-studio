@@ -1,9 +1,9 @@
 import type {
+  AppStoreLocale,
   AppStorePlatform,
   AppStoreVersion,
   CreateVersionInput,
   CreateVersionMutationPlan,
-  GenerateReleaseCopyTranslationsInput,
   OpenAiConnection,
   ReleaseCopyField,
   SubmitVersionMutationPlan,
@@ -21,6 +21,7 @@ import {
   metadataFieldLabels,
   nextPatchVersion,
   platformLabel,
+  type LocalizationField,
 } from "../releaseMetadata.js";
 
 interface DialogFrameProps {
@@ -115,12 +116,12 @@ export const CreateVersionDialog = ({ appId, platform, versions, plan, busy, err
   const validVersion = /^\d+(?:\.\d+){1,2}$/.test(versionString);
 
   return (
-    <DialogFrame title={plan ? "Review new version" : "Create a new version"} subtitle="Start an editable App Store version and carry stable metadata forward." busy={busy} onClose={onClose}>
+    <DialogFrame title={plan ? "Review new version" : "Create a new version"} subtitle="Start an editable App Store version and carry each locale’s stable content forward." busy={busy} onClose={onClose}>
       {!plan ? (
         <div className="dialog-content version-form">
           <label><span>Version</span><input value={versionString} onChange={(event) => setVersionString(event.target.value)} placeholder="2.5.0" /></label>
           <label><span>Platform</span><select value={platform} disabled><option value={platform}>{platformLabel(platform)}</option></select></label>
-          <label className="full-row"><span>Copy metadata from</span><select value={copyMetadataFrom} onChange={(event) => setCopyMetadataFrom(event.target.value)}><option value="">Start empty</option>{versions.map((version) => <option value={version.versionString} key={version.id}>{version.versionString} · {platformLabel(version.platform)}</option>)}</select></label>
+          <label className="full-row"><span>Copy localized content from</span><select value={copyMetadataFrom} onChange={(event) => setCopyMetadataFrom(event.target.value)}><option value="">Start empty</option>{versions.map((version) => <option value={version.versionString} key={version.id}>{version.versionString} · {platformLabel(version.platform)}</option>)}</select><small>Description, promotional text, keywords, and URLs are copied per locale.</small></label>
           <label className="checkbox-row full-row"><input type="checkbox" checked={excludeWhatsNew} onChange={(event) => setExcludeWhatsNew(event.target.checked)} /><span><strong>Leave What’s New empty</strong><small>Release notes should describe this update, not the last one.</small></span></label>
           <div className="safety-note full-row"><AlertTriangle size={17} /><span>Reviewing creates an expiring plan. ASC Studio checks again before it writes to App Store Connect.</span></div>
         </div>
@@ -304,8 +305,8 @@ export const ReadinessDialog = ({ report, demo, busy, error, onRetry, onFix, onC
             {report.remediation.steps.length ? report.remediation.steps.map((step) => (
               <li className={step.blocking ? "blocking" : "warning"} key={`${step.order}-${step.checkId}`}>
                 <span>{step.order}</span><div><strong>{step.message}</strong><p>{step.remediation}</p>{step.locale ? <small>{step.locale}{step.field ? ` · ${step.field}` : ""}</small> : null}</div>
-                {onFix && ["description", "promotionalText", "keywords", "marketingUrl", "supportUrl", "screenshots"].includes(step.field)
-                  ? <button className="button secondary remediation-fix" type="button" onClick={() => onFix(step)}>Open Store Listing</button>
+                {onFix && ["description", "whatsNew", "promotionalText", "keywords", "marketingUrl", "supportUrl", "screenshots"].includes(step.field)
+                  ? <button className="button secondary remediation-fix" type="button" onClick={() => onFix(step)}>Open field</button>
                   : null}
               </li>
             )) : <li className="all-clear"><CheckCircle2 size={18} />No fixes are required by the current report.</li>}
@@ -329,9 +330,31 @@ interface TranslationDialogProps {
   connectionError: string | null;
   onRetryConnection: () => Promise<void>;
   onManageOpenAi: () => void;
-  onGenerate: (input: GenerateReleaseCopyTranslationsInput) => Promise<void>;
+  onApply: (selection: TranslationSelection) => Promise<void>;
   onClose: () => void;
 }
+
+export interface TranslationSelection {
+  targetLocales: AppStoreLocale[];
+  translateFields: ReleaseCopyField[];
+  copyFields: Array<"marketingUrl" | "supportUrl">;
+}
+
+const translationFieldOptions: Array<{
+  field: LocalizationField;
+  label: string;
+  detail: string;
+  limit: number;
+}> = [
+  { field: "whatsNew", label: "What’s New", detail: "Translate for this update", limit: 4_000 },
+  { field: "promotionalText", label: "Promotional text", detail: "Translate as timely storefront copy", limit: 170 },
+  { field: "description", label: "Description", detail: "Translate naturally without adding claims", limit: 4_000 },
+  { field: "keywords", label: "Keywords", detail: "Adapt for local search—not word for word", limit: 100 },
+  { field: "supportUrl", label: "Support URL", detail: "Copy unchanged", limit: 4_000 },
+  { field: "marketingUrl", label: "Marketing URL", detail: "Copy unchanged", limit: 4_000 },
+];
+
+const translatableFields = new Set<LocalizationField>(["description", "whatsNew", "promotionalText", "keywords"]);
 
 export const TranslationDialog = ({
   source,
@@ -341,19 +364,32 @@ export const TranslationDialog = ({
   connectionError,
   onRetryConnection,
   onManageOpenAi,
-  onGenerate,
+  onApply,
   onClose,
 }: TranslationDialogProps) => {
   const [selectedLocales, setSelectedLocales] = useState(() => new Set(targets.map((target) => target.locale)));
+  const [selectedFields, setSelectedFields] = useState<Set<LocalizationField>>(() => {
+    if (source.whatsNew.trim()) return new Set(["whatsNew"]);
+    const fallback = translationFieldOptions.find((option) => source[option.field].trim());
+    return new Set(fallback ? [fallback.field] : []);
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fields: ReleaseCopyField[] = ["whatsNew"];
   const targetLocales = targets.filter((target) => selectedLocales.has(target.locale)).map((target) => target.locale);
-  const selectedSourceIsEmpty = fields.some((field) => !source[field].trim());
+  const translateFields = translationFieldOptions.flatMap(({ field }) => (
+    selectedFields.has(field) && translatableFields.has(field) ? [field as ReleaseCopyField] : []
+  ));
+  const copyFields = translationFieldOptions.flatMap(({ field }) => (
+    selectedFields.has(field) && !translatableFields.has(field) ? [field as "marketingUrl" | "supportUrl"] : []
+  ));
+  const selectedSourceIsEmpty = [...selectedFields].some((field) => !source[field].trim());
   const allSelected = selectedLocales.size === targets.length;
   const providerReady = Boolean(connection?.configured);
-  const providerTitle = connection?.source === "demo"
+  const needsProvider = translateFields.length > 0;
+  const providerTitle = !needsProvider
+    ? "No translation service needed"
+    : connection?.source === "demo"
     ? "Sample translator"
     : connection?.source === "environment" && !connection.configured
       ? "Environment-managed OpenAI needs attention"
@@ -364,7 +400,9 @@ export const TranslationDialog = ({
         : connectionLoading
           ? "Checking OpenAI setup"
           : "OpenAI is not set up";
-  const providerDetail = connection?.source === "demo"
+  const providerDetail = !needsProvider
+    ? "The selected URLs will be copied to local drafts without leaving this device."
+    : connection?.source === "demo"
     ? "Demo mode returns marked sample translations and never calls OpenAI."
     : connection?.source === "environment"
       ? connection.configured
@@ -385,18 +423,23 @@ export const TranslationDialog = ({
     });
   };
 
+  const toggleField = (field: LocalizationField) => {
+    setSelectedFields((current) => {
+      const next = new Set(current);
+      if (next.has(field)) next.delete(field);
+      else next.add(field);
+      return next;
+    });
+  };
+
   const generate = async () => {
     setBusy(true);
     setError(null);
     try {
-      await onGenerate({
-        sourceLocale: source.locale,
+      await onApply({
         targetLocales,
-        fields,
-        source: {
-          whatsNew: source.whatsNew,
-          promotionalText: source.promotionalText,
-        },
+        translateFields,
+        copyFields,
       });
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "ASC Studio could not generate translations.");
@@ -407,15 +450,15 @@ export const TranslationDialog = ({
 
   return (
     <DialogFrame
-      title="Translate release copy"
-      subtitle={`Use ${localeNames[source.locale]} as the source. Generated text stays in local drafts until you review it.`}
+      title="Translate & adapt"
+      subtitle={`Use ${localeNames[source.locale]} as the source. Selected fields become local drafts until you review them.`}
       wide
       busy={busy}
       onClose={onClose}
     >
       <div className="dialog-content translation-dialog">
-        <div className={providerReady ? "translation-provider ready" : connectionError ? "translation-provider error" : "translation-provider unconfigured"}>
-          {providerReady ? <Languages size={19} /> : <KeyRound size={19} />}
+        <div className={providerReady || !needsProvider ? "translation-provider ready" : connectionError ? "translation-provider error" : "translation-provider unconfigured"}>
+          {providerReady || !needsProvider ? <Languages size={19} /> : <KeyRound size={19} />}
           <p>
             <strong>{providerTitle}</strong>
             <span>{providerDetail}</span>
@@ -427,16 +470,18 @@ export const TranslationDialog = ({
         </div>
 
         <section className="translation-field-picker" aria-labelledby="translation-fields-title">
-          <header><div><h3 id="translation-fields-title">Translate What’s New</h3><p>Release translation is intentionally limited to the notes for this version.</p></div></header>
-          <label className="translation-field selected">
-            <input type="checkbox" checked readOnly />
-            <span><strong>What’s New</strong><small>{source.whatsNew.length} / 4,000</small><em>{source.whatsNew || "Write the source release notes first."}</em></span>
-          </label>
+          <header><div><h3 id="translation-fields-title">Fields</h3><p>Choose exactly what to fill in the selected locales.</p></div></header>
+          {translationFieldOptions.map(({ field, label, detail, limit }) => (
+            <label className={selectedFields.has(field) ? "translation-field selected" : "translation-field"} key={field}>
+              <input type="checkbox" checked={selectedFields.has(field)} onChange={() => toggleField(field)} />
+              <span><strong>{label}</strong><small>{source[field].length} / {limit.toLocaleString()}</small><em>{source[field] || detail}</em><b>{detail}</b></span>
+            </label>
+          ))}
         </section>
 
         <div className="keyword-boundary">
           <ShieldCheck size={19} />
-          <p><strong>Storefront copy stays in Store Listing</strong><span>This action never reads or changes descriptions, promotional text, keywords, URLs, or screenshots.</span></p>
+          <p><strong>Only selected fields change</strong><span>Keywords are adapted for local search. URLs are copied unchanged and never sent to OpenAI.</span></p>
         </div>
 
         <section className="translation-targets" aria-labelledby="translation-targets-title">
@@ -454,7 +499,7 @@ export const TranslationDialog = ({
           </div>
         </section>
       </div>
-      {selectedSourceIsEmpty ? <div className="dialog-error" role="alert">Write the selected source field before translating it.</div> : null}
+      {selectedSourceIsEmpty ? <div className="dialog-error" role="alert">Fill every selected source field before applying it to other locales.</div> : null}
       {error ? <div className="dialog-error" role="alert">{error}</div> : null}
       <footer className="dialog-footer">
         <button className="button secondary" type="button" onClick={onClose} disabled={busy}>Cancel</button>
@@ -462,9 +507,9 @@ export const TranslationDialog = ({
           className="button primary"
           type="button"
           onClick={() => void generate()}
-          disabled={busy || !providerReady || fields.length === 0 || targetLocales.length === 0 || selectedSourceIsEmpty}
+          disabled={busy || (needsProvider && !providerReady) || selectedFields.size === 0 || targetLocales.length === 0 || selectedSourceIsEmpty}
         >
-          <Languages size={16} />{busy ? "Translating…" : `Translate ${targetLocales.length} locale${targetLocales.length === 1 ? "" : "s"}`}
+          <Languages size={16} />{busy ? "Applying…" : `Translate & adapt ${targetLocales.length} locale${targetLocales.length === 1 ? "" : "s"}`}
         </button>
       </footer>
     </DialogFrame>

@@ -1,4 +1,5 @@
 import type {
+  AppStoreLocale,
   AppStorePlatform,
   AppStoreVersion,
   ScreenshotAsset,
@@ -18,6 +19,7 @@ interface ScreenshotManagerProps {
   appId: string;
   version: AppStoreVersion;
   localizations: VersionLocalization[];
+  preferredLocale?: AppStoreLocale | null;
   visible: boolean;
   locked?: boolean;
   onChanged: () => Promise<void>;
@@ -54,6 +56,7 @@ export const ScreenshotManager = ({
   appId,
   version,
   localizations,
+  preferredLocale = null,
   visible,
   locked = false,
   onChanged,
@@ -61,7 +64,10 @@ export const ScreenshotManager = ({
 }: ScreenshotManagerProps) => {
   const options = deviceOptions[version.platform];
   const initialDevice = options[0]!;
-  const preferredLocalization = localizations.find((localization) => localization.locale === "en-US") ?? localizations[0] ?? null;
+  const preferredLocalization = localizations.find((localization) => localization.locale === preferredLocale)
+    ?? localizations.find((localization) => localization.locale === "en-US")
+    ?? localizations[0]
+    ?? null;
   const [selectedLocalizationId, setSelectedLocalizationId] = useState<string | null>(null);
   const [displayType, setDisplayType] = useState<ScreenshotDisplayType>(initialDevice.value);
   const [assets, setAssets] = useState<ScreenshotAsset[]>([]);
@@ -142,6 +148,15 @@ export const ScreenshotManager = ({
   useEffect(() => {
     onPendingChange(hasPendingChanges || uploading || busy, applying);
   }, [applying, busy, hasPendingChanges, onPendingChange, uploading]);
+
+  useEffect(() => {
+    if (!preferredLocale || hasPendingChanges || uploading || busy || applying) return;
+    const preferred = localizations.find((localization) => localization.locale === preferredLocale);
+    if (preferred && preferred.id !== selectedLocalizationId) {
+      setPreviewAssetId(null);
+      setSelectedLocalizationId(preferred.id);
+    }
+  }, [applying, busy, hasPendingChanges, localizations, preferredLocale, selectedLocalizationId, uploading]);
 
   useEffect(() => {
     mountedRef.current = true;

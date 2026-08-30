@@ -1,5 +1,5 @@
 import type {
-  AnalyticsAppOverviewQuery,
+  AnalyticsPortfolioOverviewQueryV2,
   AnalyticsMetricCoverage,
   AnalyticsMetricId,
   AppleAdsCampaign,
@@ -18,12 +18,12 @@ export const overviewAnalyticsMetricIds = [
 
 const overviewAnalyticsCorrectionDays = 3;
 
-export const overviewAnalyticsQuery = (appId: string, now = new Date()): AnalyticsAppOverviewQuery => {
+export const overviewAnalyticsQuery = (now = new Date()): AnalyticsPortfolioOverviewQueryV2 => {
   const endDate = shiftIsoDate(todayIsoDate(now), -overviewAnalyticsCorrectionDays);
   return {
-    schemaVersion: 1,
-    scope: "APP",
-    appIds: [appId],
+    schemaVersion: 2,
+    scope: "PORTFOLIO",
+    selection: { kind: "ALL_CONNECTED" },
     ...analyticsDateRange("30d", endDate),
     compare: "PREVIOUS_PERIOD",
     granularity: "DAY",

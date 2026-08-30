@@ -1,6 +1,7 @@
 import {
   ANALYTICS_METRIC_COMPLETENESS_DAYS,
   AnalyticsOverviewResponseSchema,
+  AnalyticsOverviewResponseV2Schema,
   type AnalyticsAdditiveMetricId,
   type AnalyticsAppContribution,
   type AnalyticsAvailability,
@@ -18,7 +19,12 @@ import {
   type AnalyticsObservation,
   type AnalyticsObservationQuery,
   type AnalyticsOverviewQuery,
+  type AnalyticsOverviewQueryV2,
   type AnalyticsOverviewResponse,
+  type AnalyticsOverviewResponseV2,
+  type AnalyticsPortfolioApp,
+  type AnalyticsPortfolioSourceCoverage,
+  type AnalyticsPortfolioSourceState,
   type AnalyticsPrivacy,
   type AnalyticsProvenance,
   type AnalyticsReportRequest,
@@ -69,6 +75,23 @@ export interface AnalyticsServiceDependencies {
 export interface AnalyticsOverviewContext {
   issuerId: string | null;
   apps: AppSummary[];
+}
+
+export interface AnalyticsPortfolioOverviewApp extends AnalyticsPortfolioApp {
+  rawAppId: string;
+}
+
+export interface AnalyticsPortfolioOverviewSource {
+  id: string;
+  issuerId: string;
+  state: AnalyticsPortfolioSourceState;
+  detail: string;
+  apps: AnalyticsPortfolioOverviewApp[];
+}
+
+export interface AnalyticsPortfolioOverviewContext {
+  catalogRevision: string;
+  sources: AnalyticsPortfolioOverviewSource[];
 }
 
 type MetricDefinition = {
@@ -719,7 +742,303 @@ export class AnalyticsService {
         facetStartDate: query.startDate,
       })
       : null;
-    const appNames = new Map(context.apps.map((app) => [app.id, app.name]));
+    return this.buildOverview(query, context.apps, stored);
+  }
+
+  async portfolioOverview(
+    query: AnalyticsOverviewQueryV2,
+    context: AnalyticsPortfolioOverviewContext,
+  ): Promise<AnalyticsOverviewResponseV2> {
+    const sourceIds = new Set<string>();
+    const issuerIds = new Set<string>();
+    const appIds = new Set<string>();
+    for (const source of context.sources) {
+      if (sourceIds.has(source.id) || issuerIds.has(source.issuerId)) {
+        throw new TypeError("Analytics portfolio sources must be unique by source and issuer.");
+      }
+      sourceIds.add(source.id);
+      issuerIds.add(source.issuerId);
+      for (const app of source.apps) {
+        if (app.sourceId !== source.id || appIds.has(app.id)) {
+          throw new TypeError("Analytics portfolio apps must have one unique source-scoped identity.");
+        }
+        appIds.add(app.id);
+      }
+    }
+
+    const requestedAppId = query.scope === "APP" ? query.selection.appId : null;
+    const selectedSources = context.sources.flatMap((source) => {
+      const apps = requestedAppId === null
+        ? source.apps
+        : source.apps.filter((app) => app.id === requestedAppId);
+      return requestedAppId === null || apps.length > 0 ? [{ source, apps }] : [];
+    });
+    const selectedApps = selectedSources.flatMap(({ apps }) => apps);
+    if (selectedApps.length === 0) throw new TypeError("The selected Analytics portfolio app is unavailable.");
+
+    const filters = query.filters ?? { territories: [], sources: [], productPages: [], versions: [] };
+    const comparisonPeriod = query.compare === "PREVIOUS_PERIOD"
+      ? previousAnalyticsPeriod(query.startDate, query.endDate)
+      : null;
+    const readStart = comparisonPeriod?.startDate ?? query.startDate;
+    const reads = await Promise.all(selectedSources.map(async ({ source, apps }) => {
+      const stored = apps.length > 0
+        ? await this.dependencies.store.readAnalyticsSnapshot({
+          issuerId: source.issuerId,
+          appIds: apps.map((app) => app.rawAppId),
+          startDate: readStart,
+          endDate: query.endDate,
+          filters,
+          facetStartDate: query.startDate,
+        })
+        : null;
+      const publicIdByRaw = new Map(apps.map((app) => [app.rawAppId, app.id]));
+      const mapped = stored ? {
+        ...stored,
+        observations: stored.observations.map((observation) => {
+          const appId = publicIdByRaw.get(observation.appId);
+          if (!appId) throw new TypeError("An issuer-scoped Analytics read returned an app outside its portfolio source.");
+          return { ...observation, appId };
+        }),
+      } : null;
+      return { source, apps, stored: mapped };
+    }));
+
+    const sourceCoverage: AnalyticsPortfolioSourceCoverage[] = reads.map(({ source, apps, stored }) => {
+      const hasNoApps = source.state === "READY" && apps.length === 0;
+      const state = source.state === "ERROR"
+        ? "ERROR" as const
+        : hasNoApps
+          ? "READY" as const
+        : stored === null
+          ? "NO_DATA" as const
+          : source.state === "PARTIAL" || stored.freshness.partial
+            ? "PARTIAL" as const
+            : "READY" as const;
+      const freshness = hasNoApps ? {
+        syncedAt: null,
+        dataThrough: null,
+        expectedDelayDays: null,
+        partial: false,
+        detail: "This connected source has no apps, so no analytics facts are expected.",
+      } : stored?.freshness ?? emptyFreshness();
+      return {
+        sourceId: source.id,
+        state,
+        selectedAppCount: apps.length,
+        freshness: hasNoApps ? freshness : { ...freshness, partial: state !== "READY" || freshness.partial },
+        detail: hasNoApps
+          ? "This connected App Store Connect source currently has no apps and is fully covered."
+          : state === "READY"
+          ? freshness.detail
+          : `${source.detail} ${freshness.detail}`.trim(),
+      };
+    });
+
+    const observations = reads.flatMap(({ stored }) => stored?.observations ?? []);
+    // A successfully discovered organization with zero apps has nothing to
+    // contribute and must not make otherwise complete portfolio facts partial.
+    // Failed discovery remains in the denominator because zero apps is not
+    // known to be true for that source.
+    const coverageReads = reads.filter(({ source, apps }) => apps.length > 0 || source.state !== "READY");
+    const populated = coverageReads.flatMap(({ stored }) => stored ? [stored] : []);
+    const allSourcesDiscoverableAndStored = coverageReads.length > 0 && coverageReads.every(({ source, stored }) => (
+      source.state === "READY" && stored !== null
+    ));
+    const allSourcesComplete = coverageReads.length > 0 && coverageReads.every(({ source, stored }) => (
+      source.state === "READY" && stored !== null && !stored.freshness.partial
+    ));
+    const allSourcesPresent = coverageReads.length > 0 && coverageReads.every(({ stored }) => stored !== null);
+    const presentSyncedAt = populated.flatMap((stored) => stored.freshness.syncedAt ? [stored.freshness.syncedAt] : []).sort();
+    const presentDataThrough = populated.flatMap((stored) => stored.freshness.dataThrough ? [stored.freshness.dataThrough] : []).sort();
+    const expectedDelayDays = populated.flatMap((stored) => (
+      stored.freshness.expectedDelayDays === null ? [] : [stored.freshness.expectedDelayDays]
+    ));
+    const sourceEvidence = reads.map(({ source, stored }) => ({
+      sourceId: source.id,
+      snapshotId: stored?.provenance.snapshotId ?? null,
+      evidenceId: stored?.provenance.evidenceId ?? null,
+    })).sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+    const selectedRoster = selectedSources.map(({ source, apps }) => ({
+      sourceId: source.id,
+      sourceState: source.state,
+      apps: apps.map((app) => ({ id: app.id, rawAppId: app.rawAppId })).sort((left, right) => left.id.localeCompare(right.id)),
+    })).sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+    const coverageIdentity = sourceCoverage.map((coverage) => ({
+      sourceId: coverage.sourceId,
+      state: coverage.state,
+      selectedAppCount: coverage.selectedAppCount,
+    })).sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+    const mergedDigest = this.dependencies.digest(JSON.stringify({
+      catalogRevision: context.catalogRevision,
+      query,
+      selectedRoster,
+      coverageIdentity,
+      sourceEvidence,
+    }));
+    const snapshotId = `portfolio:${mergedDigest}`;
+    const evidenceId = `portfolio-evidence:${mergedDigest}`;
+    const reportNames = [...new Set(populated.flatMap((stored) => stored.provenance.reportNames))].sort();
+    const reportRequestIds = [...new Set(reads.flatMap(({ source, stored }) => (
+      stored?.provenance.reportRequestIds.map((id) => (
+        `report-request_${this.dependencies.digest(JSON.stringify({ sourceId: source.id, requestId: id })).slice(0, 48)}`
+      )) ?? []
+    )))].sort();
+
+    const metricCoverage: AnalyticsMetricCoverage[] = METRICS.map((metric) => {
+      const entries = coverageReads.map(({ stored }) => stored?.metricCoverage?.find((item) => item.metric === metric) ?? null);
+      const everySourceCovered = entries.length > 0 && entries.every((entry) => entry !== null);
+      const dates = entries.flatMap((entry) => entry?.completeThrough ? [entry.completeThrough] : []).sort();
+      // Snapshot freshness is the oldest watermark across every report family.
+      // It may be partial because a slower metric (for example Sessions or
+      // Proceeds) is still arriving. A metric that is independently covered by
+      // every source must retain its own truthful complete-through date.
+      const completeThrough = allSourcesDiscoverableAndStored && everySourceCovered && dates.length === entries.length
+        ? dates[0] ?? null
+        : null;
+      const availableEntries = entries.flatMap((entry) => entry ? [entry] : []);
+      const availability: AnalyticsAvailability = availableEntries.length === 0
+        ? "UNAVAILABLE"
+        : allSourcesDiscoverableAndStored
+          && everySourceCovered
+          && availableEntries.every((entry) => entry.availability === "PRIVACY_WITHHELD")
+          ? "PRIVACY_WITHHELD"
+          : allSourcesDiscoverableAndStored
+            && everySourceCovered
+            && availableEntries.every((entry) => entry.availability === "AVAILABLE")
+            && completeThrough !== null
+            && completeThrough >= query.endDate
+            ? "AVAILABLE"
+            : "PARTIAL";
+      const familyNames = [...new Set(availableEntries.flatMap((entry) => entry.reportFamilies.map((family) => family.reportName)))].sort();
+      const reportFamilies = familyNames.map((reportName) => {
+        const families = entries.map((entry) => entry?.reportFamilies.find((family) => family.reportName === reportName) ?? null);
+        const everyFamilyCovered = families.length > 0 && families.every((family) => family !== null);
+        const familyDates = families.flatMap((family) => family?.completeThrough ? [family.completeThrough] : []).sort();
+        const familyCompleteThrough = allSourcesDiscoverableAndStored
+          && everyFamilyCovered
+          && familyDates.length === families.length
+          ? familyDates[0] ?? null
+          : null;
+        const familyAvailability: AnalyticsAvailability = everyFamilyCovered
+          && families.every((family) => family?.availability === "AVAILABLE")
+          && familyCompleteThrough !== null
+          && familyCompleteThrough >= query.endDate
+          && allSourcesDiscoverableAndStored
+          ? "AVAILABLE"
+          : allSourcesDiscoverableAndStored
+            && everyFamilyCovered
+            && families.every((family) => family?.availability === "PRIVACY_WITHHELD")
+            ? "PRIVACY_WITHHELD"
+            : families.some((family) => family !== null)
+              ? "PARTIAL"
+              : "UNAVAILABLE";
+        return {
+          reportName,
+          expectedDelayDays: Math.max(...families.flatMap((family) => family ? [family.expectedDelayDays] : [0])),
+          completeThrough: familyCompleteThrough,
+          availability: familyAvailability,
+          detail: familyCompleteThrough
+            ? `${reportName} is ${familyAvailability === "AVAILABLE" ? "complete" : "partially available"} across connected sources through ${familyCompleteThrough}.`
+            : `${reportName} is not complete for every connected source.`,
+        };
+      });
+      return {
+        metric,
+        source: "APP_STORE_CONNECT_ANALYTICS_REPORTS",
+        formula: ANALYTICS_METRIC_DEFINITIONS[metric].formula,
+        expectedDelayDays: Math.max(expectedDelayDaysFor(metric), ...availableEntries.map((entry) => entry.expectedDelayDays)),
+        completeThrough,
+        availability,
+        detail: completeThrough
+          ? `${ANALYTICS_METRIC_DEFINITIONS[metric].label} is ${availability === "AVAILABLE" ? "complete" : "partially available"} across connected sources through ${completeThrough}.`
+          : `${ANALYTICS_METRIC_DEFINITIONS[metric].label} is not complete for every connected source; missing data is not zero.`,
+        reportFamilies,
+      };
+    });
+
+    const merged: AnalyticsStoredSnapshot = {
+      observations,
+      freshness: {
+        syncedAt: allSourcesPresent && presentSyncedAt.length === coverageReads.length ? presentSyncedAt[0] ?? null : null,
+        dataThrough: allSourcesPresent && presentDataThrough.length === coverageReads.length ? presentDataThrough[0] ?? null : null,
+        expectedDelayDays: expectedDelayDays.length > 0 ? Math.max(...expectedDelayDays) : null,
+        partial: !allSourcesComplete,
+        detail: allSourcesComplete
+          ? `Every connected Analytics source has cached coverage through ${presentDataThrough[0] ?? "the stated period"}.`
+          : "Portfolio coverage is partial because one or more connected Analytics sources is unavailable, incomplete, or has no cached data. Missing data is not zero.",
+      },
+      privacy: {
+        aggregatedOnly: true,
+        includesOptInUsageData: populated.some((stored) => stored.privacy.includesOptInUsageData),
+        mayIncludePrivacyAdjustments: !allSourcesComplete || populated.some((stored) => stored.privacy.mayIncludePrivacyAdjustments),
+        detail: "Usage metrics depend on customer analytics sharing and Apple privacy processing across every connected source; privacy-limited and missing values are not zero.",
+      },
+      provenance: {
+        source: "APP_STORE_CONNECT_ANALYTICS_REPORTS",
+        reportNames,
+        reportRequestIds,
+        snapshotId,
+        evidenceId,
+      },
+      metricCoverage,
+      facets: {
+        territories: [...new Set(populated.flatMap((stored) => stored.facets?.territories ?? []))].sort().slice(0, 500),
+        sources: [...new Set(populated.flatMap((stored) => stored.facets?.sources ?? []))].sort().slice(0, 500),
+        productPages: [...new Set(populated.flatMap((stored) => stored.facets?.productPages ?? []))].sort().slice(0, 500),
+        versions: [...new Set(populated.flatMap((stored) => stored.facets?.versions ?? []))].sort().slice(0, 500),
+      },
+    };
+    const internalQuery: AnalyticsOverviewQuery = {
+      schemaVersion: 1,
+      scope: query.scope,
+      appIds: selectedApps.map((app) => app.id),
+      startDate: query.startDate,
+      endDate: query.endDate,
+      compare: query.compare,
+      granularity: query.granularity,
+      breakdowns: query.breakdowns,
+      filters,
+    };
+    const legacy = this.buildOverview(
+      internalQuery,
+      selectedApps.map((app) => ({ id: app.id, name: app.name, bundleId: app.bundleId, platforms: app.platforms })),
+      merged,
+    );
+    const { schemaVersion: _schemaVersion, ...legacyFields } = legacy;
+    const publicApps = selectedApps.map(({ rawAppId: _rawAppId, ...app }) => app);
+    const response: AnalyticsOverviewResponseV2 = legacy.scope === "APP"
+      ? {
+        ...legacyFields,
+        schemaVersion: 2,
+        catalogRevision: context.catalogRevision,
+        scope: "APP",
+        appId: legacy.appId,
+        apps: publicApps,
+        sourceCoverage,
+      }
+      : {
+        ...legacyFields,
+        schemaVersion: 2,
+        catalogRevision: context.catalogRevision,
+        scope: "PORTFOLIO",
+        appIds: legacy.appIds,
+        apps: publicApps,
+        sourceCoverage,
+      };
+    return AnalyticsOverviewResponseV2Schema.parse(response);
+  }
+
+  private buildOverview(
+    query: AnalyticsOverviewQuery,
+    apps: AppSummary[],
+    stored: AnalyticsStoredSnapshot | null,
+  ): AnalyticsOverviewResponse {
+    const filters = query.filters ?? { territories: [], sources: [], productPages: [], versions: [] };
+    const comparisonPeriod = query.compare === "PREVIOUS_PERIOD"
+      ? previousAnalyticsPeriod(query.startDate, query.endDate)
+      : null;
+    const appNames = new Map(apps.map((app) => [app.id, app.name]));
     const observations = stored?.observations ?? [];
     const current = observations.filter((observation) => inRange(observation, query.startDate, query.endDate));
     const previous = comparisonPeriod

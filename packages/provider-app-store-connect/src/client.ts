@@ -200,12 +200,30 @@ export class AppStoreConnectClient {
         headers.set("content-type", "application/json");
         body = JSON.stringify(options.body);
       }
-      const response = await this.fetchImplementation(url, {
-        method,
-        headers,
-        ...(body === undefined ? {} : { body }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
+      let response: Response;
+      try {
+        response = await this.fetchImplementation(url, {
+          method,
+          headers,
+          ...(body === undefined ? {} : { body }),
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+      } catch (error) {
+        if (mayRetry && attempt < 2) {
+          await wait([250, 750][attempt] ?? 750);
+          continue;
+        }
+        const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+        throw new AppStoreConnectApiError(
+          timedOut
+            ? "The App Store Connect request timed out."
+            : "The App Store Connect request could not be reached.",
+          0,
+          timedOut ? "REQUEST_TIMEOUT" : "NETWORK_ERROR",
+          null,
+          [],
+        );
+      }
       if (expectedStatuses.includes(response.status)) return response;
       if (mayRetry && attempt < 2 && (response.status === 429 || response.status >= 500)) {
         await response.body?.cancel().catch(() => undefined);

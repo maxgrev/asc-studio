@@ -11,12 +11,12 @@ related_targets: ["apps/web/src/App.tsx","apps/web/src/components/Sidebar.tsx","
 
 - Scope: the `OverviewWorkspace` surface and its Sidebar/App integration.
 - Mode: Operate.
-- Audience and job: an app operator opening ASC Studio to understand the selected app’s recent performance, release, TestFlight, Apple Ads, and workspace state, then enter the right existing workspace.
+- Audience and job: an app operator opening ASC Studio to understand whole-portfolio performance alongside the selected app’s release, TestFlight, Apple Ads, and workspace state, then enter the right existing workspace.
 - Primary action: choose the lane that needs work; Refresh performs pure reads only.
 
 ## Content and constraints
 
-- Use the selected app’s cached 30-day Analytics comparison, live App Store Connect builds and all-platform versions, Apple Ads campaign status, unexpired pending plans, and local audit activity.
+- Use the all-connected-accounts cached 30-day Analytics comparison, live selected-app App Store Connect builds and all-platform versions, selected-app Apple Ads campaign status, unexpired pending plans, and local audit activity.
 - The Analytics pulse is a local-cache read only. It never checks remote report status, starts a sync, or creates a report request from Overview.
 - Activity and pending plans are workspace-wide and must be labeled that way.
 - Treat lanes independently so one failed service does not hide successful data.
@@ -38,7 +38,7 @@ related_targets: ["apps/web/src/App.tsx","apps/web/src/components/Sidebar.tsx","
 | --- | --- | --- |
 | Existing shell and sidebar | 276px desktop rail; current app/account controls; Overview active | Existing React, CSS, Lucide |
 | Header and demo banner | Existing 121px topbar; title/subtitle; secondary Refresh; incumbent demo notice | Semantic React and existing tokens |
-| Analytics performance pulse | Full-width first row; selected app; 30 days versus prior 30 days; total and first-time downloads, download rate, estimated proceeds; metric-specific availability and common coverage date; exact Analytics deep link | Cache-only Analytics overview API, semantic definition list, CSS Grid |
+| Analytics performance pulse | Full-width first row; every connected account and app; 30 days versus prior 30 days; total and first-time downloads, download rate, estimated proceeds; explicit account/app count, named partial-account coverage, metric-specific availability and common coverage date; exact `All accounts` Analytics deep link | Cache-only Analytics portfolio API, semantic definition list, CSS Grid |
 | Operations matrix | Asymmetric two-column grid; wide Release/Ads lanes and narrow TestFlight/Activity lanes; stacks responsively | CSS Grid |
 | Release lane | Dominant panel; editable releases and localization readiness when available; clear Releases action | Semantic rows and API data |
 | TestFlight lane | Latest builds, processing/testing state, upload timing, group counts | Semantic rows and API data |

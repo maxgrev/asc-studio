@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { AnalyticsSyncResponse } from "@asc-studio/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { demoAnalyticsFactBatches } from "@asc-studio/provider-demo";
 import {
@@ -103,7 +104,91 @@ const observation = (overrides: Partial<AnalyticsObservationInput> = {}): Analyt
   ...overrides,
 });
 
+const syncRun = (overrides: Partial<AnalyticsSyncResponse> = {}): AnalyticsSyncResponse => ({
+  schemaVersion: 1,
+  issuerId: "issuer-a",
+  runId: "legacy-active-run",
+  state: "SUCCEEDED",
+  appIds: ["app-orbit"],
+  reportRequests: [{
+    id: "active-request",
+    appId: "app-orbit",
+    accessType: "ONGOING",
+    createdAt: "2026-08-29T10:00:00.000Z",
+    stoppedDueToInactivity: false,
+  }],
+  startedAt: "2026-08-29T10:00:00.000Z",
+  completedAt: "2026-08-29T10:01:00.000Z",
+  snapshotId: "active-snapshot",
+  evidenceId: "active-evidence",
+  freshness: {
+    syncedAt: "2026-08-29T10:01:00.000Z",
+    dataThrough: "2026-08-27",
+    expectedDelayDays: 5,
+    partial: false,
+    detail: "The active app sync is complete.",
+  },
+  error: null,
+  batchCount: 1,
+  observationCount: 10,
+  ...overrides,
+});
+
 describe("SqliteAnalyticsStore", () => {
+  it("atomically marks portfolio children and excludes them from legacy run and status fallbacks", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "asc-analytics-child-marker-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "analytics.sqlite");
+    const store = new SqliteAnalyticsStore(path);
+    const legacyRun = syncRun();
+    const childRun = syncRun({
+      runId: "inactive-portfolio-child",
+      appIds: ["app-field-log"],
+      reportRequests: [{
+        id: "inactive-request",
+        appId: "app-field-log",
+        accessType: "ONGOING",
+        createdAt: "2026-08-30T10:00:00.000Z",
+        stoppedDueToInactivity: false,
+      }],
+      startedAt: "2026-08-30T10:00:00.000Z",
+      completedAt: "2026-08-30T10:01:00.000Z",
+      snapshotId: "inactive-snapshot",
+      evidenceId: "inactive-evidence",
+      freshness: {
+        syncedAt: "2026-08-30T10:01:00.000Z",
+        dataThrough: "2026-08-29",
+        expectedDelayDays: 5,
+        partial: false,
+        detail: "The inactive portfolio child is complete.",
+      },
+    });
+
+    await store.saveAnalyticsSyncRun(legacyRun);
+    await store.savePortfolioChildAnalyticsSyncRun(childRun, "portfolio-parent-run");
+    await expect(store.getAnalyticsSyncRun(childRun.runId)).resolves.toBeNull();
+    await expect(store.getPortfolioChildAnalyticsSyncRun(childRun.runId)).resolves.toEqual(childRun);
+    await expect(store.getLatestSuccessfulAnalyticsSyncRun("issuer-a")).resolves.toEqual(legacyRun);
+
+    const triggerWriter = new DatabaseSync(path);
+    triggerWriter.exec(`
+      CREATE TRIGGER reject_portfolio_child_marker
+      BEFORE INSERT ON analytics_portfolio_sync_children
+      BEGIN
+        SELECT RAISE(ABORT, 'fixture child marker failure');
+      END;
+    `);
+    triggerWriter.close();
+    const rolledBackChild = syncRun({ runId: "rolled-back-portfolio-child" });
+    await expect(store.savePortfolioChildAnalyticsSyncRun(
+      rolledBackChild,
+      "portfolio-parent-run",
+    )).rejects.toThrow("fixture child marker failure");
+    await expect(store.getAnalyticsSyncRun(rolledBackChild.runId)).resolves.toBeNull();
+    await expect(store.getPortfolioChildAnalyticsSyncRun(rolledBackChild.runId)).resolves.toBeNull();
+    store.close();
+  });
+
   it("upgrades the previous report-id-keyed schema without losing cached analytics", async () => {
     const directory = await mkdtemp(join(tmpdir(), "asc-analytics-store-legacy-"));
     temporaryDirectories.push(directory);

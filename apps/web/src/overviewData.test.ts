@@ -143,11 +143,11 @@ describe("overview data helpers", () => {
     expect(pendingPlanCountLabel(plans, active.length)).toBe("0+");
   });
 
-  it("builds a cache-only 30-day selected-app analytics query after the displayed metrics' correction window", () => {
-    expect(overviewAnalyticsQuery("app", new Date(2026, 7, 24, 12))).toEqual({
-      schemaVersion: 1,
-      scope: "APP",
-      appIds: ["app"],
+  it("builds a cache-only 30-day all-account analytics query after the displayed metrics' correction window", () => {
+    expect(overviewAnalyticsQuery(new Date(2026, 7, 24, 12))).toEqual({
+      schemaVersion: 2,
+      scope: "PORTFOLIO",
+      selection: { kind: "ALL_CONNECTED" },
       startDate: "2026-07-23",
       endDate: "2026-08-21",
       compare: "PREVIOUS_PERIOD",

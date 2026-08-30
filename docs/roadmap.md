@@ -15,12 +15,12 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 ## 0.2 — Release workspace — complete
 
 - Select an app without restarting the local agent
-- Create a new editable App Store version
-- Carry stable metadata forward while leaving What's New empty
+- Create a new editable App Store version, copying description, promotional text, keywords, support URL, and marketing URL from the selected previous version while leaving What's New empty
+- Keep platform, version, build, and source-version context together
 - Pull version localizations
-- Edit localized What's New without duplicating storefront fields
+- Edit all six version-localized fields in one Localized content workbench
 - Select a compatible build and show version and submission status
-- Show locale-aware release-note diffs and field limits
+- Show locale-aware exact field diffs and limits
 - Reject expired plans, profile changes, and stale Apple data
 - Run structured submission-readiness checks
 - Add read-only version and localization MCP tools
@@ -45,14 +45,16 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Validate a candidate with one constant-input, `store: false` Responses request before saving; use a durable, vault-wide write-ahead recovery marker for every Keychain mutation; fail closed across vault-ID copies after a crash or unverifiable rollback; and retain a scoped reset tombstone so stale copied legacy data cannot resurrect deleted credentials before an explicit verified reconnect
 - Give `OPENAI_API_KEY` and `ASC_STUDIO_OPENAI_MODEL` precedence for unattended runs, with restart required only for environment changes
 - Share one dynamic connection across Releases, Reviews, and Apple accounts; keep demo mode storage-free and offline from OpenAI
-- Translate What’s New from one source locale into selected locale drafts
-- Keep every Store Listing field out of translation requests and preserve its current value
-- Validate model output against strict field, locale, and App Store length limits
+- Let users choose source content fields and target locales in Translate & adapt
+- Translate selected description, What’s New, and promotional text; adapt selected keywords for locale and search under comma-list and 100-character rules
+- Copy selected support and marketing URLs locally unchanged and never send them to OpenAI
+- Send and apply only selected fields, with one atomic update per target locale
+- Validate model output against strict field, locale, and App Store limits
 - Keep demo translation local and deterministic
 
-## 0.5 — Store Listing screenshot workflow — complete
+## 0.5 — Releases screenshot workflow — complete
 
-- Keep screenshots inside Store Listing’s canonical, top-level workspace rather than as a separate navigation slice
+- Keep screenshots inside Releases as a peer mode to Localized content rather than as a separate navigation slice
 - Read screenshot sets for one version localization and device type at a time
 - Support iOS, macOS, tvOS, and visionOS screenshot device sets
 - Check file type, dimensions, transparency, size, order, and the ten-file limit before planning
@@ -60,15 +62,15 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Show exact uploads and removals, then re-read Apple state before confirmation
 - Expose screenshot sets through the read-only MCP server
 
-## Store Listing canonical editor — complete
+## Releases unified localized-content workbench — complete
 
-- Provide a separate top-level editor for version-localized description, promotional text, keywords, marketing and support URLs, and screenshots
-- Keep Releases responsible for versions, builds, What’s New, readiness, submission, and status
-- Persist copy drafts for the browser session and retain exact changed-field intent per locale so one workspace cannot overwrite a newer field owned by the other
-- Keep staged screenshot work alive across Copy & search/Screenshots switches, require explicit discard before leaving, and hard-block departure while confirmation applies
-- Surface pending Store Listing work in Releases and block submission until it is reviewed or reverted
-- Deep-link readiness remediation and Apple Ads keyword handoff to the exact Store Listing version, locale, and field
-- Keep version state, local draft count, and the review action visible in the responsive first viewport
+- Make Releases the single version-scoped workbench for versions, builds, source context, all six localized fields, screenshots, exact-diff review, readiness, submission, and status
+- Persist localized metadata drafts per app, version, and locale for the browser session with exact changed-field intent, and migrate legacy Store Listing session drafts into Releases
+- Keep staged screenshot work alive across Localized content/Screenshots switches, require explicit discard before leaving, and hard-block departure while an apply is running
+- Block readiness and submission while local content or screenshot work is pending
+- Deep-link readiness remediation and Apple Ads keyword handoff to the exact Releases version, locale, and field; open keyword handoff at **Localized content → Keywords**
+- Keep platform/version/build state, local-work count, and the review action visible in the responsive first viewport
+- On mobile, keep labeled readiness and submit actions in a persistent safe-area dock
 
 ## 0.6 — Direct Apple API provider — complete
 
@@ -117,7 +119,7 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 
 ## Portfolio analytics — complete
 
-- Open on an **All apps** portfolio aggregate and retain date, comparison, and metric context when drilling into one app
+- Open on an **All accounts** portfolio aggregate spanning every saved App Store Connect account, independent of the operational account switcher, and retain date, comparison, and metric context when drilling into one app
 - Show Impressions, First-time downloads, Total downloads, Product page views, Download rate, Sessions, and Estimated proceeds without presenting non-additive unique-user values as portfolio totals
 - Define Download rate as Total downloads ÷ Product page views and recompute it from aggregate numerators and denominators instead of averaging app rates
 - Compare current and previous periods, rank each app's contribution to portfolio movement, and break an app down by territory, source, page type, or version

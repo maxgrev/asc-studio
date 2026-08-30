@@ -108,6 +108,8 @@ export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
 export const AnalyticsSchemaVersionSchema = z.literal(1);
 export type AnalyticsSchemaVersion = z.infer<typeof AnalyticsSchemaVersionSchema>;
+export const AnalyticsSchemaVersionV2Schema = z.literal(2);
+export type AnalyticsSchemaVersionV2 = z.infer<typeof AnalyticsSchemaVersionV2Schema>;
 
 export const AnalyticsIsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date in YYYY-MM-DD format.");
 export const AnalyticsIsoDateTimeSchema = z.string().datetime();
@@ -227,6 +229,52 @@ export const AnalyticsOverviewQuerySchema = z.union([
 ]);
 export type AnalyticsOverviewQuery = z.infer<typeof AnalyticsOverviewQuerySchema>;
 
+export const AnalyticsPortfolioSelectionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("ALL_CONNECTED") }).strict(),
+  z.object({
+    kind: z.literal("APP"),
+    appId: z.string().min(1).max(128),
+  }).strict(),
+]);
+export type AnalyticsPortfolioSelection = z.infer<typeof AnalyticsPortfolioSelectionSchema>;
+
+const AnalyticsOverviewQueryV2BaseSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionV2Schema,
+  startDate: AnalyticsIsoDateSchema,
+  endDate: AnalyticsIsoDateSchema,
+  compare: AnalyticsComparisonModeSchema.default("PREVIOUS_PERIOD"),
+  granularity: AnalyticsGranularitySchema.default("DAY"),
+  breakdowns: z.array(AnalyticsBreakdownDimensionSchema).max(5).default(["APP", "TERRITORY", "SOURCE"]),
+  filters: AnalyticsFiltersSchema.optional(),
+}).strict();
+
+export const AnalyticsPortfolioOverviewQueryV2Schema = AnalyticsOverviewQueryV2BaseSchema.extend({
+  scope: z.literal("PORTFOLIO"),
+  selection: z.object({ kind: z.literal("ALL_CONNECTED") }).strict(),
+}).strict().refine((query) => query.startDate <= query.endDate, {
+  message: "The start date must not be after the end date.",
+  path: ["startDate"],
+});
+export type AnalyticsPortfolioOverviewQueryV2 = z.infer<typeof AnalyticsPortfolioOverviewQueryV2Schema>;
+
+export const AnalyticsAppOverviewQueryV2Schema = AnalyticsOverviewQueryV2BaseSchema.extend({
+  scope: z.literal("APP"),
+  selection: z.object({
+    kind: z.literal("APP"),
+    appId: z.string().min(1).max(128),
+  }).strict(),
+}).strict().refine((query) => query.startDate <= query.endDate, {
+  message: "The start date must not be after the end date.",
+  path: ["startDate"],
+});
+export type AnalyticsAppOverviewQueryV2 = z.infer<typeof AnalyticsAppOverviewQueryV2Schema>;
+
+export const AnalyticsOverviewQueryV2Schema = z.union([
+  AnalyticsPortfolioOverviewQueryV2Schema,
+  AnalyticsAppOverviewQueryV2Schema,
+]);
+export type AnalyticsOverviewQueryV2 = z.infer<typeof AnalyticsOverviewQueryV2Schema>;
+
 export const AnalyticsDateRangeSchema = z.object({
   startDate: AnalyticsIsoDateSchema,
   endDate: AnalyticsIsoDateSchema,
@@ -341,6 +389,103 @@ export const AnalyticsFreshnessSchema = z.object({
 }).strict();
 export type AnalyticsFreshness = z.infer<typeof AnalyticsFreshnessSchema>;
 
+export const AnalyticsPortfolioAccountStateSchema = z.enum(["READY", "ERROR"]);
+export type AnalyticsPortfolioAccountState = z.infer<typeof AnalyticsPortfolioAccountStateSchema>;
+
+export const AnalyticsPortfolioAccountSchema = z.object({
+  id: z.string().min(1).max(128),
+  profileName: z.string().min(1).max(80),
+  active: z.boolean(),
+  state: AnalyticsPortfolioAccountStateSchema,
+  appCount: z.number().int().nonnegative(),
+  detail: z.string().min(1),
+}).strict();
+export type AnalyticsPortfolioAccount = z.infer<typeof AnalyticsPortfolioAccountSchema>;
+
+export const AnalyticsPortfolioSourceStateSchema = z.enum(["READY", "PARTIAL", "ERROR"]);
+export type AnalyticsPortfolioSourceState = z.infer<typeof AnalyticsPortfolioSourceStateSchema>;
+
+export const AnalyticsPortfolioSourceSchema = z.object({
+  id: z.string().min(1).max(128),
+  accounts: z.array(AnalyticsPortfolioAccountSchema).min(1).max(50),
+  state: AnalyticsPortfolioSourceStateSchema,
+  appCount: z.number().int().nonnegative(),
+  lastDiscoveredAt: AnalyticsIsoDateTimeSchema,
+  detail: z.string().min(1),
+}).strict();
+export type AnalyticsPortfolioSource = z.infer<typeof AnalyticsPortfolioSourceSchema>;
+
+export const AnalyticsPortfolioAppSchema = z.object({
+  id: z.string().min(1).max(128),
+  sourceId: z.string().min(1).max(128),
+  name: z.string().min(1),
+  bundleId: z.string().min(1),
+  platforms: z.array(z.string()),
+}).strict();
+export type AnalyticsPortfolioApp = z.infer<typeof AnalyticsPortfolioAppSchema>;
+
+export const AnalyticsPortfolioCatalogRevisionSchema = z.string().min(1).max(128);
+export type AnalyticsPortfolioCatalogRevision = z.infer<typeof AnalyticsPortfolioCatalogRevisionSchema>;
+
+export const AnalyticsPortfolioCatalogResponseSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionV2Schema,
+  catalogRevision: AnalyticsPortfolioCatalogRevisionSchema,
+  complete: z.boolean(),
+  generatedAt: AnalyticsIsoDateTimeSchema,
+  sources: z.array(AnalyticsPortfolioSourceSchema).max(50),
+  apps: z.array(AnalyticsPortfolioAppSchema).max(10_000),
+}).strict().superRefine((catalog, context) => {
+  const sourceIds = new Set<string>();
+  const accountIds = new Set<string>();
+  catalog.sources.forEach((source, sourceIndex) => {
+    if (sourceIds.has(source.id)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Portfolio source IDs must be unique.", path: ["sources", sourceIndex, "id"] });
+    }
+    sourceIds.add(source.id);
+    source.accounts.forEach((account, accountIndex) => {
+      if (accountIds.has(account.id)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: "Portfolio account IDs must be unique.", path: ["sources", sourceIndex, "accounts", accountIndex, "id"] });
+      }
+      accountIds.add(account.id);
+    });
+  });
+  const appIds = new Set<string>();
+  catalog.apps.forEach((app, index) => {
+    if (!sourceIds.has(app.sourceId)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Every portfolio app must belong to a declared source.", path: ["apps", index, "sourceId"] });
+    }
+    if (appIds.has(app.id)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Portfolio app IDs must be unique.", path: ["apps", index, "id"] });
+    }
+    appIds.add(app.id);
+  });
+  catalog.sources.forEach((source, index) => {
+    const actual = catalog.apps.filter((app) => app.sourceId === source.id).length;
+    if (actual !== source.appCount) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Portfolio source app counts must match the catalog.", path: ["sources", index, "appCount"] });
+    }
+  });
+});
+export type AnalyticsPortfolioCatalogResponse = z.infer<typeof AnalyticsPortfolioCatalogResponseSchema>;
+
+export const AnalyticsPortfolioCoverageStateSchema = z.enum([
+  "READY",
+  "NO_DATA",
+  "SYNCING",
+  "PARTIAL",
+  "ERROR",
+]);
+export type AnalyticsPortfolioCoverageState = z.infer<typeof AnalyticsPortfolioCoverageStateSchema>;
+
+export const AnalyticsPortfolioSourceCoverageSchema = z.object({
+  sourceId: z.string().min(1).max(128),
+  state: AnalyticsPortfolioCoverageStateSchema,
+  selectedAppCount: z.number().int().nonnegative(),
+  freshness: AnalyticsFreshnessSchema,
+  detail: z.string().min(1),
+}).strict();
+export type AnalyticsPortfolioSourceCoverage = z.infer<typeof AnalyticsPortfolioSourceCoverageSchema>;
+
 export const AnalyticsPrivacySchema = z.object({
   aggregatedOnly: z.literal(true),
   includesOptInUsageData: z.boolean(),
@@ -415,6 +560,33 @@ export const AnalyticsOverviewResponseSchema = z.union([
 ]);
 export type AnalyticsOverviewResponse = z.infer<typeof AnalyticsOverviewResponseSchema>;
 
+const AnalyticsOverviewResponseV2BaseSchema = AnalyticsOverviewResponseBaseSchema
+  .omit({ schemaVersion: true })
+  .extend({
+    schemaVersion: AnalyticsSchemaVersionV2Schema,
+    catalogRevision: AnalyticsPortfolioCatalogRevisionSchema,
+    apps: z.array(AnalyticsPortfolioAppSchema).min(1).max(10_000),
+    sourceCoverage: z.array(AnalyticsPortfolioSourceCoverageSchema).min(1).max(50),
+  }).strict();
+
+export const AnalyticsAppOverviewResponseV2Schema = AnalyticsOverviewResponseV2BaseSchema.extend({
+  scope: z.literal("APP"),
+  appId: z.string().min(1).max(128),
+}).strict();
+export type AnalyticsAppOverviewResponseV2 = z.infer<typeof AnalyticsAppOverviewResponseV2Schema>;
+
+export const AnalyticsPortfolioOverviewResponseV2Schema = AnalyticsOverviewResponseV2BaseSchema.extend({
+  scope: z.literal("PORTFOLIO"),
+  appIds: z.array(z.string().min(1).max(128)).min(1).max(10_000),
+}).strict();
+export type AnalyticsPortfolioOverviewResponseV2 = z.infer<typeof AnalyticsPortfolioOverviewResponseV2Schema>;
+
+export const AnalyticsOverviewResponseV2Schema = z.union([
+  AnalyticsAppOverviewResponseV2Schema,
+  AnalyticsPortfolioOverviewResponseV2Schema,
+]);
+export type AnalyticsOverviewResponseV2 = z.infer<typeof AnalyticsOverviewResponseV2Schema>;
+
 export const AnalyticsReportAccessTypeSchema = z.enum(["ONE_TIME_SNAPSHOT", "ONGOING"]);
 export type AnalyticsReportAccessType = z.infer<typeof AnalyticsReportAccessTypeSchema>;
 
@@ -427,11 +599,33 @@ export const AnalyticsReportRequestSchema = z.object({
 }).strict();
 export type AnalyticsReportRequest = z.infer<typeof AnalyticsReportRequestSchema>;
 
+export const AnalyticsPortfolioReportRequestSchema = AnalyticsReportRequestSchema.extend({
+  id: z.string().min(1).max(128),
+  appId: z.string().min(1).max(128),
+  sourceId: z.string().min(1).max(128),
+}).strict();
+export type AnalyticsPortfolioReportRequest = z.infer<typeof AnalyticsPortfolioReportRequestSchema>;
+
+export const AnalyticsPortfolioReportRequestInspectionSchema = z.object({
+  appId: z.string().min(1).max(128),
+  sourceId: z.string().min(1).max(128),
+  state: z.enum(["INSPECTED", "UNKNOWN"]),
+  detail: z.string().min(1),
+}).strict();
+export type AnalyticsPortfolioReportRequestInspection = z.infer<typeof AnalyticsPortfolioReportRequestInspectionSchema>;
+
 export const AnalyticsReportRequestCreateInputSchema = z.object({
   appId: z.string().min(1),
   accessType: AnalyticsReportAccessTypeSchema,
 }).strict();
 export type AnalyticsReportRequestCreateInput = z.infer<typeof AnalyticsReportRequestCreateInputSchema>;
+
+export const AnalyticsPortfolioReportRequestCreateInputSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionV2Schema,
+  appId: z.string().min(1).max(128),
+  accessType: AnalyticsReportAccessTypeSchema,
+}).strict();
+export type AnalyticsPortfolioReportRequestCreateInput = z.infer<typeof AnalyticsPortfolioReportRequestCreateInputSchema>;
 
 export const AnalyticsStatusStateSchema = z.enum([
   "NOT_CONFIGURED",
@@ -452,6 +646,50 @@ export const AnalyticsStatusResponseSchema = z.object({
   detail: z.string().min(1),
 }).strict();
 export type AnalyticsStatusResponse = z.infer<typeof AnalyticsStatusResponseSchema>;
+
+export const AnalyticsPortfolioStatusResponseSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionV2Schema,
+  catalogRevision: AnalyticsPortfolioCatalogRevisionSchema,
+  state: AnalyticsStatusStateSchema,
+  sources: z.array(AnalyticsPortfolioSourceCoverageSchema).max(50),
+  reportRequests: z.array(AnalyticsPortfolioReportRequestSchema).max(50_000),
+  reportRequestInspections: z.array(AnalyticsPortfolioReportRequestInspectionSchema).max(10_000),
+  freshness: AnalyticsFreshnessSchema,
+  detail: z.string().min(1),
+}).strict().superRefine((status, context) => {
+  const sourceIds = new Set<string>();
+  status.sources.forEach((source, index) => {
+    if (sourceIds.has(source.sourceId)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Portfolio status sources must be unique.", path: ["sources", index, "sourceId"] });
+    }
+    sourceIds.add(source.sourceId);
+  });
+  const inspectionByApp = new Map<string, { sourceId: string; index: number }>();
+  status.reportRequestInspections.forEach((inspection, index) => {
+    if (!sourceIds.has(inspection.sourceId)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Every report-request inspection must belong to a status source.", path: ["reportRequestInspections", index, "sourceId"] });
+    }
+    if (inspectionByApp.has(inspection.appId)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Report-request inspection apps must be unique.", path: ["reportRequestInspections", index, "appId"] });
+    }
+    inspectionByApp.set(inspection.appId, { sourceId: inspection.sourceId, index });
+  });
+  const requestIds = new Set<string>();
+  status.reportRequests.forEach((request, index) => {
+    if (!sourceIds.has(request.sourceId)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Every portfolio report request must belong to a status source.", path: ["reportRequests", index, "sourceId"] });
+    }
+    if (requestIds.has(request.id)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Portfolio report request IDs must be unique.", path: ["reportRequests", index, "id"] });
+    }
+    const inspection = inspectionByApp.get(request.appId);
+    if (!inspection || inspection.sourceId !== request.sourceId) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Every portfolio report request must match an app inspection in the same source.", path: ["reportRequests", index, "appId"] });
+    }
+    requestIds.add(request.id);
+  });
+});
+export type AnalyticsPortfolioStatusResponse = z.infer<typeof AnalyticsPortfolioStatusResponseSchema>;
 
 export const AnalyticsObservationSchema = z.object({
   date: AnalyticsIsoDateSchema,
@@ -578,6 +816,13 @@ export const AnalyticsSyncInputSchema = z.object({
 }).strict();
 export type AnalyticsSyncInput = z.infer<typeof AnalyticsSyncInputSchema>;
 
+export const AnalyticsPortfolioSyncInputSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionV2Schema,
+  selection: z.object({ kind: z.literal("ALL_CONNECTED") }).strict(),
+  force: z.boolean().default(false),
+}).strict();
+export type AnalyticsPortfolioSyncInput = z.infer<typeof AnalyticsPortfolioSyncInputSchema>;
+
 export const AnalyticsSyncStateSchema = z.enum(["QUEUED", "RUNNING", "SUCCEEDED", "PARTIAL", "FAILED"]);
 export type AnalyticsSyncState = z.infer<typeof AnalyticsSyncStateSchema>;
 
@@ -603,6 +848,47 @@ export const AnalyticsSyncResponseSchema = AnalyticsSyncResultSchema.omit({ batc
   observationCount: z.number().int().nonnegative(),
 }).strict();
 export type AnalyticsSyncResponse = z.infer<typeof AnalyticsSyncResponseSchema>;
+
+export const AnalyticsPortfolioSyncSourceSchema = z.object({
+  sourceId: z.string().min(1).max(128),
+  state: AnalyticsSyncStateSchema,
+  appIds: z.array(z.string().min(1).max(128)).max(10_000),
+  runIds: z.array(z.string().min(1)).max(50),
+  freshness: AnalyticsFreshnessSchema,
+  batchCount: z.number().int().nonnegative(),
+  observationCount: z.number().int().nonnegative(),
+  error: z.string().min(1).nullable(),
+}).strict();
+export type AnalyticsPortfolioSyncSource = z.infer<typeof AnalyticsPortfolioSyncSourceSchema>;
+
+export const AnalyticsPortfolioSyncResponseSchema = z.object({
+  schemaVersion: AnalyticsSchemaVersionV2Schema,
+  runId: z.string().min(1),
+  state: AnalyticsSyncStateSchema,
+  sources: z.array(AnalyticsPortfolioSyncSourceSchema).max(50),
+  startedAt: AnalyticsIsoDateTimeSchema,
+  completedAt: AnalyticsIsoDateTimeSchema.nullable(),
+  freshness: AnalyticsFreshnessSchema,
+  batchCount: z.number().int().nonnegative(),
+  observationCount: z.number().int().nonnegative(),
+  error: z.string().min(1).nullable(),
+}).strict().superRefine((sync, context) => {
+  const sourceIds = new Set<string>();
+  const appIds = new Set<string>();
+  sync.sources.forEach((source, sourceIndex) => {
+    if (sourceIds.has(source.sourceId)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Portfolio sync sources must be unique.", path: ["sources", sourceIndex, "sourceId"] });
+    }
+    sourceIds.add(source.sourceId);
+    source.appIds.forEach((appId, appIndex) => {
+      if (appIds.has(appId)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: "A portfolio sync app may belong to only one source.", path: ["sources", sourceIndex, "appIds", appIndex] });
+      }
+      appIds.add(appId);
+    });
+  });
+});
+export type AnalyticsPortfolioSyncResponse = z.infer<typeof AnalyticsPortfolioSyncResponseSchema>;
 
 export const AppleAdsStatusSchema = z.object({
   mode: AgentModeSchema,
@@ -1040,16 +1326,34 @@ export const UpdateVersionLocalizationSchema = VersionLocalizationDraftSchema.ex
 });
 export type UpdateVersionLocalization = z.infer<typeof UpdateVersionLocalizationSchema>;
 
-export const ReleaseCopyFieldSchema = z.enum(["whatsNew", "promotionalText"]);
+export const ReleaseCopyFieldSchema = z.enum([
+  "description",
+  "whatsNew",
+  "promotionalText",
+  "keywords",
+]);
 export type ReleaseCopyField = z.infer<typeof ReleaseCopyFieldSchema>;
+
+const ReleaseCopyKeywordsSchema = z.string()
+  .max(100)
+  .refine(
+    (value) => value.split(",").every((keyword) => (
+      keyword.length > 0
+      && keyword === keyword.trim()
+      && !/[\r\n]/.test(keyword)
+    )),
+    "Use a comma-separated keyword list without empty entries or spaces around commas.",
+  );
 
 export const GenerateReleaseCopyTranslationsInputSchema = z.object({
   sourceLocale: AppStoreLocaleSchema,
   targetLocales: z.array(AppStoreLocaleSchema).min(1).max(39),
-  fields: z.array(ReleaseCopyFieldSchema).min(1).max(2),
+  fields: z.array(ReleaseCopyFieldSchema).min(1).max(4),
   source: z.object({
-    whatsNew: z.string().max(4_000),
-    promotionalText: z.string().max(170),
+    description: z.string().max(4_000).optional(),
+    whatsNew: z.string().max(4_000).optional(),
+    promotionalText: z.string().max(170).optional(),
+    keywords: ReleaseCopyKeywordsSchema.optional(),
   }).strict(),
 }).strict().superRefine((input, context) => {
   const targetLocales = new Set<string>();
@@ -1081,10 +1385,26 @@ export const GenerateReleaseCopyTranslationsInputSchema = z.object({
       });
     }
     fields.add(field);
-    if (!input.source[field].trim()) {
+  }
+
+  for (const field of ReleaseCopyFieldSchema.options) {
+    const source = input.source[field];
+    if (fields.has(field) && source === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Selected source fields must be provided.",
+        path: ["source", field],
+      });
+    } else if (fields.has(field) && !source?.trim()) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Selected source fields cannot be empty.",
+        path: ["source", field],
+      });
+    } else if (!fields.has(field) && source !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Unselected source fields must be omitted.",
         path: ["source", field],
       });
     }
@@ -1094,8 +1414,10 @@ export type GenerateReleaseCopyTranslationsInput = z.infer<typeof GenerateReleas
 
 export const GeneratedReleaseCopyTranslationSchema = z.object({
   locale: AppStoreLocaleSchema,
+  description: z.string().min(1).max(4_000).optional(),
   whatsNew: z.string().min(1).max(4_000).optional(),
   promotionalText: z.string().min(1).max(170).optional(),
+  keywords: ReleaseCopyKeywordsSchema.optional(),
 }).strict();
 export type GeneratedReleaseCopyTranslation = z.infer<typeof GeneratedReleaseCopyTranslationSchema>;
 
@@ -1473,6 +1795,22 @@ export const CreateAnalyticsReportRequestMutationPlanSchema = PlanBaseSchema.ext
 });
 export type CreateAnalyticsReportRequestMutationPlan = z.infer<typeof CreateAnalyticsReportRequestMutationPlanSchema>;
 
+export const CreateAnalyticsPortfolioReportRequestMutationPlanSchema = PlanBaseSchema.extend({
+  operation: z.literal("analytics.report_request.create"),
+  target: z.object({
+    appId: z.string().min(1).max(128),
+    sourceId: z.string().min(1).max(128),
+    appName: z.string().min(1),
+    accessType: AnalyticsReportAccessTypeSchema,
+  }).strict(),
+  before: z.object({
+    matchingReportRequestIds: z.array(z.string().min(1).max(128)),
+    activeOngoingReportRequestIds: z.array(z.string().min(1).max(128)),
+  }).strict(),
+  after: AnalyticsPortfolioReportRequestCreateInputSchema,
+}).strict();
+export type CreateAnalyticsPortfolioReportRequestMutationPlan = z.infer<typeof CreateAnalyticsPortfolioReportRequestMutationPlanSchema>;
+
 export const AppleAdsCampaignSnapshotSchema = AppleAdsCampaignSchema.pick({
   id: true,
   adAccountId: true,
@@ -1693,6 +2031,16 @@ export const PlanResponseSchema = z.object({
   plan: MutationPlanSchema,
 });
 export type PlanResponse = z.infer<typeof PlanResponseSchema>;
+
+export const AnalyticsPortfolioReportRequestPlanResponseSchema = z.object({
+  plan: CreateAnalyticsPortfolioReportRequestMutationPlanSchema,
+}).strict();
+export type AnalyticsPortfolioReportRequestPlanResponse = z.infer<typeof AnalyticsPortfolioReportRequestPlanResponseSchema>;
+
+export const AnalyticsPortfolioPendingPlansResponseSchema = z.object({
+  plans: z.array(CreateAnalyticsPortfolioReportRequestMutationPlanSchema).max(100),
+}).strict();
+export type AnalyticsPortfolioPendingPlansResponse = z.infer<typeof AnalyticsPortfolioPendingPlansResponseSchema>;
 
 export const PlansResponseSchema = z.object({
   plans: z.array(MutationPlanSchema),

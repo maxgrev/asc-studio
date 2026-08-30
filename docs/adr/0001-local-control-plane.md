@@ -33,6 +33,8 @@ awaiting_confirmation → running → succeeded | failed
 
 A plan binds the exact target IDs, before state, after state, expiry, and digest. The GUI confirms the saved digest. The core then re-reads the target and rejects the plan if the source state changed.
 
+Releases keeps localized metadata drafts in the browser session, scoped by app, version, and locale with exact changed-field intent; legacy Store Listing drafts migrate into that state. Metadata planning merges only intended fields into fresh provider state. Screenshot staging survives the Localized content/Screenshots mode switch, requires explicit discard before leaving, and blocks departure while an apply is running. Readiness and submission fail closed while local content or screenshot work remains pending.
+
 MCP is read-only by default. A future MCP mutation will create a plan and route approval to a trusted local surface. It will not accept a bare `confirmed: true` field from the model.
 
 ## Network boundary
@@ -69,7 +71,7 @@ Credential replacement uses a write-ahead marker, write, fresh read-back, and co
 
 GUI writing assistance uses one optional, workspace-wide OpenAI connection for Releases and Reviews. A user can submit a key and optional model through **Connections → Writing assistance**, or use environment variables for unattended runs. During GUI setup the browser briefly holds the key and sends it to the authenticated loopback agent; it does not retain the key in browser storage, and the agent never returns it. After validation, the key is stored in macOS Keychain. [ADR 0003](0003-gui-managed-openai-credentials.md) defines storage, precedence, migration, validation, and removal.
 
-Release translation requests contain What’s New only. Description, promotional text, keywords, and URLs stay out of the model request and remain unchanged in every target locale.
+Translate & adapt accepts selected content fields and target locales. Selected description, What’s New, and promotional text are translated; selected keywords are adapted for the target locale and search behavior under comma-list and 100-character rules. Selected support and marketing URLs are copied locally unchanged and are never sent to OpenAI. Model requests contain only selected model-backed fields, and each target-locale update applies only the selected fields atomically.
 
 For a customer-review reply, the browser submits only `{appId, reviewId}`. The local agent re-reads that exact review from the active provider. It then makes a generation Responses call that sends only rating, title, and body and accepts only `responseBody` through a strict schema. Review content is untrusted model input: the generation prompt ignores embedded instructions, favors concise and specific language over canned or AI-like filler, and forbids invented fixes, investigations, causes, timelines, versions, contact channels, refunds, promises, follow-up, and rating manipulation.
 

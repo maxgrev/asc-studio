@@ -3,10 +3,290 @@ import {
   AnalyticsFactBatchSchema,
   AnalyticsMetricValueSchema,
   AnalyticsObservationSchema,
+  AnalyticsOverviewQueryV2Schema,
+  AnalyticsOverviewResponseV2Schema,
+  AnalyticsPortfolioCatalogResponseSchema,
   AnalyticsPortfolioOverviewQuerySchema,
+  AnalyticsPortfolioReportRequestCreateInputSchema,
+  AnalyticsPortfolioStatusResponseSchema,
+  AnalyticsPortfolioSyncInputSchema,
+  AnalyticsPortfolioSyncResponseSchema,
 } from "./index.js";
 
+const portfolioFreshness = {
+  syncedAt: "2026-08-29T12:00:00.000Z",
+  dataThrough: "2026-08-27",
+  expectedDelayDays: 5,
+  partial: false,
+  detail: "Every connected source is complete through August 27.",
+} as const;
+
+const portfolioSource = {
+  id: "source:issuer-a",
+  accounts: [{
+    id: "account-a",
+    profileName: "Studio A",
+    active: true,
+    state: "READY" as const,
+    appCount: 1,
+    detail: "Connected.",
+  }],
+  state: "READY" as const,
+  appCount: 1,
+  lastDiscoveredAt: "2026-08-29T12:00:00.000Z",
+  detail: "One connected account is available.",
+};
+
+const portfolioApp = {
+  id: "portfolio-app:source-a:1234567890",
+  sourceId: portfolioSource.id,
+  name: "Orbit Notes",
+  bundleId: "com.example.orbit-notes",
+  platforms: ["IOS"],
+};
+
+const portfolioCoverage = {
+  sourceId: portfolioSource.id,
+  state: "READY" as const,
+  selectedAppCount: 1,
+  freshness: portfolioFreshness,
+  detail: "Source is complete for the selected range.",
+};
+
+const catalogRevision = "catalog_0123456789abcdef0123456789abcdef0123456789abcdef";
+
+const portfolioOverviewResponse = {
+  schemaVersion: 2 as const,
+  catalogRevision,
+  scope: "PORTFOLIO" as const,
+  appIds: [portfolioApp.id],
+  apps: [portfolioApp],
+  sourceCoverage: [portfolioCoverage],
+  period: { startDate: "2026-08-01", endDate: "2026-08-27" },
+  comparisonPeriod: null,
+  kpis: [],
+  series: [],
+  breakdowns: [],
+  appContributions: [],
+  freshness: portfolioFreshness,
+  privacy: {
+    aggregatedOnly: true as const,
+    includesOptInUsageData: true,
+    mayIncludePrivacyAdjustments: false,
+    detail: "Usage data remains subject to Apple privacy processing.",
+  },
+  provenance: {
+    source: "APP_STORE_CONNECT_ANALYTICS_REPORTS" as const,
+    reportNames: ["App Store Downloads Standard"],
+    reportRequestIds: ["source:issuer-a:request-1"],
+    snapshotId: "portfolio-snapshot-1",
+    evidenceId: "portfolio-evidence-1",
+  },
+  metricCoverage: [],
+  appliedFilters: { territories: [], sources: [], productPages: [], versions: [] },
+  facets: { territories: [], sources: [], productPages: [], versions: [] },
+  snapshotId: "portfolio-snapshot-1",
+  evidenceId: "portfolio-evidence-1",
+};
+
 describe("analytics contracts", () => {
+  it("keeps V2 portfolio scope server-owned instead of accepting a client app list or issuer", () => {
+    const base = {
+      schemaVersion: 2,
+      scope: "PORTFOLIO",
+      selection: { kind: "ALL_CONNECTED" },
+      startDate: "2026-08-01",
+      endDate: "2026-08-27",
+      compare: "PREVIOUS_PERIOD",
+      granularity: "DAY",
+      breakdowns: ["APP"],
+    };
+
+    expect(AnalyticsOverviewQueryV2Schema.safeParse(base).success).toBe(true);
+    expect(AnalyticsOverviewQueryV2Schema.safeParse({
+      ...base,
+      selection: { kind: "APP", appId: portfolioApp.id },
+    }).success).toBe(false);
+    expect(AnalyticsOverviewQueryV2Schema.safeParse({ ...base, appIds: [portfolioApp.id] }).success).toBe(false);
+    expect(AnalyticsOverviewQueryV2Schema.safeParse({ ...base, issuerId: "issuer-a" }).success).toBe(false);
+  });
+
+  it("requires one opaque portfolio app selection for a V2 app query", () => {
+    const base = {
+      schemaVersion: 2,
+      scope: "APP",
+      selection: { kind: "APP", appId: portfolioApp.id },
+      startDate: "2026-08-01",
+      endDate: "2026-08-27",
+      compare: "NONE",
+      granularity: "DAY",
+      breakdowns: ["TERRITORY"],
+    };
+
+    expect(AnalyticsOverviewQueryV2Schema.safeParse(base).success).toBe(true);
+    expect(AnalyticsOverviewQueryV2Schema.safeParse({
+      ...base,
+      selection: { kind: "ALL_CONNECTED" },
+    }).success).toBe(false);
+    expect(AnalyticsOverviewQueryV2Schema.safeParse({ ...base, selection: { kind: "APP", appId: "" } }).success).toBe(false);
+    expect(AnalyticsOverviewQueryV2Schema.safeParse({ ...base, appIds: ["1234567890"] }).success).toBe(false);
+    expect(AnalyticsOverviewQueryV2Schema.safeParse({ ...base, issuerId: "issuer-a" }).success).toBe(false);
+  });
+
+  it("requires a coherent multi-source portfolio catalog and preserves account failures", () => {
+    const failedSource = {
+      id: "source:issuer-b",
+      accounts: [{
+        id: "account-b",
+        profileName: "Studio B",
+        active: false,
+        state: "ERROR" as const,
+        appCount: 0,
+        detail: "Apple rejected this credential.",
+      }],
+      state: "ERROR" as const,
+      appCount: 0,
+      lastDiscoveredAt: "2026-08-29T12:00:00.000Z",
+      detail: "This source could not be refreshed.",
+    };
+    const catalog = {
+      schemaVersion: 2,
+      catalogRevision,
+      complete: false,
+      generatedAt: "2026-08-29T12:00:00.000Z",
+      sources: [portfolioSource, failedSource],
+      apps: [portfolioApp],
+    };
+
+    expect(AnalyticsPortfolioCatalogResponseSchema.safeParse(catalog).success).toBe(true);
+    expect(AnalyticsPortfolioCatalogResponseSchema.safeParse({
+      ...catalog,
+      apps: [portfolioApp, { ...portfolioApp, sourceId: failedSource.id }],
+    }).success).toBe(false);
+    expect(AnalyticsPortfolioCatalogResponseSchema.safeParse({
+      ...catalog,
+      apps: [{ ...portfolioApp, sourceId: "source:unknown" }],
+    }).success).toBe(false);
+    expect(AnalyticsPortfolioCatalogResponseSchema.safeParse({
+      ...catalog,
+      sources: [{ ...portfolioSource, appCount: 2 }, failedSource],
+    }).success).toBe(false);
+  });
+
+  it("requires V2 overview responses to disclose selected apps and every source's coverage", () => {
+    expect(AnalyticsOverviewResponseV2Schema.safeParse(portfolioOverviewResponse).success).toBe(true);
+    const { apps: _apps, ...withoutApps } = portfolioOverviewResponse;
+    const { sourceCoverage: _sourceCoverage, ...withoutCoverage } = portfolioOverviewResponse;
+    expect(AnalyticsOverviewResponseV2Schema.safeParse(withoutApps).success).toBe(false);
+    expect(AnalyticsOverviewResponseV2Schema.safeParse(withoutCoverage).success).toBe(false);
+    expect(AnalyticsOverviewResponseV2Schema.safeParse({
+      ...portfolioOverviewResponse,
+      issuerId: "issuer-a",
+    }).success).toBe(false);
+  });
+
+  it("represents portfolio status and sync failures explicitly without exposing issuer IDs", () => {
+    const failedFreshness = {
+      syncedAt: null,
+      dataThrough: null,
+      expectedDelayDays: null,
+      partial: true,
+      detail: "No current cache is available for this source.",
+    };
+    const failedCoverage = {
+      sourceId: "source:issuer-b",
+      state: "ERROR" as const,
+      selectedAppCount: 0,
+      freshness: failedFreshness,
+      detail: "Apple rejected this credential.",
+    };
+    const status = {
+      schemaVersion: 2,
+      catalogRevision,
+      state: "PARTIAL",
+      sources: [portfolioCoverage, failedCoverage],
+      reportRequests: [],
+      reportRequestInspections: [{
+        appId: portfolioApp.id,
+        sourceId: portfolioSource.id,
+        state: "INSPECTED",
+        detail: "Report requests were inspected for this app.",
+      }],
+      freshness: { ...portfolioFreshness, partial: true, detail: "One connected source is unavailable." },
+      detail: "One of two connected sources is unavailable.",
+    };
+    expect(AnalyticsPortfolioStatusResponseSchema.safeParse(status).success).toBe(true);
+    expect(AnalyticsPortfolioStatusResponseSchema.safeParse({ ...status, issuerId: "issuer-a" }).success).toBe(false);
+
+    const sync = {
+      schemaVersion: 2,
+      runId: "portfolio-sync-1",
+      state: "PARTIAL",
+      sources: [{
+        sourceId: portfolioSource.id,
+        state: "SUCCEEDED",
+        appIds: [portfolioApp.id],
+        runIds: ["source-sync-a"],
+        freshness: portfolioFreshness,
+        batchCount: 4,
+        observationCount: 200,
+        error: null,
+      }, {
+        sourceId: failedCoverage.sourceId,
+        state: "FAILED",
+        appIds: [],
+        runIds: ["source-sync-b"],
+        freshness: failedFreshness,
+        batchCount: 0,
+        observationCount: 0,
+        error: "Apple rejected this credential.",
+      }],
+      startedAt: "2026-08-29T12:00:00.000Z",
+      completedAt: "2026-08-29T12:01:00.000Z",
+      freshness: status.freshness,
+      batchCount: 4,
+      observationCount: 200,
+      error: "Studio B could not be synced.",
+    };
+    expect(AnalyticsPortfolioSyncResponseSchema.safeParse(sync).success).toBe(true);
+    expect(AnalyticsPortfolioSyncResponseSchema.safeParse({ ...sync, issuerId: "issuer-a" }).success).toBe(false);
+  });
+
+  it("keeps workspace sync and report-request inputs server-scoped and strict", () => {
+    expect(AnalyticsPortfolioSyncInputSchema.safeParse({
+      schemaVersion: 2,
+      selection: { kind: "ALL_CONNECTED" },
+      force: true,
+    }).success).toBe(true);
+    expect(AnalyticsPortfolioSyncInputSchema.safeParse({
+      schemaVersion: 2,
+      selection: { kind: "ALL_CONNECTED" },
+      appIds: [portfolioApp.id],
+      force: true,
+    }).success).toBe(false);
+    expect(AnalyticsPortfolioSyncInputSchema.safeParse({
+      schemaVersion: 2,
+      selection: { kind: "ALL_CONNECTED" },
+      issuerId: "issuer-a",
+      force: true,
+    }).success).toBe(false);
+
+    const reportRequest = {
+      schemaVersion: 2,
+      appId: portfolioApp.id,
+      accessType: "ONGOING",
+    };
+    expect(AnalyticsPortfolioReportRequestCreateInputSchema.safeParse(reportRequest).success).toBe(true);
+    expect(AnalyticsPortfolioReportRequestCreateInputSchema.safeParse({
+      ...reportRequest,
+      issuerId: "issuer-a",
+    }).success).toBe(false);
+    expect(AnalyticsPortfolioReportRequestCreateInputSchema.safeParse({
+      ...reportRequest,
+      appKey: portfolioApp.id,
+    }).success).toBe(false);
+  });
+
   it("accepts a portfolio larger than the old 200-app UI limit", () => {
     const result = AnalyticsPortfolioOverviewQuerySchema.safeParse({
       schemaVersion: 1,

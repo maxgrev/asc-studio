@@ -1,9 +1,12 @@
 import {
   ActivityResponseSchema,
   AgentStatusSchema,
-  AnalyticsOverviewResponseSchema,
-  AnalyticsStatusResponseSchema,
-  AnalyticsSyncResponseSchema,
+  AnalyticsOverviewResponseV2Schema,
+  AnalyticsPortfolioCatalogResponseSchema,
+  AnalyticsPortfolioPendingPlansResponseSchema,
+  AnalyticsPortfolioReportRequestPlanResponseSchema,
+  AnalyticsPortfolioStatusResponseSchema,
+  AnalyticsPortfolioSyncResponseSchema,
   AppleAdsAdGroupsResponseSchema,
   AppleAdsCampaignReportResponseSchema,
   AppleAdsCampaignsResponseSchema,
@@ -35,9 +38,9 @@ import {
 } from "@asc-studio/contracts";
 import type {
   AddBuildToGroupInput,
-  AnalyticsOverviewQuery,
-  AnalyticsReportRequestCreateInput,
-  AnalyticsSyncInput,
+  AnalyticsOverviewQueryV2,
+  AnalyticsPortfolioReportRequestCreateInput,
+  AnalyticsPortfolioSyncInput,
   AppleAdsCampaignReportInput,
   AppleAdsCredentialsInput,
   AppleAdsKeywordResearchInput,
@@ -52,7 +55,7 @@ import type {
   CreateAppleAdsCampaignMutationPlan,
   CreateAppleAdsKeywordInput,
   CreateAppleAdsKeywordMutationPlan,
-  CreateAnalyticsReportRequestMutationPlan,
+  CreateAnalyticsPortfolioReportRequestMutationPlan,
   CreateVersionInput,
   CreateVersionMutationPlan,
   GenerateCustomerReviewReplyInput,
@@ -244,20 +247,22 @@ export const api = {
     if (options.paginate !== undefined) query.set("paginate", String(options.paginate));
     return request(`/api/apps${query.size ? `?${query}` : ""}`, AppsResponseSchema);
   },
-  analyticsStatus: () => request("/api/analytics/status", AnalyticsStatusResponseSchema),
-  analyticsOverview: (input: AnalyticsOverviewQuery) => request(
+  analyticsPortfolio: () => request("/api/analytics/portfolio", AnalyticsPortfolioCatalogResponseSchema),
+  analyticsPortfolioStatus: () => request("/api/analytics/portfolio/status", AnalyticsPortfolioStatusResponseSchema),
+  analyticsPortfolioPlans: () => request("/api/analytics/portfolio/plans", AnalyticsPortfolioPendingPlansResponseSchema),
+  analyticsOverview: (input: AnalyticsOverviewQueryV2) => request(
     "/api/analytics/overview",
-    AnalyticsOverviewResponseSchema,
+    AnalyticsOverviewResponseV2Schema,
     { method: "POST", body: JSON.stringify(input) },
   ),
-  syncAnalytics: (input: AnalyticsSyncInput) => request(
-    "/api/analytics/sync",
-    AnalyticsSyncResponseSchema,
+  syncAnalyticsPortfolio: (input: AnalyticsPortfolioSyncInput) => request(
+    "/api/analytics/portfolio/sync",
+    AnalyticsPortfolioSyncResponseSchema,
     { method: "POST", body: JSON.stringify(input) },
   ),
-  analyticsSync: (runId: string) => request(
-    `/api/analytics/sync/${encodeURIComponent(runId)}`,
-    AnalyticsSyncResponseSchema,
+  analyticsPortfolioSync: (runId: string) => request(
+    `/api/analytics/portfolio/sync/${encodeURIComponent(runId)}`,
+    AnalyticsPortfolioSyncResponseSchema,
   ),
   builds: (appId: string) => request(`/api/apps/${encodeURIComponent(appId)}/builds`, BuildsResponseSchema),
   releaseBuilds: (appId: string, version: string, platform: AppStorePlatform) => {
@@ -396,11 +401,11 @@ export const api = {
     return { plan: response.plan };
   },
   planAnalyticsReportRequest: async (
-    input: AnalyticsReportRequestCreateInput,
-  ): Promise<{ plan: CreateAnalyticsReportRequestMutationPlan }> => {
+    input: AnalyticsPortfolioReportRequestCreateInput,
+  ): Promise<{ plan: CreateAnalyticsPortfolioReportRequestMutationPlan }> => {
     const response = await request(
       "/api/plans/analytics-report-request",
-      PlanResponseSchema,
+      AnalyticsPortfolioReportRequestPlanResponseSchema,
       { method: "POST", body: JSON.stringify(input) },
     );
     if (response.plan.operation !== "analytics.report_request.create") {
@@ -408,6 +413,14 @@ export const api = {
     }
     return { plan: response.plan };
   },
+  confirmAnalyticsReportRequest: (plan: CreateAnalyticsPortfolioReportRequestMutationPlan) => request(
+    `/api/plans/${encodeURIComponent(plan.id)}/confirm`,
+    AnalyticsPortfolioReportRequestPlanResponseSchema,
+    {
+      method: "POST",
+      body: JSON.stringify({ digest: plan.digest }),
+    },
+  ),
   planAppleAdsCampaignCreate: async (input: CreateAppleAdsCampaignInput): Promise<{ plan: CreateAppleAdsCampaignMutationPlan }> => {
     const response = await request("/api/plans/apple-ads/campaign-create", PlanResponseSchema, { method: "POST", body: JSON.stringify(input) });
     if (response.plan.operation !== "apple_ads.campaign.create") throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);

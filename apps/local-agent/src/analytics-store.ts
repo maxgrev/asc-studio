@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import {
   ANALYTICS_METRIC_COMPLETENESS_DAYS,
   AnalyticsFactBatchSchema,
+  AnalyticsPortfolioSyncResponseSchema,
   AnalyticsSyncResponseSchema,
   type AnalyticsAdditiveMetricId,
   type AnalyticsFilters,
@@ -12,6 +13,8 @@ import {
   type AnalyticsFactBatch,
   type AnalyticsObservation,
   type AnalyticsObservationQuery,
+  type AnalyticsReportRequest,
+  type AnalyticsPortfolioSyncResponse,
   type AnalyticsSyncResponse,
 } from "@asc-studio/contracts";
 import type { AnalyticsStore, AnalyticsStoredSnapshot } from "@asc-studio/core";
@@ -95,6 +98,24 @@ export interface AnalyticsSyncRunRecord {
   errorCode: string | null;
   errorMessage: string | null;
   stats: Record<string, number>;
+}
+
+export interface AnalyticsPortfolioCatalogAppRecord {
+  issuerId: string;
+  appId: string;
+  name: string;
+  bundleId: string;
+  platforms: string[];
+}
+
+export interface AnalyticsPortfolioCatalogSourceRecord {
+  issuerId: string;
+  discoveredAt: string;
+  apps: AnalyticsPortfolioCatalogAppRecord[];
+  accounts: Array<{
+    connectionId: string;
+    appIds: string[];
+  }>;
 }
 
 const isDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -304,9 +325,73 @@ export class SqliteAnalyticsStore implements AnalyticsStore {
         response_json TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS analytics_portfolio_sync_children (
+        run_id TEXT PRIMARY KEY,
+        portfolio_run_id TEXT NOT NULL,
+        issuer_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES analytics_sync_runs(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS analytics_portfolio_sync_runs (
+        run_id TEXT PRIMARY KEY,
+        state TEXT NOT NULL CHECK (state IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'PARTIAL', 'FAILED')),
+        response_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS analytics_demo_state (
         issuer_id TEXT PRIMARY KEY,
         fixture_version TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS analytics_portfolio_sources (
+        issuer_id TEXT PRIMARY KEY,
+        discovered_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS analytics_portfolio_apps (
+        issuer_id TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        bundle_id TEXT NOT NULL,
+        platforms_json TEXT NOT NULL,
+        PRIMARY KEY (issuer_id, app_id),
+        FOREIGN KEY (issuer_id) REFERENCES analytics_portfolio_sources(issuer_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS analytics_portfolio_plans (
+        plan_id TEXT PRIMARY KEY,
+        issuer_id TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS analytics_portfolio_report_requests (
+        issuer_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        access_type TEXT NOT NULL CHECK (access_type IN ('ONGOING', 'ONE_TIME_SNAPSHOT')),
+        created_at TEXT,
+        stopped_due_to_inactivity INTEGER NOT NULL DEFAULT 0 CHECK (stopped_due_to_inactivity IN (0, 1)),
+        PRIMARY KEY (issuer_id, request_id),
+        FOREIGN KEY (issuer_id) REFERENCES analytics_portfolio_sources(issuer_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS analytics_portfolio_accounts (
+        issuer_id TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
+        discovered_at TEXT NOT NULL,
+        PRIMARY KEY (issuer_id, connection_id),
+        FOREIGN KEY (issuer_id) REFERENCES analytics_portfolio_sources(issuer_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS analytics_portfolio_account_apps (
+        issuer_id TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        PRIMARY KEY (issuer_id, connection_id, app_id),
+        FOREIGN KEY (issuer_id, connection_id)
+          REFERENCES analytics_portfolio_accounts(issuer_id, connection_id) ON DELETE CASCADE
       );
 
     `);
@@ -565,7 +650,13 @@ export class SqliteAnalyticsStore implements AnalyticsStore {
     ])].sort();
     const sourceSnapshots = [...new Set(allFacts.flatMap((fact) => fact.snapshotId ? [fact.snapshotId] : []))].sort();
     const digest = createHash("sha256")
-      .update(JSON.stringify({ issuerId: query.issuerId, reportNames, reportRequestIds, sourceSnapshots }))
+      .update(JSON.stringify({
+        issuerId: query.issuerId,
+        appIds: [...new Set(query.appIds)].sort(),
+        reportNames,
+        reportRequestIds,
+        sourceSnapshots,
+      }))
       .digest("hex");
     const snapshotId = `cache:${digest}`;
     const evidenceId = `cache-evidence:${digest}`;
@@ -723,6 +814,30 @@ export class SqliteAnalyticsStore implements AnalyticsStore {
 
   async saveAnalyticsSyncRun(run: AnalyticsSyncResponse) {
     const parsed = AnalyticsSyncResponseSchema.parse(run);
+    this.writeAnalyticsSyncRun(parsed);
+  }
+
+  async savePortfolioChildAnalyticsSyncRun(run: AnalyticsSyncResponse, portfolioRunId: string) {
+    const parsed = AnalyticsSyncResponseSchema.parse(run);
+    requireNonEmpty("portfolioRunId", portfolioRunId);
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.writeAnalyticsSyncRun(parsed);
+      this.database.prepare(`
+        INSERT INTO analytics_portfolio_sync_children (run_id, portfolio_run_id, issuer_id, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(run_id) DO UPDATE SET
+          portfolio_run_id = excluded.portfolio_run_id,
+          issuer_id = excluded.issuer_id
+      `).run(parsed.runId, portfolioRunId, parsed.issuerId, parsed.startedAt);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private writeAnalyticsSyncRun(parsed: AnalyticsSyncResponse) {
     const stats = { batches: parsed.batchCount, observations: parsed.observationCount };
     this.database.prepare(`
       INSERT INTO analytics_sync_runs (
@@ -755,22 +870,391 @@ export class SqliteAnalyticsStore implements AnalyticsStore {
 
   async getAnalyticsSyncRun(runId: string): Promise<AnalyticsSyncResponse | null> {
     const row = this.database.prepare(`
-      SELECT response_json FROM analytics_sync_runs WHERE id = ?
+      SELECT runs.response_json
+      FROM analytics_sync_runs AS runs
+      WHERE runs.id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM analytics_portfolio_sync_children AS children
+          WHERE children.run_id = runs.id
+        )
     `).get(runId) as Record<string, unknown> | undefined;
     if (!row || typeof row.response_json !== "string") return null;
     return AnalyticsSyncResponseSchema.parse(JSON.parse(row.response_json));
   }
 
+  async getPortfolioChildAnalyticsSyncRun(runId: string): Promise<AnalyticsSyncResponse | null> {
+    const row = this.database.prepare(`
+      SELECT runs.response_json
+      FROM analytics_sync_runs AS runs
+      JOIN analytics_portfolio_sync_children AS children ON children.run_id = runs.id
+      WHERE runs.id = ?
+    `).get(runId) as Record<string, unknown> | undefined;
+    if (!row || typeof row.response_json !== "string") return null;
+    return AnalyticsSyncResponseSchema.parse(JSON.parse(row.response_json));
+  }
+
+  saveAnalyticsPortfolioSyncRun(response: AnalyticsPortfolioSyncResponse) {
+    const parsed = AnalyticsPortfolioSyncResponseSchema.parse(response);
+    this.database.prepare(`
+      INSERT INTO analytics_portfolio_sync_runs (run_id, state, response_json, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(run_id) DO UPDATE SET
+        state = excluded.state,
+        response_json = excluded.response_json,
+        updated_at = excluded.updated_at
+    `).run(
+      parsed.runId,
+      parsed.state,
+      JSON.stringify(parsed),
+      parsed.completedAt ?? parsed.startedAt,
+    );
+  }
+
+  getAnalyticsPortfolioSyncRun(runId: string): AnalyticsPortfolioSyncResponse | null {
+    const row = this.database.prepare(`
+      SELECT response_json FROM analytics_portfolio_sync_runs WHERE run_id = ?
+    `).get(runId) as Record<string, unknown> | undefined;
+    if (!row || typeof row.response_json !== "string") return null;
+    return AnalyticsPortfolioSyncResponseSchema.parse(JSON.parse(row.response_json));
+  }
+
+  failInterruptedAnalyticsPortfolioSyncRuns(completedAt: string) {
+    if (!isTimestamp(completedAt)) throw new TypeError("completedAt must be an ISO-compatible timestamp.");
+    const rows = this.database.prepare(`
+      SELECT response_json
+      FROM analytics_portfolio_sync_runs
+      WHERE state IN ('QUEUED', 'RUNNING')
+    `).all() as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      if (typeof row.response_json !== "string") continue;
+      const current = AnalyticsPortfolioSyncResponseSchema.parse(JSON.parse(row.response_json));
+      const sources = current.sources.map((source) => (
+        source.state === "SUCCEEDED" || source.state === "PARTIAL" || source.state === "FAILED"
+          ? source
+          : {
+            ...source,
+            state: "FAILED" as const,
+            freshness: {
+              ...source.freshness,
+              partial: true,
+              detail: "ASC Studio stopped before this source finished syncing.",
+            },
+            error: source.error ?? "ASC Studio stopped before this source finished syncing.",
+          }
+      ));
+      this.saveAnalyticsPortfolioSyncRun({
+        ...current,
+        state: "FAILED",
+        sources,
+        completedAt,
+        freshness: {
+          ...current.freshness,
+          partial: true,
+          detail: "ASC Studio stopped before this portfolio sync finished. Start a new sync to retry safely.",
+        },
+        batchCount: sources.reduce((total, source) => total + source.batchCount, 0),
+        observationCount: sources.reduce((total, source) => total + source.observationCount, 0),
+        error: "ASC Studio stopped before this portfolio sync finished. Start a new sync to retry safely.",
+      });
+    }
+    return rows.length;
+  }
+
   async getLatestSuccessfulAnalyticsSyncRun(issuerId: string): Promise<AnalyticsSyncResponse | null> {
     const row = this.database.prepare(`
       SELECT response_json
-      FROM analytics_sync_runs
-      WHERE issuer_id = ? AND state IN ('SUCCEEDED', 'PARTIAL') AND response_json IS NOT NULL
-      ORDER BY COALESCE(completed_at, started_at) DESC, id DESC
+      FROM analytics_sync_runs AS runs
+      WHERE runs.issuer_id = ?
+        AND runs.state IN ('SUCCEEDED', 'PARTIAL')
+        AND runs.response_json IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM analytics_portfolio_sync_children AS children
+          WHERE children.run_id = runs.id
+        )
+      ORDER BY COALESCE(runs.completed_at, runs.started_at) DESC, runs.rowid DESC
       LIMIT 1
     `).get(issuerId) as Record<string, unknown> | undefined;
     if (!row || typeof row.response_json !== "string") return null;
     return AnalyticsSyncResponseSchema.parse(JSON.parse(row.response_json));
+  }
+
+  async getLatestSuccessfulAnalyticsSyncRunsForApps(
+    issuerId: string,
+    appIds: string[],
+  ): Promise<AnalyticsSyncResponse[]> {
+    requireNonEmpty("issuerId", issuerId);
+    const uncovered = new Set(appIds);
+    if (uncovered.size === 0) return [];
+    const rows = this.database.prepare(`
+      SELECT response_json
+      FROM analytics_sync_runs
+      WHERE issuer_id = ? AND state IN ('SUCCEEDED', 'PARTIAL') AND response_json IS NOT NULL
+      ORDER BY COALESCE(completed_at, started_at) DESC, rowid DESC
+    `).all(issuerId) as Array<Record<string, unknown>>;
+    const selected: AnalyticsSyncResponse[] = [];
+    for (const row of rows) {
+      if (typeof row.response_json !== "string") continue;
+      const run = AnalyticsSyncResponseSchema.parse(JSON.parse(row.response_json));
+      const newlyCovered = run.appIds.filter((appId) => uncovered.has(appId));
+      if (newlyCovered.length === 0) continue;
+      selected.push(run);
+      newlyCovered.forEach((appId) => uncovered.delete(appId));
+      if (uncovered.size === 0) break;
+    }
+    return selected;
+  }
+
+  async getLatestAnalyticsSyncRunsByApp(
+    issuerId: string,
+    appIds: string[],
+  ): Promise<Array<{ appId: string; run: AnalyticsSyncResponse }>> {
+    requireNonEmpty("issuerId", issuerId);
+    const uncovered = new Set(appIds);
+    if (uncovered.size === 0) return [];
+    const rows = this.database.prepare(`
+      SELECT response_json
+      FROM analytics_sync_runs
+      WHERE issuer_id = ?
+        AND state IN ('SUCCEEDED', 'PARTIAL', 'FAILED')
+        AND response_json IS NOT NULL
+      ORDER BY COALESCE(completed_at, started_at) DESC, rowid DESC
+    `).all(issuerId) as Array<Record<string, unknown>>;
+    const selected: Array<{ appId: string; run: AnalyticsSyncResponse }> = [];
+    for (const row of rows) {
+      if (typeof row.response_json !== "string") continue;
+      const run = AnalyticsSyncResponseSchema.parse(JSON.parse(row.response_json));
+      for (const appId of run.appIds) {
+        if (!uncovered.delete(appId)) continue;
+        selected.push({ appId, run });
+      }
+      if (uncovered.size === 0) break;
+    }
+    return selected;
+  }
+
+  loadAnalyticsPortfolioCatalog(issuerIds: string[]): AnalyticsPortfolioCatalogSourceRecord[] {
+    const uniqueIssuerIds = [...new Set(issuerIds)];
+    if (uniqueIssuerIds.length === 0) return [];
+    uniqueIssuerIds.forEach((issuerId) => requireNonEmpty("issuerId", issuerId));
+    const placeholders = uniqueIssuerIds.map(() => "?").join(", ");
+    const sources = this.database.prepare(`
+      SELECT issuer_id, discovered_at
+      FROM analytics_portfolio_sources
+      WHERE issuer_id IN (${placeholders})
+      ORDER BY issuer_id
+    `).all(...uniqueIssuerIds) as Array<Record<string, unknown>>;
+    const appRows = this.database.prepare(`
+      SELECT issuer_id, app_id, name, bundle_id, platforms_json
+      FROM analytics_portfolio_apps
+      WHERE issuer_id IN (${placeholders})
+      ORDER BY issuer_id, name, app_id
+    `).all(...uniqueIssuerIds) as Array<Record<string, unknown>>;
+    const accountRows = this.database.prepare(`
+      SELECT issuer_id, connection_id
+      FROM analytics_portfolio_accounts
+      WHERE issuer_id IN (${placeholders})
+      ORDER BY issuer_id, connection_id
+    `).all(...uniqueIssuerIds) as Array<Record<string, unknown>>;
+    const accountAppRows = this.database.prepare(`
+      SELECT issuer_id, connection_id, app_id
+      FROM analytics_portfolio_account_apps
+      WHERE issuer_id IN (${placeholders})
+      ORDER BY issuer_id, connection_id, app_id
+    `).all(...uniqueIssuerIds) as Array<Record<string, unknown>>;
+    const appsByIssuer = new Map<string, AnalyticsPortfolioCatalogAppRecord[]>();
+    for (const row of appRows) {
+      const issuerId = String(row.issuer_id);
+      const current = appsByIssuer.get(issuerId) ?? [];
+      current.push({
+        issuerId,
+        appId: String(row.app_id),
+        name: String(row.name),
+        bundleId: String(row.bundle_id),
+        platforms: parseStringArray(row.platforms_json, "Analytics portfolio app platforms"),
+      });
+      appsByIssuer.set(issuerId, current);
+    }
+    const appIdsByAccount = new Map<string, string[]>();
+    for (const row of accountAppRows) {
+      const key = `${String(row.issuer_id)}\0${String(row.connection_id)}`;
+      const current = appIdsByAccount.get(key) ?? [];
+      current.push(String(row.app_id));
+      appIdsByAccount.set(key, current);
+    }
+    const accountsByIssuer = new Map<string, AnalyticsPortfolioCatalogSourceRecord["accounts"]>();
+    for (const row of accountRows) {
+      const issuerId = String(row.issuer_id);
+      const connectionId = String(row.connection_id);
+      const current = accountsByIssuer.get(issuerId) ?? [];
+      current.push({
+        connectionId,
+        appIds: appIdsByAccount.get(`${issuerId}\0${connectionId}`) ?? [],
+      });
+      accountsByIssuer.set(issuerId, current);
+    }
+    return sources.map((row) => ({
+      issuerId: String(row.issuer_id),
+      discoveredAt: String(row.discovered_at),
+      apps: appsByIssuer.get(String(row.issuer_id)) ?? [],
+      accounts: accountsByIssuer.get(String(row.issuer_id)) ?? [],
+    }));
+  }
+
+  saveAnalyticsPortfolioCatalog(source: AnalyticsPortfolioCatalogSourceRecord) {
+    requireNonEmpty("issuerId", source.issuerId);
+    if (!isTimestamp(source.discoveredAt)) throw new TypeError("discoveredAt must be an ISO-compatible timestamp.");
+    const seen = new Set<string>();
+    for (const app of source.apps) {
+      if (app.issuerId !== source.issuerId) throw new TypeError("Portfolio apps must remain inside their issuer scope.");
+      requireNonEmpty("appId", app.appId);
+      requireNonEmpty("app name", app.name);
+      requireNonEmpty("bundleId", app.bundleId);
+      if (seen.has(app.appId)) throw new TypeError("Portfolio catalog apps must be unique within an issuer.");
+      seen.add(app.appId);
+    }
+    const seenAccounts = new Set<string>();
+    for (const account of source.accounts) {
+      requireNonEmpty("connectionId", account.connectionId);
+      if (seenAccounts.has(account.connectionId)) {
+        throw new TypeError("Portfolio catalog accounts must be unique within an issuer.");
+      }
+      seenAccounts.add(account.connectionId);
+      const seenAccountApps = new Set<string>();
+      for (const appId of account.appIds) {
+        requireNonEmpty("account appId", appId);
+        if (!seen.has(appId)) {
+          throw new TypeError("Portfolio account app membership must reference an app in the same issuer catalog.");
+        }
+        if (seenAccountApps.has(appId)) {
+          throw new TypeError("Portfolio account app membership must be unique within an account.");
+        }
+        seenAccountApps.add(appId);
+      }
+    }
+    this.transaction(() => {
+      this.database.prepare(`
+        INSERT INTO analytics_portfolio_sources (issuer_id, discovered_at)
+        VALUES (?, ?)
+        ON CONFLICT (issuer_id) DO UPDATE SET discovered_at = excluded.discovered_at
+      `).run(source.issuerId, source.discoveredAt);
+      this.database.prepare("DELETE FROM analytics_portfolio_accounts WHERE issuer_id = ?").run(source.issuerId);
+      this.database.prepare("DELETE FROM analytics_portfolio_apps WHERE issuer_id = ?").run(source.issuerId);
+      const insertApp = this.database.prepare(`
+        INSERT INTO analytics_portfolio_apps (issuer_id, app_id, name, bundle_id, platforms_json)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      for (const app of source.apps) {
+        insertApp.run(
+          source.issuerId,
+          app.appId,
+          app.name,
+          app.bundleId,
+          JSON.stringify([...new Set(app.platforms)].sort()),
+        );
+      }
+      const insertAccount = this.database.prepare(`
+        INSERT INTO analytics_portfolio_accounts (issuer_id, connection_id, discovered_at)
+        VALUES (?, ?, ?)
+      `);
+      const insertAccountApp = this.database.prepare(`
+        INSERT INTO analytics_portfolio_account_apps (issuer_id, connection_id, app_id)
+        VALUES (?, ?, ?)
+      `);
+      for (const account of source.accounts) {
+        insertAccount.run(source.issuerId, account.connectionId, source.discoveredAt);
+        for (const appId of account.appIds) {
+          insertAccountApp.run(source.issuerId, account.connectionId, appId);
+        }
+      }
+    });
+  }
+
+  loadAnalyticsPortfolioReportRequests(issuerId: string, appIds: string[]): AnalyticsReportRequest[] {
+    requireNonEmpty("issuerId", issuerId);
+    const uniqueAppIds = [...new Set(appIds)];
+    if (uniqueAppIds.length === 0) return [];
+    uniqueAppIds.forEach((appId) => requireNonEmpty("appId", appId));
+    const rows = this.database.prepare(`
+      SELECT request_id, app_id, access_type, created_at, stopped_due_to_inactivity
+      FROM analytics_portfolio_report_requests
+      WHERE issuer_id = ? AND app_id IN (${uniqueAppIds.map(() => "?").join(", ")})
+      ORDER BY app_id, request_id
+    `).all(issuerId, ...uniqueAppIds) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: String(row.request_id),
+      appId: String(row.app_id),
+      accessType: String(row.access_type) as AnalyticsReportAccessType,
+      createdAt: row.created_at === null ? null : String(row.created_at),
+      stoppedDueToInactivity: Number(row.stopped_due_to_inactivity) === 1,
+    }));
+  }
+
+  saveAnalyticsPortfolioReportRequests(
+    issuerId: string,
+    inspectedAppIds: string[],
+    requests: AnalyticsReportRequest[],
+  ) {
+    requireNonEmpty("issuerId", issuerId);
+    const inspected = [...new Set(inspectedAppIds)];
+    if (inspected.length === 0) return;
+    inspected.forEach((appId) => requireNonEmpty("appId", appId));
+    const inspectedSet = new Set(inspected);
+    const requestIds = new Set<string>();
+    for (const request of requests) {
+      requireNonEmpty("requestId", request.id);
+      if (!inspectedSet.has(request.appId)) {
+        throw new TypeError("A cached portfolio report request must belong to an inspected app.");
+      }
+      if (requestIds.has(request.id)) {
+        throw new TypeError("Portfolio report request IDs must be unique within an issuer.");
+      }
+      if (request.createdAt !== null && !isTimestamp(request.createdAt)) {
+        throw new TypeError("Report request createdAt must be null or an ISO-compatible timestamp.");
+      }
+      requestIds.add(request.id);
+    }
+    this.transaction(() => {
+      this.database.prepare(`
+        DELETE FROM analytics_portfolio_report_requests
+        WHERE issuer_id = ? AND app_id IN (${inspected.map(() => "?").join(", ")})
+      `).run(issuerId, ...inspected);
+      const insert = this.database.prepare(`
+        INSERT INTO analytics_portfolio_report_requests (
+          issuer_id, request_id, app_id, access_type, created_at, stopped_due_to_inactivity
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      for (const request of requests) {
+        insert.run(
+          issuerId,
+          request.id,
+          request.appId,
+          request.accessType,
+          request.createdAt,
+          request.stoppedDueToInactivity ? 1 : 0,
+        );
+      }
+    });
+  }
+
+  saveAnalyticsPortfolioPlan(planId: string, issuerId: string, createdAt: string) {
+    requireNonEmpty("planId", planId);
+    requireNonEmpty("issuerId", issuerId);
+    if (!isTimestamp(createdAt)) throw new TypeError("createdAt must be an ISO-compatible timestamp.");
+    this.database.prepare(`
+      INSERT INTO analytics_portfolio_plans (plan_id, issuer_id, created_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT (plan_id) DO UPDATE SET
+        issuer_id = excluded.issuer_id,
+        created_at = excluded.created_at
+    `).run(planId, issuerId, createdAt);
+  }
+
+  getAnalyticsPortfolioPlanIssuer(planId: string): string | null {
+    requireNonEmpty("planId", planId);
+    const row = this.database.prepare(`
+      SELECT issuer_id FROM analytics_portfolio_plans WHERE plan_id = ?
+    `).get(planId) as Record<string, unknown> | undefined;
+    return row ? String(row.issuer_id) : null;
   }
 
   async failInterruptedAnalyticsSyncRuns(completedAt: string) {
@@ -1221,6 +1705,7 @@ export class SqliteAnalyticsStore implements AnalyticsStore {
     requireNonEmpty("Analytics issuer ID", issuerId);
     this.transaction(() => {
       for (const table of [
+        "analytics_portfolio_sync_children",
         "analytics_staged_facts",
         "analytics_segments",
         "analytics_instances",
@@ -1228,6 +1713,7 @@ export class SqliteAnalyticsStore implements AnalyticsStore {
         "analytics_partitions",
         "analytics_reports",
         "analytics_report_requests",
+        "analytics_portfolio_report_requests",
         "analytics_sync_runs",
         "analytics_demo_state",
       ]) {

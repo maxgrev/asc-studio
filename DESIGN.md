@@ -198,7 +198,7 @@ Use the compact spacing rhythm in the frontmatter for internal gaps and padding.
 
 **The Preserve Context Rule.** Collapse navigation chrome and secondary labels before removing the status, scope, or units that make operational data trustworthy.
 
-**The Actionable First View Rule.** A canonical workflow editor keeps the selected version and state, local-work count, and exact review action in the first viewport. On narrow screens, recompose those facts into a compact context row and status dock rather than hiding them.
+**The Actionable First View Rule.** Releases keeps the selected platform, version, build, state, local-work count, and exact review action in the first viewport. On narrow screens, recompose those facts into compact context and keep labeled readiness and submit actions in a persistent safe-area dock.
 
 ## Elevation & Depth
 
@@ -235,6 +235,7 @@ The form language is gently squared and compact. Core controls use the control a
 ### Navigation
 
 - **Style:** Navigation rows are 49px tall with the control radius. Default rows are transparent; the active row uses Selection Wash, Operator Blue, and a firmer weight.
+- **Workspace ownership:** Releases is the only top-level destination for version-scoped localized content, screenshots, build context, readiness, submission, and status. Do not add a parallel metadata destination.
 - **Responsive treatment:** The full rail narrows, becomes icon-only, then disappears at the documented shell breakpoints.
 
 ### Segmented Controls
@@ -258,10 +259,10 @@ The form language is gently squared and compact. Core controls use the control a
 
 ### Scoped Workflow Editors
 
-- **Hierarchy:** Use a compact platform/version scope strip, a small peer-mode switch, one bordered workbench, and a persistent status dock. Store Listing applies this pattern to Copy & search and Screenshots without turning either mode into a competing top-level surface.
-- **Master detail:** Keep locale identity and readiness in the rail, the canonical fields in the central editor, and any representative preview subordinate to editing and review.
+- **Hierarchy:** Releases uses a compact platform/version/build scope strip, a small **Localized content**/**Screenshots** mode switch, one bordered workbench, and a persistent status dock. Both modes share one version-scoped destination.
+- **Master detail:** Keep locale identity and readiness in the rail and all six localized fields in the central editor; any representative preview stays subordinate to editing and exact-diff review.
 - **Pending work:** Pair the semantic status dot with a plain-language draft or staged-work count and keep the exact review action adjacent in the first viewport.
-- **Responsive behavior:** Remove the representative preview before operational context. At the mobile breakpoint, turn the locale rail horizontal, stack fields, keep form text at 16px, and move review into the compact context row and full-width status dock.
+- **Responsive behavior:** Remove the representative preview before operational context. At the mobile breakpoint, turn the locale rail horizontal, stack fields, keep form text at 16px, and use a persistent full-width safe-area dock with labeled readiness and submit actions.
 
 ### Status Indicators
 
@@ -284,7 +285,7 @@ The form language is gently squared and compact. Core controls use the control a
 
 ### Analytics
 
-- **Information architecture:** Open on **All apps** and keep one persistent path from portfolio totals to an individual app. The desktop composition pairs a ranked app roster with a wider evidence column; narrowing the scope must preserve the chosen period, comparison, metric, and filters.
+- **Information architecture:** Open on **All accounts** and keep one persistent path from cross-account portfolio totals to an individual app. The desktop composition groups a ranked app roster by Apple organization and pairs it with a wider evidence column; narrowing the scope must preserve the chosen period, comparison, metric, and filters. The operational account switcher must not change Analytics scope.
 - **Metric rail:** Treat the seven supported metrics as one continuous bordered rail, not a collection of floating KPI cards. Each value keeps its source availability, complete-through date, formula when derived, and comparison qualification close enough to scan as one unit.
 - **Charts:** Use straight SVG segments so interpolation never invents shape. Current data is solid, comparison data is dashed, and missing or privacy-withheld observations create gaps rather than zeroes. Every plot includes keyboard date inspection, a text summary, and a real HTML data table.
 - **Ranked evidence:** Portfolio scope ranks signed app contributions to the selected change; app scope ranks only dimensions supported by that metric. Keep Page Type, territory, source, and version labels literal to Apple's report fields, and never imply that Standard Page Type data identifies a named custom product page.

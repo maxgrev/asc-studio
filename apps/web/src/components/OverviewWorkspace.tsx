@@ -1,7 +1,8 @@
 import type {
   AgentStatus,
   AnalyticsKpi,
-  AnalyticsOverviewResponse,
+  AnalyticsOverviewResponseV2,
+  AnalyticsPortfolioCatalogResponse,
   AppleAdsCampaign,
   AppleAdsConnectionResponse,
   AppStoreVersion,
@@ -28,6 +29,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import {
   analyticsChangeTone,
+  analyticsPortfolioMembershipKey,
   availabilityLabel,
   formatAnalyticsChange,
   formatAnalyticsValue,
@@ -56,14 +58,12 @@ import {
 import type { WorkspaceSection } from "./Sidebar.js";
 
 interface OverviewWorkspaceProps {
-  app: AppSummary;
+  app: AppSummary | null;
   status: AgentStatus;
   appleAdsConnection: AppleAdsConnectionResponse;
-  analyticsPortfolioReady: boolean;
-  analyticsPortfolioError: string | null;
+  accountsFingerprint: string;
   onNavigate: (section: WorkspaceSection) => void;
   onOpenAnalytics: () => void;
-  onRetryAnalyticsPortfolio: () => Promise<void>;
   onManageAppleServices: () => void;
 }
 
@@ -75,11 +75,12 @@ interface OverviewSnapshot {
   campaigns: AppleAdsCampaign[] | null;
   events: AuditEvent[] | null;
   plans: MutationPlan[] | null;
+  plansCapped: boolean;
 }
 
 type OverviewSection = "releases" | "localizations" | "testflight" | "appleAds" | "activity" | "plans";
 type OverviewErrors = Partial<Record<OverviewSection, string>>;
-type OverviewAnalyticsPhase = "waiting" | "initial" | "refreshing" | "idle";
+type OverviewAnalyticsPhase = "initial" | "refreshing" | "idle";
 
 const errorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback;
 
@@ -133,11 +134,9 @@ export const OverviewWorkspace = ({
   app,
   status,
   appleAdsConnection,
-  analyticsPortfolioReady,
-  analyticsPortfolioError,
+  accountsFingerprint,
   onNavigate,
   onOpenAnalytics,
-  onRetryAnalyticsPortfolio,
   onManageAppleServices,
 }: OverviewWorkspaceProps) => {
   const [snapshot, setSnapshot] = useState<OverviewSnapshot | null>(null);
@@ -146,23 +145,35 @@ export const OverviewWorkspace = ({
   const generation = useRef(0);
   const snapshotRef = useRef<OverviewSnapshot | null>(null);
   const loadedOnce = useRef(false);
-  const [analyticsSnapshot, setAnalyticsSnapshot] = useState<AnalyticsOverviewResponse | null>(null);
+  const resolvedOperationalScope = useRef<string | null>(null);
+  const [analyticsCatalog, setAnalyticsCatalog] = useState<AnalyticsPortfolioCatalogResponse | null>(null);
+  const [analyticsSnapshot, setAnalyticsSnapshot] = useState<AnalyticsOverviewResponseV2 | null>(null);
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
-  const [analyticsPhase, setAnalyticsPhase] = useState<OverviewAnalyticsPhase>("waiting");
+  const [analyticsPhase, setAnalyticsPhase] = useState<OverviewAnalyticsPhase>("initial");
   const analyticsGeneration = useRef(0);
   const analyticsLoadedOnce = useRef(false);
+  const analyticsResolvedAccountsFingerprint = useRef<string | null>(null);
   const adsConnected = appleAdsConnection.status.connected;
 
   const loadOverview = useCallback(async () => {
     const currentGeneration = ++generation.current;
-    setPhase(loadedOnce.current ? "refreshing" : "initial");
+    const operationalScope = `${accountsFingerprint}\u001f${app?.id ?? "portfolio-only"}`;
+    const scopeChanged = resolvedOperationalScope.current !== operationalScope;
+    if (scopeChanged) {
+      loadedOnce.current = false;
+      snapshotRef.current = null;
+      setSnapshot(null);
+      setErrors({});
+    }
+    setPhase(scopeChanged || !loadedOnce.current ? "initial" : "refreshing");
 
-    const [versionsResult, buildsResult, campaignsResult, activityResult, plansResult] = await Promise.allSettled([
-      api.versionsAllPlatforms(app.id),
-      api.builds(app.id),
-      adsConnected ? api.appleAdsCampaigns(app.id) : Promise.resolve({ campaigns: [] }),
+    const [versionsResult, buildsResult, campaignsResult, activityResult, plansResult, analyticsPlansResult] = await Promise.allSettled([
+      app ? api.versionsAllPlatforms(app.id) : Promise.resolve({ versions: [] }),
+      app ? api.builds(app.id) : Promise.resolve({ builds: [] }),
+      app && adsConnected ? api.appleAdsCampaigns(app.id) : Promise.resolve({ campaigns: [] }),
       api.activity(),
       api.pendingPlans(),
+      api.analyticsPortfolioPlans(),
     ]);
     if (currentGeneration !== generation.current) return;
 
@@ -172,18 +183,28 @@ export const OverviewWorkspace = ({
     const builds = buildsResult.status === "fulfilled" ? buildsResult.value.builds : previous?.builds ?? null;
     const campaigns = campaignsResult.status === "fulfilled" ? campaignsResult.value.campaigns : previous?.campaigns ?? null;
     const events = activityResult.status === "fulfilled" ? activityResult.value.events : previous?.events ?? null;
-    const plans = plansResult.status === "fulfilled" ? plansResult.value.plans : previous?.plans ?? null;
+    const plans = plansResult.status === "fulfilled" && analyticsPlansResult.status === "fulfilled"
+      ? [...plansResult.value.plans, ...analyticsPlansResult.value.plans]
+      : previous?.plans ?? null;
+    const plansCapped = plansResult.status === "fulfilled" && analyticsPlansResult.status === "fulfilled"
+      ? plansResult.value.plans.length >= 50 || analyticsPlansResult.value.plans.length >= 50
+      : previous?.plansCapped ?? false;
 
     if (versionsResult.status === "rejected") nextErrors.releases = errorMessage(versionsResult.reason, "Releases could not be loaded.");
     if (buildsResult.status === "rejected") nextErrors.testflight = errorMessage(buildsResult.reason, "TestFlight builds could not be loaded.");
     if (campaignsResult.status === "rejected") nextErrors.appleAds = errorMessage(campaignsResult.reason, "Apple Ads campaigns could not be loaded.");
     if (activityResult.status === "rejected") nextErrors.activity = errorMessage(activityResult.reason, "Workspace activity could not be loaded.");
-    if (plansResult.status === "rejected") nextErrors.plans = errorMessage(plansResult.reason, "Pending plans could not be loaded.");
+    const plansFailure = plansResult.status === "rejected"
+      ? plansResult.reason
+      : analyticsPlansResult.status === "rejected"
+        ? analyticsPlansResult.reason
+        : null;
+    if (plansFailure) nextErrors.plans = errorMessage(plansFailure, "Pending plans could not be loaded.");
 
     const primaryRelease = selectPrimaryRelease(versions ?? [], builds ?? []);
     let localizationVersionId = previous?.localizationVersionId ?? null;
     let localizations = localizationVersionId === primaryRelease?.id ? previous?.localizations ?? null : null;
-    if (primaryRelease) {
+    if (app && primaryRelease) {
       try {
         const response = await api.localizations(app.id, primaryRelease.id);
         if (currentGeneration !== generation.current) return;
@@ -198,13 +219,14 @@ export const OverviewWorkspace = ({
     }
 
     if (currentGeneration !== generation.current) return;
-    const nextSnapshot: OverviewSnapshot = { builds, versions, localizations, localizationVersionId, campaigns, events, plans };
+    const nextSnapshot: OverviewSnapshot = { builds, versions, localizations, localizationVersionId, campaigns, events, plans, plansCapped };
     snapshotRef.current = nextSnapshot;
     loadedOnce.current = true;
+    resolvedOperationalScope.current = operationalScope;
     setSnapshot(nextSnapshot);
     setErrors(nextErrors);
     setPhase("idle");
-  }, [adsConnected, app.id]);
+  }, [accountsFingerprint, adsConnected, app?.id]);
 
   useEffect(() => {
     void loadOverview();
@@ -214,14 +236,36 @@ export const OverviewWorkspace = ({
   }, [loadOverview]);
 
   const loadAnalyticsPulse = useCallback(async () => {
-    if (!analyticsPortfolioReady) return;
     const currentGeneration = ++analyticsGeneration.current;
-    setAnalyticsPhase(analyticsLoadedOnce.current ? "refreshing" : "initial");
+    const scopeChanged = analyticsResolvedAccountsFingerprint.current !== accountsFingerprint;
+    if (scopeChanged) {
+      analyticsLoadedOnce.current = false;
+      setAnalyticsCatalog(null);
+      setAnalyticsSnapshot(null);
+    }
+    setAnalyticsPhase(scopeChanged || !analyticsLoadedOnce.current ? "initial" : "refreshing");
     setAnalyticsError(null);
     try {
-      const response = await api.analyticsOverview(overviewAnalyticsQuery(app.id));
+      const catalog = await api.analyticsPortfolio();
       if (currentGeneration !== analyticsGeneration.current) return;
+      if (!catalog.apps.length) {
+        analyticsLoadedOnce.current = true;
+        analyticsResolvedAccountsFingerprint.current = accountsFingerprint;
+        setAnalyticsCatalog(catalog);
+        setAnalyticsSnapshot(null);
+        setAnalyticsPhase("idle");
+        return;
+      }
+      const response = await api.analyticsOverview(overviewAnalyticsQuery());
+      if (currentGeneration !== analyticsGeneration.current) return;
+      if (response.catalogRevision !== catalog.catalogRevision
+        || analyticsPortfolioMembershipKey(catalog.apps.map((candidate) => candidate.id))
+        !== analyticsPortfolioMembershipKey(response.apps.map((candidate) => candidate.id))) {
+        throw new Error("Connected accounts changed while the Analytics overview was loading. Refresh to use one consistent portfolio snapshot.");
+      }
       analyticsLoadedOnce.current = true;
+      analyticsResolvedAccountsFingerprint.current = accountsFingerprint;
+      setAnalyticsCatalog(catalog);
       setAnalyticsSnapshot(response);
       setAnalyticsPhase("idle");
     } catch (error) {
@@ -229,26 +273,21 @@ export const OverviewWorkspace = ({
       setAnalyticsError(errorMessage(error, "Analytics could not be loaded from the local report cache."));
       setAnalyticsPhase("idle");
     }
-  }, [analyticsPortfolioReady, app.id]);
+  }, [accountsFingerprint]);
 
   useEffect(() => {
-    if (!analyticsPortfolioReady) {
-      analyticsGeneration.current += 1;
-      setAnalyticsPhase("waiting");
-      return;
-    }
     void loadAnalyticsPulse();
     return () => {
       analyticsGeneration.current += 1;
     };
-  }, [analyticsPortfolioReady, loadAnalyticsPulse]);
+  }, [loadAnalyticsPulse]);
 
   const refreshOverview = useCallback(async () => {
     await Promise.allSettled([
       loadOverview(),
-      analyticsPortfolioReady ? loadAnalyticsPulse() : Promise.resolve(),
+      loadAnalyticsPulse(),
     ]);
-  }, [analyticsPortfolioReady, loadAnalyticsPulse, loadOverview]);
+  }, [loadAnalyticsPulse, loadOverview]);
 
   const builds = useMemo(() => sortBuilds(snapshot?.builds ?? []), [snapshot?.builds]);
   const versions = useMemo(() => sortVersions(snapshot?.versions ?? []), [snapshot?.versions]);
@@ -260,7 +299,7 @@ export const OverviewWorkspace = ({
   const currentCampaigns = useMemo(() => campaigns.filter((campaign) => !campaign.deleted), [campaigns]);
   const plans = useMemo(() => activePlans(snapshot?.plans ?? []), [snapshot?.plans]);
   const planCount = pendingPlanCountLabel(snapshot?.plans ?? [], plans.length);
-  const plansCapped = (snapshot?.plans?.length ?? 0) >= 50;
+  const plansCapped = snapshot?.plansCapped ?? false;
   const loading = phase === "initial" && snapshot === null;
   const analyticsKpis = useMemo(() => {
     const byMetric = new Map(analyticsSnapshot?.kpis.map((kpi) => [kpi.metric, kpi]) ?? []);
@@ -276,19 +315,36 @@ export const OverviewWorkspace = ({
     () => overviewAnalyticsCompleteThrough(analyticsSnapshot?.metricCoverage ?? []),
     [analyticsSnapshot],
   );
-  const analyticsLoading = analyticsPhase === "initial"
-    || analyticsPhase === "refreshing"
-    || !analyticsPortfolioReady && !analyticsPortfolioError;
+  const analyticsAccountCount = analyticsCatalog?.sources.reduce((total, source) => total + source.accounts.length, 0) ?? 0;
+  const analyticsAppCount = analyticsCatalog?.apps.length ?? analyticsSnapshot?.apps.length ?? 0;
+  const analyticsCatalogIncomplete = Boolean(analyticsCatalog?.sources.length && !analyticsCatalog.complete);
+  const analyticsCoverageIssues = (analyticsSnapshot?.sourceCoverage ?? []).filter((source) => source.state !== "READY").map((coverage) => {
+    const source = analyticsCatalog?.sources.find((candidate) => candidate.id === coverage.sourceId);
+    const names = source?.accounts.map((account) => account.profileName).join(" / ") ?? "Connected account";
+    const state = coverage.state === "NO_DATA" ? "no cached data" : coverage.state === "SYNCING" ? "syncing" : coverage.state === "PARTIAL" ? "partial data" : "unavailable";
+    return `${names}: ${state}`;
+  });
+  for (const source of analyticsCatalog?.sources.filter((candidate) => candidate.state !== "READY") ?? []) {
+    const failedAccounts = source.accounts.filter((account) => account.state === "ERROR");
+    if (failedAccounts.length) {
+      for (const account of failedAccounts) analyticsCoverageIssues.push(`${account.profileName}: unavailable`);
+    } else {
+      const names = source.accounts.map((account) => account.profileName).join(" / ");
+      analyticsCoverageIssues.push(`${names}: ${source.state === "ERROR" ? "unavailable" : "partial app roster"}`);
+    }
+  }
+  const uniqueAnalyticsCoverageIssues = [...new Set(analyticsCoverageIssues)];
+  const analyticsLoading = analyticsPhase === "initial" || analyticsPhase === "refreshing";
   const refreshing = phase === "refreshing" || analyticsPhase === "refreshing";
   const workspaceBusy = phase !== "idle" || analyticsLoading;
-  const errorCount = Object.keys(errors).length + Number(Boolean(analyticsError || analyticsPortfolioError));
+  const errorCount = Object.keys(errors).length + Number(Boolean(analyticsError));
 
   return (
     <main className="workspace overview-workspace" aria-busy={workspaceBusy}>
       <header className="topbar overview-topbar">
         <div>
           <h1>Overview</h1>
-          <p>Performance and operational status for {app.name}.</p>
+          <p>{app ? `Portfolio performance and ${app.name} operations.` : "Portfolio performance across all connected accounts."}</p>
         </div>
         <button
           className={refreshing ? "button secondary overview-refresh refreshing" : "button secondary overview-refresh"}
@@ -328,20 +384,14 @@ export const OverviewWorkspace = ({
               <div>
                 <span className="overview-panel-icon"><ChartNoAxesCombined size={17} /></span>
                 <h2 id="overview-analytics-title">Analytics</h2>
-                <span className="overview-scope-label">Selected app · 30 days</span>
+                <span className="overview-scope-label">All accounts · 30 days</span>
               </div>
               <button className="overview-panel-action" type="button" onClick={onOpenAnalytics}>
                 Open analytics <ArrowRight size={15} />
               </button>
             </header>
 
-            {!analyticsPortfolioReady ? analyticsPortfolioError ? (
-              <InlineError
-                message={analyticsPortfolioError}
-                label="the complete analytics portfolio"
-                onRetry={() => void onRetryAnalyticsPortfolio()}
-              />
-            ) : <OverviewSkeleton /> : analyticsLoading && !analyticsSnapshot ? (
+            {analyticsLoading && !analyticsSnapshot ? (
               <OverviewSkeleton />
             ) : analyticsError && !analyticsSnapshot ? (
               <InlineError message={analyticsError} label="analytics" onRetry={() => void loadAnalyticsPulse()} />
@@ -350,6 +400,9 @@ export const OverviewWorkspace = ({
                 {analyticsError ? <InlineError message={analyticsError} label="analytics" onRetry={() => void loadAnalyticsPulse()} /> : null}
                 {analyticsHasData && analyticsKpis.length === overviewAnalyticsMetricIds.length ? (
                   <>
+                    {uniqueAnalyticsCoverageIssues.length || analyticsCatalogIncomplete ? (
+                      <div className="overview-analytics-coverage-note" role="status"><CircleAlert size={15} /><span><strong>Partial portfolio.</strong> Missing account or report data is excluded, not counted as zero. {uniqueAnalyticsCoverageIssues.join(" · ")}</span></div>
+                    ) : null}
                     <dl className="overview-analytics-rail">
                       {analyticsKpis.map((kpi) => {
                         const supportingText = analyticsMetricSupportingText(kpi);
@@ -372,6 +425,7 @@ export const OverviewWorkspace = ({
                     </dl>
                     <div className="overview-analytics-meta">
                       <strong>{status.mode === "demo" ? "Sample data" : "Apple reports"}</strong>
+                      <span>{analyticsAccountCount} {analyticsAccountCount === 1 ? "account" : "accounts"} · {analyticsAppCount} {analyticsAppCount === 1 ? "app" : "apps"}</span>
                       <span>{analyticsCompleteThrough
                         ? `Complete through ${shortDate(analyticsCompleteThrough)}`
                         : "Coverage varies by metric"}</span>
@@ -381,14 +435,14 @@ export const OverviewWorkspace = ({
                 ) : (
                   <div className="overview-service-empty overview-analytics-empty">
                     <span className="status"><span />No cached performance data</span>
-                    <p>Open Analytics to set up reports, sync data, or inspect availability for this app.</p>
+                    <p>Open Analytics to set up reports, sync accounts, or inspect portfolio coverage.</p>
                   </div>
                 )}
               </>
             ) : (
               <div className="overview-service-empty overview-analytics-empty">
-                <span className="status"><span />Analytics unavailable</span>
-                <p>Open Analytics to inspect report setup and availability for this app.</p>
+                <span className="status"><span />{analyticsCatalogIncomplete ? "Portfolio roster incomplete" : analyticsCatalog ? "No apps across connected accounts" : "Analytics unavailable"}</span>
+                <p>{analyticsCatalogIncomplete ? `Some connected accounts could not be read${uniqueAnalyticsCoverageIssues.length ? `: ${uniqueAnalyticsCoverageIssues.join(" · ")}` : ""}. Missing accounts are not counted as zero.` : analyticsCatalog ? "The connected App Store Connect accounts do not currently expose any apps." : "Open Analytics to inspect report setup and availability across connected accounts."}</p>
               </div>
             )}
           </section>
@@ -399,12 +453,12 @@ export const OverviewWorkspace = ({
                 <span className="overview-panel-icon"><FileText size={17} /></span>
                 <h2 id="overview-release-title">Release</h2>
               </div>
-              <button className="overview-panel-action" type="button" onClick={() => onNavigate("releases")}>
+              <button className="overview-panel-action" type="button" disabled={!app} title={app ? undefined : "Choose an account with an app to open Releases"} onClick={() => onNavigate("releases")}>
                 Open releases <ArrowRight size={15} />
               </button>
             </header>
 
-            {loading ? <OverviewSkeleton /> : errors.releases && !snapshot?.versions ? (
+            {!app ? <EmptyState>Choose an App Store Connect account with an app to see release status.</EmptyState> : loading ? <OverviewSkeleton /> : errors.releases && !snapshot?.versions ? (
               <InlineError message={errors.releases} label="releases" onRetry={() => void loadOverview()} />
             ) : primaryRelease ? (
               <>
@@ -463,12 +517,12 @@ export const OverviewWorkspace = ({
                 <span className="overview-panel-icon"><Send size={17} /></span>
                 <h2 id="overview-testflight-title">TestFlight</h2>
               </div>
-              <button className="overview-panel-action" type="button" onClick={() => onNavigate("testflight")}>
+              <button className="overview-panel-action" type="button" disabled={!app} title={app ? undefined : "Choose an account with an app to open TestFlight"} onClick={() => onNavigate("testflight")}>
                 View TestFlight <ArrowRight size={15} />
               </button>
             </header>
 
-            {loading ? <OverviewSkeleton /> : errors.testflight && !snapshot?.builds ? (
+            {!app ? <EmptyState>Choose an App Store Connect account with an app to see TestFlight status.</EmptyState> : loading ? <OverviewSkeleton /> : errors.testflight && !snapshot?.builds ? (
               <InlineError message={errors.testflight} label="TestFlight" onRetry={() => void loadOverview()} />
             ) : builds.length ? (
               <>
@@ -507,12 +561,12 @@ export const OverviewWorkspace = ({
                 <span className="overview-panel-icon"><BadgeDollarSign size={17} /></span>
                 <h2 id="overview-ads-title">Apple Ads</h2>
               </div>
-              <button className="overview-panel-action" type="button" onClick={adsConnected ? () => onNavigate("apple-ads") : onManageAppleServices}>
+              <button className="overview-panel-action" type="button" disabled={!app} title={app ? undefined : "Choose an account with an app to inspect Apple Ads"} onClick={adsConnected ? () => onNavigate("apple-ads") : onManageAppleServices}>
                 {adsConnected ? "Open Apple Ads" : "Manage services"} {adsConnected ? <ArrowRight size={15} /> : <Settings2 size={15} />}
               </button>
             </header>
 
-            {!adsConnected ? (
+            {!app ? <EmptyState>Choose an App Store Connect account with an app to see its Apple Ads campaigns.</EmptyState> : !adsConnected ? (
               <div className="overview-service-empty">
                 <span className="status"><span />Not connected</span>
                 <p>{appleAdsConnection.status.detail}</p>
@@ -532,7 +586,7 @@ export const OverviewWorkspace = ({
                 {currentCampaigns.length ? (
                   <div className="overview-table-wrap">
                     <table className="overview-table overview-campaign-table">
-                      <caption className="sr-only">Apple Ads campaigns for {app.name}</caption>
+                      <caption className="sr-only">Apple Ads campaigns for {app?.name ?? "the active app"}</caption>
                       <thead><tr><th>Campaign</th><th>Status</th><th>Daily budget</th><th>Countries / Regions</th></tr></thead>
                       <tbody>
                         {currentCampaigns.slice(0, 4).map((campaign) => (

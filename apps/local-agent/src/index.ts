@@ -8,6 +8,11 @@ import {
   AppleAdsCredentialsInputSchema,
   AppleAdsKeywordResearchInputSchema,
   AnalyticsOverviewQuerySchema,
+  AnalyticsOverviewQueryV2Schema,
+  AnalyticsPortfolioPendingPlansResponseSchema,
+  AnalyticsPortfolioReportRequestCreateInputSchema,
+  AnalyticsPortfolioReportRequestPlanResponseSchema,
+  AnalyticsPortfolioSyncInputSchema,
   AnalyticsReportRequestCreateInputSchema,
   AnalyticsSyncInputSchema,
   CreateAppleAdsAdGroupInputSchema,
@@ -27,8 +32,13 @@ import {
   UpsertCustomerReviewResponseInputSchema,
   UpdateVersionLocalizationsInputSchema,
 } from "@asc-studio/contracts";
-import type { AppSummary, ScreenshotDisplayType, ScreenshotUploadReceipt } from "@asc-studio/contracts";
-import { AscStudioService, DomainError } from "@asc-studio/core";
+import type {
+  AppSummary,
+  MutationPlan,
+  ScreenshotDisplayType,
+  ScreenshotUploadReceipt,
+} from "@asc-studio/contracts";
+import { AscStudioService, DomainError, type AnalyticsProvider } from "@asc-studio/core";
 import {
   AppleAdsApiError,
   AppleAdsCredentialUnavailableError,
@@ -54,6 +64,11 @@ import { handleMcpRequest } from "./mcp.js";
 import { SqlitePlanStore } from "./store.js";
 import { SqliteAnalyticsStore } from "./analytics-store.js";
 import { AnalyticsSyncBusyError, AnalyticsSyncCoordinator } from "./analytics-sync.js";
+import {
+  AnalyticsPortfolioCoordinator,
+  AnalyticsPortfolioError,
+  type AnalyticsPortfolioConnection,
+} from "./analytics-portfolio.js";
 import {
   createCustomerReviewReplyGenerator,
   createReleaseCopyTranslator,
@@ -515,7 +530,9 @@ const main = async () => {
   const databasePath = join(dataDirectory, databaseName);
   const store = new SqlitePlanStore(databasePath);
   const analyticsStore = new SqliteAnalyticsStore(databasePath);
-  await analyticsStore.failInterruptedAnalyticsSyncRuns(new Date().toISOString());
+  const interruptedAt = new Date().toISOString();
+  await analyticsStore.failInterruptedAnalyticsSyncRuns(interruptedAt);
+  analyticsStore.failInterruptedAnalyticsPortfolioSyncRuns(interruptedAt);
   const service = new AscStudioService({
     provider,
     adsProvider,
@@ -545,6 +562,142 @@ const main = async () => {
     now: () => new Date(),
     id: () => randomUUID(),
   });
+  const analyticsSyncReservations = new Set<string>();
+  const providerForCredentials = (credentials: Awaited<ReturnType<typeof credentialStore.loadConnection>>) => (
+    new AppStoreConnectProvider({ credentials, uploadDirectory: screenshotUploadsDirectory })
+  );
+  const listAnalyticsPortfolioConnections = async (): Promise<AnalyticsPortfolioConnection[]> => {
+    if (demoProvider) {
+      return [{
+        connectionId: "demo",
+        profileName: "Demo workspace",
+        issuerId: demoAnalyticsIssuerId,
+        active: true,
+        provider: demoProvider,
+      }];
+    }
+    const accounts = await credentialStore.list();
+    return await Promise.all(accounts.map(async (account) => {
+      const credentials = await credentialStore.loadConnection(account.id);
+      return {
+        connectionId: account.id,
+        profileName: account.profileName,
+        issuerId: credentials.issuerId,
+        active: account.active,
+        provider: providerForCredentials(credentials),
+      };
+    }));
+  };
+  const analyticsPortfolio = new AnalyticsPortfolioCoordinator({
+    listConnections: listAnalyticsPortfolioConnections,
+    store: analyticsStore,
+    acquireAccountRead: () => accountLock.acquireRead(),
+    now: () => new Date(),
+    id: () => randomUUID(),
+    digest: (value) => createHash("sha256").update(value).digest("hex"),
+    isIssuerSyncActive: (issuerId) => (
+      analyticsSync.isActive(issuerId) || analyticsSyncReservations.has(issuerId)
+    ),
+  });
+  const scopedAnalyticsService = (
+    connection: AnalyticsPortfolioConnection,
+    mutationCandidates: AnalyticsPortfolioConnection[] = [connection],
+  ) => {
+    const uniqueCandidates = [...new Map(
+      mutationCandidates.map((candidate) => [candidate.connectionId, candidate]),
+    ).values()];
+    let mutationConnection: AnalyticsPortfolioConnection | null = null;
+    const analyticsProvider: AnalyticsProvider = {
+      getAnalyticsStatus: () => connection.provider.getAnalyticsStatus(),
+      listAnalyticsReportRequests: (appId) => connection.provider.listAnalyticsReportRequests(appId),
+      syncAnalytics: (input) => connection.provider.syncAnalytics(input),
+      createAnalyticsReportRequest: async (input) => {
+        let lastAdminError: AnalyticsPermissionError | null = null;
+        for (const candidate of uniqueCandidates) {
+          try {
+            const created = await candidate.provider.createAnalyticsReportRequest(input);
+            mutationConnection = candidate;
+            return created;
+          } catch (error) {
+            if (error instanceof AnalyticsPermissionError && error.code === "analytics_admin_required") {
+              // This typed provider error is emitted only for an ASC 403 from
+              // the non-retrying create request, so no mutation occurred and
+              // trying the next same-issuer credential is safe.
+              lastAdminError = error;
+              continue;
+            }
+            throw error;
+          }
+        }
+        throw lastAdminError ?? new AnalyticsPermissionError(
+          "analytics_admin_required",
+          "An App Store Connect Admin must create an Analytics Reports request for this app.",
+        );
+      },
+    };
+    return new AscStudioService({
+      provider: connection.provider,
+      analyticsProvider,
+      analyticsStore,
+      store: {
+        savePlan: (plan) => store.savePortfolioAnalyticsPlan(plan, connection.issuerId),
+        getPlan: (planId) => store.getPlan(planId),
+        listPlans: (state, limit) => store.listPlans(state, limit),
+        claimPlan: (planId, expectedState, next) => store.claimPlan(planId, expectedState, next),
+        appendAudit: (event) => store.appendAudit({
+          ...event,
+          target: analyticsPortfolio.publicAppId(connection.issuerId, event.target),
+          summary: event.operation === "analytics.report_request.create"
+            && event.phase === "succeeded"
+            && mutationConnection
+            ? `${event.summary} via Apple account ${mutationConnection.profileName}.`
+            : event.summary,
+        }),
+        listAudit: (limit) => store.listAudit(limit),
+      },
+      now: () => new Date(),
+      id: () => randomUUID(),
+      digest: (value) => createHash("sha256").update(value).digest("hex"),
+    });
+  };
+  const loadAnalyticsPortfolioConnection = async (connectionId: string) => {
+    if (demoProvider && connectionId === "demo") {
+      return {
+        connectionId: "demo",
+        profileName: "Demo workspace",
+        issuerId: demoAnalyticsIssuerId,
+        active: true,
+        provider: demoProvider,
+      } satisfies AnalyticsPortfolioConnection;
+    }
+    if (demoProvider) {
+      throw new RequestError(
+        "connection_not_found",
+        "The Apple account used to create this Analytics plan is no longer connected.",
+        404,
+      );
+    }
+    const credentials = await credentialStore.loadConnection(connectionId);
+    const account = (await credentialStore.list()).find((candidate) => candidate.id === connectionId);
+    if (!account) {
+      throw new RequestError(
+        "connection_not_found",
+        "The Apple account used to create this Analytics plan is no longer connected.",
+        404,
+      );
+    }
+    return {
+      connectionId,
+      profileName: account.profileName,
+      issuerId: credentials.issuerId,
+      active: account.active,
+      provider: providerForCredentials(credentials),
+    } satisfies AnalyticsPortfolioConnection;
+  };
+  const sanitizeAnalyticsPlan = (plan: MutationPlan, issuerId: string) => {
+    if (plan.operation !== "analytics.report_request.create") return plan;
+    return analyticsPortfolio.sanitizeReportRequestPlan(plan, issuerId);
+  };
   const requireAnalyticsApps = async (appIds: string[], allowProvider = false) => {
     if (new Set(appIds).size !== appIds.length) {
       throw new RequestError("analytics_duplicate_apps", "Choose each portfolio app only once.", 400);
@@ -672,7 +825,14 @@ const main = async () => {
 
       const isOpenAiConnectionRequest = url.pathname === "/api/connections/openai"
         || url.pathname === "/api/connections/openai/reset-vault";
-      if (mode === "live" && (isApiRequest || isMcpRequest) && !isOpenAiConnectionRequest) {
+      const ownsPortfolioSyncLease = request.method === "POST"
+        && url.pathname === "/api/analytics/portfolio/sync";
+      if (
+        mode === "live"
+        && (isApiRequest || isMcpRequest)
+        && !isOpenAiConnectionRequest
+        && !ownsPortfolioSyncLease
+      ) {
         const changesActiveAccount = (
           request.method === "POST"
           && (
@@ -740,6 +900,25 @@ const main = async () => {
         json(response, 200, await service.getStatus());
         return;
       }
+      if (request.method === "GET" && url.pathname === "/api/analytics/portfolio") {
+        json(response, 200, await analyticsPortfolio.refresh());
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/analytics/portfolio/status") {
+        json(response, 200, await analyticsPortfolio.status());
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/analytics/portfolio/plans") {
+        store.expirePortfolioAnalyticsPlans(new Date().toISOString());
+        const entries = await store.listPortfolioAnalyticsPlans("awaiting_confirmation", 50);
+        const plans = entries.flatMap(({ plan, issuerId }) => (
+          plan.operation === "analytics.report_request.create"
+            ? [analyticsPortfolio.sanitizeReportRequestPlan(plan, issuerId)]
+            : []
+        ));
+        json(response, 200, AnalyticsPortfolioPendingPlansResponseSchema.parse({ plans }));
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/analytics/status") {
         const analyticsStatus = await service.getAnalyticsStatus();
         const activeRun = analyticsStatus.issuerId
@@ -772,10 +951,38 @@ const main = async () => {
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/analytics/overview") {
-        const input = AnalyticsOverviewQuerySchema.parse(await readBody(request));
-        requireAnalyticsDateRange(input.startDate, input.endDate);
-        const context = await requireAnalyticsApps(input.appIds);
-        json(response, 200, await service.getAnalyticsOverview(input, context));
+        const body = await readBody(request);
+        if (body && typeof body === "object" && "schemaVersion" in body && body.schemaVersion === 2) {
+          const input = AnalyticsOverviewQueryV2Schema.parse(body);
+          requireAnalyticsDateRange(input.startDate, input.endDate);
+          json(response, 200, await service.getAnalyticsPortfolioOverview(
+            input,
+            analyticsPortfolio.requireOverviewContext(input),
+          ));
+        } else {
+          const input = AnalyticsOverviewQuerySchema.parse(body);
+          requireAnalyticsDateRange(input.startDate, input.endDate);
+          const context = await requireAnalyticsApps(input.appIds);
+          json(response, 200, await service.getAnalyticsOverview(input, context));
+        }
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/analytics/portfolio/sync") {
+        const input = AnalyticsPortfolioSyncInputSchema.parse(await readBody(request));
+        json(response, 202, await analyticsPortfolio.startSync(input));
+        return;
+      }
+      const analyticsPortfolioSyncMatch = url.pathname.match(/^\/api\/analytics\/portfolio\/sync\/([^/]+)$/);
+      if (request.method === "GET" && analyticsPortfolioSyncMatch?.[1]) {
+        const run = analyticsPortfolio.getSync(decodeURIComponent(analyticsPortfolioSyncMatch[1]));
+        if (!run) {
+          throw new RequestError(
+            "analytics_sync_not_found",
+            "The portfolio Analytics sync run was not found in this workspace.",
+            404,
+          );
+        }
+        json(response, 200, run);
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/analytics/sync") {
@@ -789,15 +996,30 @@ const main = async () => {
             409,
           );
         }
-        // Keep role failures synchronous and actionable instead of queuing a job
-        // that can only fail later with an opaque upstream message.
-        const reportRequests = (await Promise.all(
-          input.appIds.map((appId) => service.listAnalyticsReportRequests(appId)),
-        )).flat();
-        json(response, 202, await analyticsSync.start(analyticsStatus.issuerId, input, {
-          ...analyticsStatus,
-          reportRequests,
-        }));
+        if (
+          analyticsPortfolio.hasActiveIssuer(analyticsStatus.issuerId)
+          || analyticsSyncReservations.has(analyticsStatus.issuerId)
+        ) {
+          throw new RequestError(
+            "analytics_sync_scope_busy",
+            "A portfolio Analytics sync is already using this Apple organization. Wait for it to finish before starting an app-scoped sync.",
+            409,
+          );
+        }
+        analyticsSyncReservations.add(analyticsStatus.issuerId);
+        try {
+          // Keep role failures synchronous and actionable instead of queuing a job
+          // that can only fail later with an opaque upstream message.
+          const reportRequests = (await Promise.all(
+            input.appIds.map((appId) => service.listAnalyticsReportRequests(appId)),
+          )).flat();
+          json(response, 202, await analyticsSync.start(analyticsStatus.issuerId, input, {
+            ...analyticsStatus,
+            reportRequests,
+          }));
+        } finally {
+          analyticsSyncReservations.delete(analyticsStatus.issuerId);
+        }
         return;
       }
       const analyticsSyncMatch = url.pathname.match(/^\/api\/analytics\/sync\/([^/]+)$/);
@@ -925,6 +1147,7 @@ const main = async () => {
         await appleAdsCredentialStore.reset();
         await credentialStore.reset();
         portfolioAppsByIssuer.clear();
+        analyticsPortfolio.invalidate();
         json(response, 200, { status: await service.getStatus(), accounts: [] });
         return;
       }
@@ -942,6 +1165,7 @@ const main = async () => {
         if (!candidateStatus.connected) throw new RequestError("connection_failed", candidateStatus.detail, 422);
         await credentialStore.save(input);
         portfolioAppsByIssuer.clear();
+        analyticsPortfolio.invalidate();
         json(response, 200, { status: await service.getStatus(), accounts: await credentialStore.list() });
         return;
       }
@@ -957,6 +1181,7 @@ const main = async () => {
         if (!nextStatus.connected) throw new RequestError("connection_failed", nextStatus.detail, 422);
         await credentialStore.activate(connectionId);
         portfolioAppsByIssuer.clear();
+        analyticsPortfolio.invalidate();
         json(response, 200, { status: nextStatus, accounts: await credentialStore.list() });
         return;
       }
@@ -967,6 +1192,7 @@ const main = async () => {
         await appleAdsCredentialStore.removeLinked(connectionId);
         await credentialStore.remove(connectionId);
         portfolioAppsByIssuer.clear();
+        analyticsPortfolio.invalidate();
         json(response, 200, { status: await service.getStatus(), accounts: await credentialStore.list() });
         return;
       }
@@ -1180,7 +1406,9 @@ const main = async () => {
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/plans") {
-        json(response, 200, { plans: await service.listPendingPlans(50) });
+        // Filter marker-backed V2 plans in SQL before LIMIT so a burst of V2
+        // plans cannot crowd older V1 plans out of this paginated feed.
+        json(response, 200, { plans: await store.listNonPortfolioPlans("awaiting_confirmation", 50) });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/plans/version") {
@@ -1209,8 +1437,24 @@ const main = async () => {
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/plans/analytics-report-request") {
-        const input = AnalyticsReportRequestCreateInputSchema.parse(await readBody(request));
-        json(response, 201, { plan: await service.createAnalyticsReportRequestPlan(input, "gui") });
+        const body = await readBody(request);
+        if (body && typeof body === "object" && "schemaVersion" in body && body.schemaVersion === 2) {
+          const input = AnalyticsPortfolioReportRequestCreateInputSchema.parse(body);
+          const resolved = analyticsPortfolio.resolveApp(input.appId);
+          const internalPlan = await scopedAnalyticsService(resolved.connection).createAnalyticsReportRequestPlan({
+            appId: resolved.app.rawAppId,
+            accessType: input.accessType,
+          }, "gui");
+          if (internalPlan.operation !== "analytics.report_request.create") {
+            throw new Error("Analytics plan creation returned an unexpected operation.");
+          }
+          json(response, 201, AnalyticsPortfolioReportRequestPlanResponseSchema.parse({
+            plan: analyticsPortfolio.sanitizeReportRequestPlan(internalPlan, resolved.source.issuerId),
+          }));
+        } else {
+          const input = AnalyticsReportRequestCreateInputSchema.parse(body);
+          json(response, 201, { plan: await service.createAnalyticsReportRequestPlan(input, "gui") });
+        }
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/plans/apple-ads/campaign-create") {
@@ -1241,16 +1485,58 @@ const main = async () => {
       const confirmMatch = url.pathname.match(/^\/api\/plans\/([^/]+)\/confirm$/);
       if (request.method === "POST" && confirmMatch?.[1]) {
         const input = z.object({ digest: z.string().length(64) }).parse(await readBody(request));
-        const plan = await service.confirmPlan(decodeURIComponent(confirmMatch[1]), input.digest, "gui");
+        const planId = decodeURIComponent(confirmMatch[1]);
+        const savedPlan = await store.getPlan(planId);
+        const portfolioPlanIssuer = savedPlan?.operation === "analytics.report_request.create"
+          ? store.getPortfolioAnalyticsPlanIssuer(planId)
+          : null;
+        const plan = savedPlan?.operation === "analytics.report_request.create" && portfolioPlanIssuer
+          ? await (async () => {
+            if (!savedPlan.context.connectionId) {
+              throw new RequestError(
+                "workspace_disconnected",
+                "The Apple account used for this Analytics plan is no longer connected.",
+                409,
+              );
+            }
+            const connection = await loadAnalyticsPortfolioConnection(savedPlan.context.connectionId);
+            if (connection.issuerId !== portfolioPlanIssuer) {
+              throw new RequestError(
+                "workspace_changed",
+                "The Apple organization for this Analytics plan changed. Review a fresh plan.",
+                409,
+              );
+            }
+            if (!analyticsPortfolio.catalog()) await analyticsPortfolio.refresh();
+            const resolved = analyticsPortfolio.resolvePlanConnections(
+              portfolioPlanIssuer,
+              savedPlan.target.appId,
+              connection.connectionId,
+            );
+            const candidates = resolved.connections.map((candidate) => (
+              candidate.connectionId === connection.connectionId ? connection : candidate
+            ));
+            return scopedAnalyticsService(connection, candidates).confirmPlan(planId, input.digest, "gui");
+          })()
+          : await service.confirmPlan(planId, input.digest, "gui");
         if (plan.operation === "version.update_screenshots" && plan.state === "succeeded") {
           await Promise.all(plan.after.uploads.map(discardScreenshotUpload));
         }
-        json(response, 200, { plan });
+        json(response, 200, plan.operation === "analytics.report_request.create" && portfolioPlanIssuer
+          ? AnalyticsPortfolioReportRequestPlanResponseSchema.parse({
+            plan: sanitizeAnalyticsPlan(plan, portfolioPlanIssuer),
+          })
+          : { plan });
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/activity") {
         const limit = Number(url.searchParams.get("limit") ?? 50);
-        json(response, 200, { events: await service.listAudit(Number.isFinite(limit) ? limit : 50) });
+        const events = await service.listAudit(Number.isFinite(limit) ? limit : 50);
+        json(response, 200, { events: events.map((event) => (
+          event.operation === "analytics.report_request.create" && !event.target.startsWith("app_")
+            ? { ...event, target: "analytics-app" }
+            : event
+        )) });
         return;
       }
       json(response, 404, { error: { code: "not_found", message: "Route not found." } });
@@ -1274,6 +1560,10 @@ const main = async () => {
         return;
       }
       if (error instanceof AnalyticsSyncBusyError) {
+        json(response, error.status, { error: { code: error.code, message: error.message } });
+        return;
+      }
+      if (error instanceof AnalyticsPortfolioError) {
         json(response, error.status, { error: { code: error.code, message: error.message } });
         return;
       }
@@ -1344,7 +1634,7 @@ const main = async () => {
     }, 5_000);
     forceExit.unref();
     server.close(() => {
-      void analyticsSync.waitForAll().then(() => {
+      void Promise.all([analyticsSync.waitForAll(), analyticsPortfolio.waitForAll()]).then(() => {
         clearTimeout(forceExit);
         analyticsStore.close();
         store.close();

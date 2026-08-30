@@ -44,8 +44,10 @@ export const analyticsDateRange = (preset: AnalyticsRangePreset, endDate: string
   endDate,
 });
 
+export const analyticsPortfolioMembershipKey = (appIds: readonly string[]) => [...appIds].sort().join("\u001f");
+
 export const analyticsQueryKey = (input: {
-  appIds: string[];
+  portfolioMembership: string;
   scopeId: string;
   range: AnalyticsRangePreset;
   compare: "NONE" | "PREVIOUS_PERIOD";

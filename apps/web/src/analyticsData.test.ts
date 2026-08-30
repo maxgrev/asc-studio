@@ -3,6 +3,7 @@ import {
   analyticsDateRange,
   analyticsFilterCount,
   analyticsFiltersFromSearchParams,
+  analyticsPortfolioMembershipKey,
   analyticsQueryKey,
   emptyAnalyticsFilters,
   chartPoints,
@@ -23,13 +24,20 @@ describe("analyticsData", () => {
     expect(shiftIsoDate("2024-03-01", -1)).toBe("2024-02-29");
   });
 
-  it("keeps request identity sensitive to every visible query control", () => {
-    const base = { appIds: ["app-1", "app-2"], scopeId: "all", range: "30d" as const, compare: "PREVIOUS_PERIOD" as const, filters: emptyAnalyticsFilters() };
+  it("keeps request identity sensitive to every visible query control and opaque portfolio membership", () => {
+    const base = { portfolioMembership: "opaque-app-1", scopeId: "all", range: "30d" as const, compare: "PREVIOUS_PERIOD" as const, filters: emptyAnalyticsFilters() };
     expect(analyticsQueryKey(base)).not.toBe(analyticsQueryKey({ ...base, scopeId: "app-1" }));
     expect(analyticsQueryKey(base)).not.toBe(analyticsQueryKey({ ...base, range: "90d" }));
     expect(analyticsQueryKey(base)).not.toBe(analyticsQueryKey({ ...base, compare: "NONE" }));
-    expect(analyticsQueryKey(base)).not.toBe(analyticsQueryKey({ ...base, appIds: ["app-1"] }));
+    expect(analyticsQueryKey(base)).not.toBe(analyticsQueryKey({ ...base, portfolioMembership: "opaque-app-1\u001fopaque-app-2" }));
     expect(analyticsQueryKey(base)).not.toBe(analyticsQueryKey({ ...base, filters: { ...base.filters, territories: ["US"] } }));
+  });
+
+  it("makes opaque portfolio membership stable across catalog ordering", () => {
+    expect(analyticsPortfolioMembershipKey(["opaque-app-2", "opaque-app-1"]))
+      .toBe(analyticsPortfolioMembershipKey(["opaque-app-1", "opaque-app-2"]));
+    expect(analyticsPortfolioMembershipKey(["opaque-app-1"]))
+      .not.toBe(analyticsPortfolioMembershipKey(["opaque-app-1", "opaque-app-2"]));
   });
 
   it("round-trips one exact facet per dimension and clears empty filters", () => {

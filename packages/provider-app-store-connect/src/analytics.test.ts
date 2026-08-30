@@ -413,6 +413,42 @@ describe("AppStoreConnectProvider analytics transport", () => {
     expect(result.batches.some((batch) => batch.reportName.includes("Detailed"))).toBe(false);
   });
 
+  it("treats a configured report that Apple is still preparing as a successful check", async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === "/v1/apps/1234567890/analyticsReportRequests") {
+        return json(page([{
+          type: "analyticsReportRequests",
+          id: "request-waiting",
+          attributes: { accessType: "ONGOING", stoppedDueToInactivity: false },
+        }]));
+      }
+      if (url.pathname === "/v1/analyticsReportRequests/request-waiting/reports") {
+        return json(page([{
+          type: "analyticsReports",
+          id: "report-sessions",
+          attributes: { name: "App Sessions Standard", category: "APP_USAGE" },
+        }]));
+      }
+      if (url.pathname === "/v1/analyticsReports/report-sessions/instances") return json(page([]));
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    }) as unknown as typeof fetch;
+    const provider = new AppStoreConnectProvider({ credentials, fetch: mockFetch, now: () => new Date("2026-08-22T12:00:00Z") });
+
+    const result = await provider.syncAnalytics({ schemaVersion: 1, appIds: ["1234567890"], force: false });
+
+    expect(result).toMatchObject({
+      state: "SUCCEEDED",
+      batches: [],
+      error: null,
+      freshness: {
+        dataThrough: null,
+        partial: true,
+        detail: expect.stringContaining("has not supplied"),
+      },
+    });
+  });
+
   it("creates the exact report request document once and never retries the write", async () => {
     let body: unknown;
     const mockFetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {

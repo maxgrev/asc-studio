@@ -69,6 +69,13 @@ export const supportedAnalyticsReportNames = [
 ] as const;
 export type SupportedAnalyticsReportName = typeof supportedAnalyticsReportNames[number];
 
+// Pre-orders are parsed for forward-compatible provenance, but they do not
+// currently contribute any metric shown by ASC Studio. Their absence must not
+// make an otherwise complete dashboard look broken.
+const requiredAnalyticsReportNames = supportedAnalyticsReportNames.filter((name) => (
+  name !== "App Store Pre-Orders Standard"
+));
+
 export class AnalyticsPermissionError extends Error {
   readonly status = 403;
 
@@ -739,7 +746,8 @@ export class AppStoreConnectAnalyticsReports {
     const snapshotId = evidenceIdFor("analytics-snapshot", { issuerId, runId, startedAt });
     const reportRequests: AnalyticsReportRequest[] = [];
     const batches: AnalyticsFactBatch[] = [];
-    const issues: string[] = [];
+    const waiting: string[] = [];
+    const failures: string[] = [];
     for (const appId of uniqueAppIds) {
       this.assertAppId(appId);
       let requests: AnalyticsReportRequest[];
@@ -748,24 +756,30 @@ export class AppStoreConnectAnalyticsReports {
         reportRequests.push(...requests);
       } catch (error) {
         rethrowAnalyticsReadPermission(error);
-        issues.push(`App ${appId}: ${errorMessage(error)}`);
+        failures.push(`App ${appId}: ${errorMessage(error)}`);
         continue;
       }
       if (requests.length === 0) {
-        issues.push(`App ${appId} has no Analytics Reports request.`);
+        waiting.push(`App ${appId} has no Analytics Reports request.`);
         continue;
       }
       for (const request of requests) {
         try {
-          batches.push(...await this.syncRequest(request, issuerId, snapshotId, issues));
+          batches.push(...await this.syncRequest(request, issuerId, snapshotId, waiting, failures));
         } catch (error) {
           rethrowAnalyticsReadPermission(error);
-          issues.push(`Report request ${request.id}: ${errorMessage(error)}`);
+          failures.push(`Report request ${request.id}: ${errorMessage(error)}`);
         }
       }
     }
-    if (batches.length === 0 && issues.length === 0) issues.push("No complete daily Analytics Report segments are available yet.");
-    const state = issues.length === 0 ? "SUCCEEDED" : batches.length > 0 ? "PARTIAL" : "FAILED";
+    if (batches.length === 0 && waiting.length === 0 && failures.length === 0) {
+      waiting.push("No complete daily Analytics Report segments are available yet.");
+    }
+    const state = failures.length > 0
+      ? batches.length > 0 ? "PARTIAL" : "FAILED"
+      : batches.length > 0 && waiting.length > 0
+        ? "PARTIAL"
+        : "SUCCEEDED";
     const completedAt = this.now().toISOString();
     const additiveMetrics = Object.keys(ANALYTICS_METRIC_COMPLETENESS_DAYS) as AnalyticsAdditiveMetricId[];
     const completeDates = uniqueAppIds.flatMap((appId) => additiveMetrics.map((metric) => {
@@ -800,7 +814,8 @@ export class AppStoreConnectAnalyticsReports {
         runId,
         appIds: uniqueAppIds,
         batches: batches.map((batch) => batch.evidenceId),
-        issues,
+        waiting,
+        failures,
       }),
       freshness: {
         syncedAt: completedAt,
@@ -809,9 +824,15 @@ export class AppStoreConnectAnalyticsReports {
         partial: freshnessPartial,
         detail: dataThrough
           ? `Apple Analytics Reports have continuous settled observations through ${dataThrough}; newer numeric facts remain partial during report-specific correction windows of two to five days.`
-          : "Apple has not supplied a complete supported daily report segment yet.",
+          : failures.length > 0
+            ? "Apple could not finish checking every Analytics report."
+            : "Apple has not supplied a complete supported daily report segment yet.",
       },
-      error: issues.length > 0 ? issues.join(" ") : null,
+      error: state === "FAILED"
+        ? failures.join(" ")
+        : state === "PARTIAL"
+          ? [...failures, ...waiting].join(" ")
+          : null,
     };
     this.lastSync = result;
     return result;
@@ -821,7 +842,8 @@ export class AppStoreConnectAnalyticsReports {
     request: AnalyticsReportRequest,
     issuerId: string,
     snapshotId: string,
-    issues: string[],
+    waiting: string[],
+    failures: string[],
   ): Promise<AnalyticsFactBatch[]> {
     const query = new URLSearchParams({
       limit: "200",
@@ -839,16 +861,16 @@ export class AppStoreConnectAnalyticsReports {
       throw new Error("App Store Connect returned duplicate supported Analytics Reports.");
     }
     const availableNames = new Set(reports.map((report) => report.attributes.name));
-    for (const name of supportedAnalyticsReportNames) {
-      if (!availableNames.has(name)) issues.push(`Report request ${request.id} does not include ${name}.`);
+    for (const name of requiredAnalyticsReportNames) {
+      if (!availableNames.has(name)) waiting.push(`Report request ${request.id} does not include ${name}.`);
     }
     const batches: AnalyticsFactBatch[] = [];
     for (const report of reports) {
       try {
-        batches.push(...await this.syncReport(request, report, issuerId, snapshotId, issues));
+        batches.push(...await this.syncReport(request, report, issuerId, snapshotId, waiting, failures));
       } catch (error) {
         rethrowAnalyticsReadPermission(error);
-        issues.push(`${report.attributes.name}: ${errorMessage(error)}`);
+        failures.push(`${report.attributes.name}: ${errorMessage(error)}`);
       }
     }
     return batches;
@@ -859,7 +881,8 @@ export class AppStoreConnectAnalyticsReports {
     report: AnalyticsReportResource & { attributes: { name: SupportedAnalyticsReportName } },
     issuerId: string,
     snapshotId: string,
-    issues: string[],
+    waiting: string[],
+    failures: string[],
   ): Promise<AnalyticsFactBatch[]> {
     const definition = reportDefinitions[report.attributes.name];
     if (report.attributes.category !== definition.category) {
@@ -876,7 +899,7 @@ export class AppStoreConnectAnalyticsReports {
     );
     const instances = pages.flatMap((page) => page.data);
     if (instances.length === 0) {
-      issues.push(`${report.attributes.name} has no generated daily instances yet.`);
+      waiting.push(`${report.attributes.name} has no generated daily instances yet.`);
       return [];
     }
     const batches: AnalyticsFactBatch[] = [];
@@ -890,10 +913,10 @@ export class AppStoreConnectAnalyticsReports {
       try {
         const batch = await this.syncInstance(request, report, instance, issuerId, snapshotId);
         if (batch) batches.push(batch);
-        else issues.push(`${report.attributes.name} instance ${instance.id} has no downloadable segments.`);
+        else waiting.push(`${report.attributes.name} instance ${instance.id} has no downloadable segments.`);
       } catch (error) {
         rethrowAnalyticsReadPermission(error);
-        issues.push(`${report.attributes.name} instance ${instance.id}: ${errorMessage(error)}`);
+        failures.push(`${report.attributes.name} instance ${instance.id}: ${errorMessage(error)}`);
       }
     }
     return batches;

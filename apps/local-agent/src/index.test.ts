@@ -3,8 +3,20 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import {
+  AnalyticsOverviewResponseV2Schema,
+  AnalyticsPortfolioCatalogResponseSchema,
+  AnalyticsPortfolioPendingPlansResponseSchema,
+  AnalyticsPortfolioReportRequestPlanResponseSchema,
+  AnalyticsPortfolioStatusResponseSchema,
+  AnalyticsPortfolioSyncResponseSchema,
+  type MutationPlan,
+} from "@asc-studio/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { SqliteAnalyticsStore } from "./analytics-store.js";
+import { SqlitePlanStore } from "./store.js";
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url));
 const launchArguments = ["--import", "tsx", "src/index.ts"];
@@ -24,6 +36,9 @@ interface StartAgentOptions {
   environment?: Record<string, string>;
   mockOpenAiValidation?: boolean;
   mockAnalyticsForbidden?: boolean;
+  mockAnalyticsPortfolioLease?: boolean;
+  mockAnalyticsWaiting?: boolean;
+  mockAnalyticsAdminFallback?: boolean;
   prepareDataDirectory?: (dataDirectory: string) => Promise<void>;
 }
 
@@ -92,6 +107,99 @@ const startAgent = async (options: StartAgentOptions = {}): Promise<RunningAgent
     ].join("\n"), "utf8");
     preloadPaths.push(preloadPath);
   }
+  if (options.mockAnalyticsPortfolioLease) {
+    const preloadPath = join(dataDirectory, "mock-analytics-portfolio-lease.mjs");
+    const providerCallLog = join(dataDirectory, "apple-provider-calls.log");
+    const discoveryGate = join(dataDirectory, "portfolio-discovery-release");
+    await writeFile(providerCallLog, "", "utf8");
+    await writeFile(preloadPath, [
+      "import { appendFileSync, existsSync } from 'node:fs';",
+      "const originalFetch = globalThis.fetch;",
+      `const providerCallLog = ${JSON.stringify(providerCallLog)};`,
+      `const discoveryGate = ${JSON.stringify(discoveryGate)};`,
+      "const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });",
+      "globalThis.fetch = async (input, init) => {",
+      "  const url = new URL(String(input));",
+      "  if (url.hostname !== 'api.appstoreconnect.apple.com') return originalFetch(input, init);",
+      "  appendFileSync(providerCallLog, `${init?.method ?? 'GET'} ${url.pathname}${url.search}\\n`);",
+      "  if (url.pathname === '/v1/apps') {",
+      "    if (url.searchParams.get('limit') !== '1') {",
+      "      const deadline = Date.now() + 10000;",
+      "      while (!existsSync(discoveryGate) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));",
+      "      if (!existsSync(discoveryGate)) return json({ errors: [{ status: '503', detail: 'Discovery gate timed out.' }] }, 503);",
+      "    }",
+      "    return json({ data: [{ type: 'apps', id: '1234567890', attributes: { name: 'Lease Test', bundleId: 'com.example.lease-test' } }], links: { self: url.toString() } });",
+      "  }",
+      "  if (url.pathname === '/v1/apps/1234567890/analyticsReportRequests') {",
+      "    return json({ data: [{ type: 'analyticsReportRequests', id: 'raw-lease-request', attributes: { accessType: 'ONGOING', stoppedDueToInactivity: false } }], links: { self: url.toString() } });",
+      "  }",
+      "  if (url.pathname === '/v1/analyticsReportRequests/raw-lease-request/reports') {",
+      "    return json({ data: [], links: { self: url.toString() } });",
+      "  }",
+      "  return json({ errors: [{ status: '404', detail: `Unexpected fixture request: ${url.pathname}` }] }, 404);",
+      "};",
+    ].join("\n"), "utf8");
+    preloadPaths.push(preloadPath);
+  }
+  if (options.mockAnalyticsWaiting) {
+    const preloadPath = join(dataDirectory, "mock-analytics-waiting.mjs");
+    await writeFile(preloadPath, [
+      "const originalFetch = globalThis.fetch;",
+      "const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });",
+      "globalThis.fetch = async (input, init) => {",
+      "  const url = new URL(String(input));",
+      "  if (url.hostname !== 'api.appstoreconnect.apple.com') return originalFetch(input, init);",
+      "  if (url.pathname === '/v1/apps') {",
+      "    return json({ data: [{ type: 'apps', id: '1234567890', attributes: { name: 'Active App', bundleId: 'com.example.active' } }], links: { self: url.toString() } });",
+      "  }",
+      "  if (url.pathname === '/v1/apps/1234567890/analyticsReportRequests') {",
+      "    return json({ data: [{ type: 'analyticsReportRequests', id: 'raw-active-request', attributes: { accessType: 'ONGOING', stoppedDueToInactivity: false } }], links: { self: url.toString() } });",
+      "  }",
+      "  return json({ errors: [{ status: '404', detail: `Unexpected fixture request: ${url.pathname}` }] }, 404);",
+      "};",
+    ].join("\n"), "utf8");
+    preloadPaths.push(preloadPath);
+  }
+  if (options.mockAnalyticsAdminFallback) {
+    const preloadPath = join(dataDirectory, "mock-analytics-admin-fallback.mjs");
+    const providerCallLog = join(dataDirectory, "apple-provider-calls.log");
+    await writeFile(providerCallLog, "", "utf8");
+    await writeFile(preloadPath, [
+      "import { appendFileSync } from 'node:fs';",
+      "const originalFetch = globalThis.fetch;",
+      `const providerCallLog = ${JSON.stringify(providerCallLog)};`,
+      "const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });",
+      "const keyId = (init) => {",
+      "  const authorization = new Headers(init?.headers).get('authorization') ?? '';",
+      "  try { return JSON.parse(Buffer.from(authorization.split(' ')[1].split('.')[0], 'base64url').toString('utf8')).kid ?? 'unknown'; } catch { return 'unknown'; }",
+      "};",
+      "globalThis.fetch = async (input, init) => {",
+      "  const url = new URL(String(input));",
+      "  if (url.hostname !== 'api.appstoreconnect.apple.com') return originalFetch(input, init);",
+      "  const kid = keyId(init);",
+      "  if (url.pathname === '/v1/apps') {",
+      "    return json({ data: [{ type: 'apps', id: '1234567890', attributes: { name: 'Fallback App', bundleId: 'com.example.fallback' } }], links: { self: url.toString() } });",
+      "  }",
+      "  if (url.pathname === '/v1/apps/1234567890/analyticsReportRequests' && (init?.method ?? 'GET') === 'GET') {",
+      "    return json({ data: [], links: { self: url.toString() } });",
+      "  }",
+      "  if (url.pathname === '/v1/analyticsReportRequests' && init?.method === 'POST') {",
+      "    const body = JSON.parse(String(init.body));",
+      "    const accessType = body.data.attributes.accessType;",
+      "    appendFileSync(providerCallLog, `${kid} POST ${accessType}\n`);",
+      "    if (kid === 'READ123456' && accessType === 'ONGOING') {",
+      "      return json({ errors: [{ status: '500', code: 'UNEXPECTED_ERROR', detail: 'Transient upstream failure.' }] }, 500);",
+      "    }",
+      "    if (kid === 'READ123456') {",
+      "      return json({ errors: [{ status: '403', code: 'FORBIDDEN', detail: 'Admin role required.' }] }, 403);",
+      "    }",
+      "    return json({ data: { type: 'analyticsReportRequests', id: 'raw-created-request', attributes: { accessType, stoppedDueToInactivity: false }, relationships: { app: { data: { type: 'apps', id: '1234567890' } } } } }, 201);",
+      "  }",
+      "  return json({ errors: [{ status: '404', detail: `Unexpected fixture request: ${url.pathname}` }] }, 404);",
+      "};",
+    ].join("\n"), "utf8");
+    preloadPaths.push(preloadPath);
+  }
   const childArguments = [...preloadPaths.flatMap((path) => ["--import", path]), ...launchArguments];
   const child = spawn(process.execPath, childArguments, {
     cwd: appRoot,
@@ -129,7 +237,11 @@ const startAgent = async (options: StartAgentOptions = {}): Promise<RunningAgent
         baseUrl: `http://127.0.0.1:${match[1]}`,
         child,
         dataDirectory,
-        providerCallLog: options.mockAnalyticsForbidden ? join(dataDirectory, "apple-provider-calls.log") : null,
+        providerCallLog: options.mockAnalyticsForbidden
+          || options.mockAnalyticsPortfolioLease
+          || options.mockAnalyticsAdminFallback
+          ? join(dataDirectory, "apple-provider-calls.log")
+          : null,
       });
     });
     child.stderr?.on("data", (chunk: string) => { stderr += chunk; });
@@ -343,6 +455,462 @@ describe("local-agent analytics permissions", () => {
         message: expect.stringContaining("Sales and Reports"),
       },
     });
+  });
+});
+
+describe("local-agent legacy Analytics status isolation", () => {
+  let agent: RunningAgent | undefined;
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const activeIssuerId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const rawPortfolioChildRunId = "raw-inactive-portfolio-child";
+
+  beforeAll(async () => {
+    agent = await startAgent({
+      mode: "live",
+      mockAnalyticsWaiting: true,
+      environment: {
+        ASC_STUDIO_PROFILE_NAME: "Active reports key",
+        ASC_STUDIO_ISSUER_ID: activeIssuerId,
+        ASC_STUDIO_KEY_ID: "ACTIVE1234",
+        ASC_STUDIO_PRIVATE_KEY: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      },
+      prepareDataDirectory: async (dataDirectory) => {
+        const analyticsStore = new SqliteAnalyticsStore(join(dataDirectory, "live.sqlite"));
+        await analyticsStore.savePortfolioChildAnalyticsSyncRun({
+          schemaVersion: 1,
+          issuerId: activeIssuerId,
+          runId: rawPortfolioChildRunId,
+          state: "SUCCEEDED",
+          appIds: ["9876543210"],
+          reportRequests: [{
+            id: "raw-inactive-request",
+            appId: "9876543210",
+            accessType: "ONGOING",
+            createdAt: "2026-08-29T18:00:00.000Z",
+            stoppedDueToInactivity: false,
+          }],
+          startedAt: "2026-08-30T18:00:00.000Z",
+          completedAt: "2026-08-30T18:01:00.000Z",
+          snapshotId: "raw-inactive-snapshot",
+          evidenceId: "raw-inactive-evidence",
+          freshness: {
+            syncedAt: "2026-08-30T18:01:00.000Z",
+            dataThrough: "2026-08-29",
+            expectedDelayDays: 5,
+            partial: false,
+            detail: "The inactive credential child is complete.",
+          },
+          error: null,
+          batchCount: 1,
+          observationCount: 25,
+        }, "raw-parent-portfolio-run");
+        analyticsStore.close();
+      },
+    });
+  });
+  afterAll(async () => { await stopAgent(agent); });
+
+  it("does not promote V1 status or freshness from a scope-mismatched portfolio child", async () => {
+    const response = await fetch(`${agent!.baseUrl}/api/analytics/status`, {
+      headers: authorization(guiToken),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      issuerId: activeIssuerId,
+      state: "WAITING_FOR_DATA",
+      reportRequests: [{
+        id: "raw-active-request",
+        appId: "1234567890",
+        accessType: "ONGOING",
+      }],
+      freshness: {
+        syncedAt: null,
+        dataThrough: null,
+        partial: true,
+      },
+    });
+
+    const legacyChildLookup = await fetch(`${agent!.baseUrl}/api/analytics/sync/${encodeURIComponent(rawPortfolioChildRunId)}`, {
+      headers: authorization(guiToken),
+    });
+    expect(legacyChildLookup.status).toBe(404);
+    expect(await legacyChildLookup.json()).toMatchObject({ error: { code: "analytics_sync_not_found" } });
+  });
+});
+
+describe("local-agent portfolio Analytics Admin fallback", () => {
+  let agent: RunningAgent | undefined;
+  let publicAppId = "";
+  let activeReadConnectionId = "";
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const issuerId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+
+  beforeAll(async () => {
+    agent = await startAgent({ mode: "live", mockAnalyticsAdminFallback: true });
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const connect = (profileName: string, keyId: string) => fetch(`${agent!.baseUrl}/api/connections/app-store-connect`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profileName,
+        issuerId,
+        keyId,
+        privateKey: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      }),
+    });
+    const admin = await connect("Admin fallback", "ADMIN12345");
+    expect(admin.status).toBe(200);
+    const read = await connect("Read-capable active", "READ123456");
+    expect(read.status).toBe(200);
+    const readBody = await read.json() as { accounts: Array<{ id: string; profileName: string; active: boolean }> };
+    activeReadConnectionId = readBody.accounts.find((account) => account.profileName === "Read-capable active")!.id;
+    expect(readBody.accounts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ profileName: "Read-capable active", active: true }),
+      expect.objectContaining({ profileName: "Admin fallback", active: false }),
+    ]));
+
+    const catalogResponse = await fetch(`${agent!.baseUrl}/api/analytics/portfolio`, {
+      headers: authorization(guiToken),
+    });
+    expect(catalogResponse.status).toBe(200);
+    const catalog = AnalyticsPortfolioCatalogResponseSchema.parse(await catalogResponse.json());
+    expect(catalog.apps).toHaveLength(1);
+    publicAppId = catalog.apps[0]!.id;
+  });
+  afterAll(async () => { await stopAgent(agent); });
+
+  const createPlan = async (accessType: "ONGOING" | "ONE_TIME_SNAPSHOT") => {
+    const response = await fetch(`${agent!.baseUrl}/api/plans/analytics-report-request`, {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: JSON.stringify({ schemaVersion: 2, appId: publicAppId, accessType }),
+    });
+    expect(response.status).toBe(201);
+    return AnalyticsPortfolioReportRequestPlanResponseSchema.parse(await response.json());
+  };
+
+  it("falls back once from a read-capable key to an app-capable Admin key without switching accounts", async () => {
+    const planned = await createPlan("ONE_TIME_SNAPSHOT");
+    const confirmed = await fetch(`${agent!.baseUrl}/api/plans/${encodeURIComponent(planned.plan.id)}/confirm`, {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: JSON.stringify({ digest: planned.plan.digest }),
+    });
+    expect(confirmed.status).toBe(200);
+    expect(AnalyticsPortfolioReportRequestPlanResponseSchema.parse(await confirmed.json()).plan.state).toBe("succeeded");
+
+    const callsAfterSuccess = (await readFile(agent!.providerCallLog!, "utf8")).trim().split("\n").filter(Boolean);
+    expect(callsAfterSuccess.filter((call) => call.endsWith("POST ONE_TIME_SNAPSHOT"))).toEqual([
+      "READ123456 POST ONE_TIME_SNAPSHOT",
+      "ADMIN12345 POST ONE_TIME_SNAPSHOT",
+    ]);
+    const connections = await fetch(`${agent!.baseUrl}/api/connections/app-store-connect`, {
+      headers: authorization(guiToken),
+    });
+    expect(connections.status).toBe(200);
+    expect(await connections.json()).toMatchObject({
+      accounts: expect.arrayContaining([
+        expect.objectContaining({ id: activeReadConnectionId, profileName: "Read-capable active", active: true }),
+        expect.objectContaining({ profileName: "Admin fallback", active: false }),
+      ]),
+    });
+    const activity = await fetch(`${agent!.baseUrl}/api/activity`, {
+      headers: authorization(guiToken),
+    });
+    expect(activity.status).toBe(200);
+    const activityBody = await activity.json() as {
+      events: Array<{ operation: string; phase: string; summary: string }>;
+    };
+    const succeeded = activityBody.events.find((event) => (
+      event.operation === "analytics.report_request.create" && event.phase === "succeeded"
+    ));
+    expect(succeeded?.summary).toContain("Admin fallback");
+    expect(succeeded?.summary).not.toContain("Read-capable active");
+
+    const duplicateConfirm = await fetch(`${agent!.baseUrl}/api/plans/${encodeURIComponent(planned.plan.id)}/confirm`, {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: JSON.stringify({ digest: planned.plan.digest }),
+    });
+    expect(duplicateConfirm.status).toBe(409);
+    expect((await readFile(agent!.providerCallLog!, "utf8")).trim().split("\n").filter(Boolean)).toEqual(callsAfterSuccess);
+  });
+
+  it("does not try the Admin key after an untyped upstream write failure", async () => {
+    const planned = await createPlan("ONGOING");
+    const confirmed = await fetch(`${agent!.baseUrl}/api/plans/${encodeURIComponent(planned.plan.id)}/confirm`, {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: JSON.stringify({ digest: planned.plan.digest }),
+    });
+    expect(confirmed.status).toBe(502);
+    const calls = (await readFile(agent!.providerCallLog!, "utf8")).trim().split("\n").filter(Boolean);
+    expect(calls.filter((call) => call.endsWith("POST ONGOING"))).toEqual([
+      "READ123456 POST ONGOING",
+    ]);
+  });
+});
+
+describe("local-agent pending plan pagination", () => {
+  let agent: RunningAgent | undefined;
+  const legacyPlanId = "older-visible-v1-plan";
+  const expiredPlanId = "expired-hidden-v2-plan";
+
+  beforeAll(async () => {
+    agent = await startAgent({
+      mode: "demo",
+      prepareDataDirectory: async (dataDirectory) => {
+        const path = join(dataDirectory, "demo.sqlite");
+        const store = new SqlitePlanStore(path);
+        const legacyPlan: MutationPlan = {
+          id: legacyPlanId,
+          operation: "build.add_to_group",
+          risk: "mutation",
+          state: "awaiting_confirmation",
+          createdAt: "2026-08-01T10:00:00.000Z",
+          expiresAt: "2030-08-01T10:10:00.000Z",
+          digest: "a".repeat(64),
+          summary: "Add the older build to the QA group.",
+          context: {
+            profile: "Demo workspace",
+            connectionId: "demo",
+            appleAdsAdAccountId: null,
+            appleAdsMode: null,
+          },
+          target: {
+            appId: "demo-app-orbit-notes",
+            buildId: "demo-build-older",
+            buildLabel: "1.0 (1)",
+            groupId: "demo-group-qa",
+            groupName: "QA",
+          },
+          before: { groupIds: [] },
+          after: { groupIds: ["demo-group-qa"] },
+          error: null,
+        };
+        await store.savePlan(legacyPlan);
+        for (let index = 0; index < 60; index += 1) {
+          const portfolioPlan: MutationPlan = {
+            id: `newer-hidden-v2-plan-${index}`,
+            operation: "analytics.report_request.create",
+            risk: "mutation",
+            state: "awaiting_confirmation",
+            createdAt: `2026-08-30T19:${String(index).padStart(2, "0")}:00.000Z`,
+            expiresAt: "2030-08-30T20:00:00.000Z",
+            digest: index.toString(16).padStart(64, "0"),
+            summary: `Create portfolio Analytics request ${index}.`,
+            context: {
+              profile: "Demo workspace",
+              connectionId: "demo",
+              appleAdsAdAccountId: null,
+              appleAdsMode: null,
+            },
+            target: {
+              appId: "demo-app-orbit-notes",
+              appName: "Orbit Notes",
+              accessType: "ONE_TIME_SNAPSHOT",
+            },
+            before: {
+              matchingReportRequestIds: [`raw-pending-request-${index}`],
+              activeOngoingReportRequestIds: [],
+            },
+            after: { appId: "demo-app-orbit-notes", accessType: "ONE_TIME_SNAPSHOT" },
+            error: null,
+          };
+          await store.savePortfolioAnalyticsPlan(portfolioPlan, "demo-issuer");
+        }
+        await store.savePortfolioAnalyticsPlan({
+          id: expiredPlanId,
+          operation: "analytics.report_request.create",
+          risk: "mutation",
+          state: "awaiting_confirmation",
+          createdAt: "2026-08-01T20:01:00.000Z",
+          expiresAt: "2026-08-01T20:02:00.000Z",
+          digest: "f".repeat(64),
+          summary: "This expired portfolio plan must never reopen.",
+          context: {
+            profile: "Demo workspace",
+            connectionId: "demo",
+            appleAdsAdAccountId: null,
+            appleAdsMode: null,
+          },
+          target: {
+            appId: "demo-app-orbit-notes",
+            appName: "Orbit Notes",
+            accessType: "ONE_TIME_SNAPSHOT",
+          },
+          before: {
+            matchingReportRequestIds: ["raw-expired-request"],
+            activeOngoingReportRequestIds: [],
+          },
+          after: { appId: "demo-app-orbit-notes", accessType: "ONE_TIME_SNAPSHOT" },
+          error: null,
+        }, "demo-issuer");
+        store.close();
+        const ordering = new DatabaseSync(path);
+        ordering.prepare("UPDATE mutation_plans SET updated_at = ? WHERE id = ?")
+          .run("2026-08-01T10:00:00.000Z", legacyPlanId);
+        ordering.prepare("UPDATE mutation_plans SET updated_at = ? WHERE id LIKE 'newer-hidden-v2-plan-%'")
+          .run("2026-08-30T20:00:00.000Z");
+        ordering.prepare("UPDATE mutation_plans SET updated_at = ? WHERE id = ?")
+          .run("2026-08-30T20:01:00.000Z", expiredPlanId);
+        ordering.close();
+      },
+    });
+  });
+  afterAll(async () => { await stopAgent(agent); });
+
+  it("does not let more than 50 hidden V2 plans consume the V1 pending-plan limit", async () => {
+    const [response, portfolioResponse] = await Promise.all([
+      fetch(`${agent!.baseUrl}/api/plans`, { headers: authorization(guiToken) }),
+      fetch(`${agent!.baseUrl}/api/analytics/portfolio/plans`, { headers: authorization(guiToken) }),
+    ]);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { plans: Array<{ id: string; operation: string }> };
+    expect(body.plans).toEqual([
+      expect.objectContaining({ id: legacyPlanId, operation: "build.add_to_group" }),
+    ]);
+    expect(body.plans.some((plan) => plan.id.startsWith("newer-hidden-v2-plan-"))).toBe(false);
+
+    expect(portfolioResponse.status).toBe(200);
+    const portfolioText = await portfolioResponse.text();
+    const portfolio = AnalyticsPortfolioPendingPlansResponseSchema.parse(JSON.parse(portfolioText));
+    expect(portfolio.plans).toHaveLength(50);
+    expect(portfolio.plans.some((plan) => plan.id === expiredPlanId)).toBe(false);
+    expect(portfolio.plans.every((plan) => (
+      plan.operation === "analytics.report_request.create"
+      && plan.after.schemaVersion === 2
+      && plan.after.appId.startsWith("app_")
+      && plan.target.sourceId.startsWith("source_")
+      && plan.context.connectionId?.startsWith("account_") === true
+      && plan.before.matchingReportRequestIds.every((requestId) => requestId.startsWith("report-request_"))
+    ))).toBe(true);
+    for (const rawIdentity of [
+      "demo-issuer",
+      "demo-app-orbit-notes",
+      "raw-pending-request",
+      '"connectionId":"demo"',
+    ]) {
+      expect(portfolioText).not.toContain(rawIdentity);
+    }
+
+    const persisted = new SqlitePlanStore(join(agent!.dataDirectory, "demo.sqlite"));
+    expect(await persisted.getPlan(expiredPlanId)).toMatchObject({
+      state: "expired",
+      error: "The confirmation window expired.",
+    });
+    expect(persisted.getPortfolioAnalyticsPlanIssuer(expiredPlanId)).toBe("demo-issuer");
+    persisted.close();
+
+    const repeated = await fetch(`${agent!.baseUrl}/api/analytics/portfolio/plans`, {
+      headers: authorization(guiToken),
+    });
+    expect(repeated.status).toBe(200);
+    const repeatedText = await repeated.text();
+    const repeatedBody = AnalyticsPortfolioPendingPlansResponseSchema.parse(JSON.parse(repeatedText));
+    expect(repeatedBody.plans).toHaveLength(50);
+    expect(repeatedBody.plans.some((plan) => plan.id === expiredPlanId)).toBe(false);
+    expect(repeatedBody.plans.some((plan) => plan.id.startsWith("newer-hidden-v2-plan-"))).toBe(true);
+    expect(repeatedText).not.toContain("raw-expired-request");
+
+    const reopened = new SqlitePlanStore(join(agent!.dataDirectory, "demo.sqlite"));
+    expect(await reopened.getPlan(expiredPlanId)).toMatchObject({
+      state: "expired",
+      error: "The confirmation window expired.",
+    });
+    reopened.close();
+  });
+});
+
+describe("local-agent portfolio sync lock ordering", () => {
+  let agent: RunningAgent | undefined;
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const rawIssuerId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+  beforeAll(async () => {
+    agent = await startAgent({ mode: "live", mockAnalyticsPortfolioLease: true });
+  });
+  afterAll(async () => { await stopAgent(agent); });
+
+  it("lets an account writer queue behind portfolio sync without nesting a request-wide read lease", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const connected = await fetch(`${agent!.baseUrl}/api/connections/app-store-connect`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profileName: "Lease test",
+        issuerId: rawIssuerId,
+        keyId: "LEASE12345",
+        privateKey: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      }),
+    });
+    expect(connected.status).toBe(200);
+    const connectedBody = await connected.json() as { accounts: Array<{ id: string }> };
+    const rawConnectionId = connectedBody.accounts[0]!.id;
+
+    const starting = fetch(`${agent!.baseUrl}/api/analytics/portfolio/sync`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 2,
+        selection: { kind: "ALL_CONNECTED" },
+        force: false,
+      }),
+    });
+    let discoveryStarted = false;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const calls = await readFile(agent!.providerCallLog!, "utf8");
+      if (calls.includes("GET /v1/apps?limit=200")) {
+        discoveryStarted = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(discoveryStarted).toBe(true);
+
+    let writerSettled = false;
+    const activating = fetch(`${agent!.baseUrl}/api/connections/app-store-connect/${encodeURIComponent(rawConnectionId)}/activate`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+    }).finally(() => { writerSettled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(writerSettled).toBe(false);
+
+    await writeFile(join(agent!.dataDirectory, "portfolio-discovery-release"), "release", "utf8");
+    const [startedResponse, activatedResponse] = await Promise.race([
+      Promise.all([starting, activating]),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Portfolio sync and queued account writer deadlocked.")), 5_000)),
+    ]);
+    expect(startedResponse.status).toBe(202);
+    expect(activatedResponse.status).toBe(200);
+    const startedText = await startedResponse.text();
+    const started = AnalyticsPortfolioSyncResponseSchema.parse(JSON.parse(startedText));
+
+    let completed = started;
+    let completedText = startedText;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const poll = await fetch(`${agent!.baseUrl}/api/analytics/portfolio/sync/${encodeURIComponent(started.runId)}`, {
+        headers: authorization(guiToken),
+      });
+      completedText = await poll.text();
+      expect(poll.status).toBe(200);
+      completed = AnalyticsPortfolioSyncResponseSchema.parse(JSON.parse(completedText));
+      if (["SUCCEEDED", "PARTIAL", "FAILED"].includes(completed.state)) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(completed).toMatchObject({
+      state: "SUCCEEDED",
+      freshness: expect.objectContaining({ partial: true }),
+      error: null,
+    });
+    for (const body of [startedText, completedText]) {
+      expect(body).not.toContain(rawIssuerId);
+      expect(body).not.toContain(rawConnectionId);
+      expect(body).not.toContain("1234567890");
+      expect(body).not.toContain("raw-lease-request");
+      expect(body).not.toContain('"issuerId"');
+    }
   });
 });
 
@@ -642,6 +1210,159 @@ describe("local-agent session boundary", () => {
     expect(await app.json()).toMatchObject({ scope: "APP", appId: "demo-app-orbit-notes" });
   });
 
+  it("serves, syncs, and plans against the opaque V2 portfolio without leaking Apple identities", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const catalogResponse = await fetch(`${agent!.baseUrl}/api/analytics/portfolio`, {
+      headers: authorization(guiToken),
+    });
+    const catalogText = await catalogResponse.text();
+    expect(catalogResponse.status).toBe(200);
+    const catalog = AnalyticsPortfolioCatalogResponseSchema.parse(JSON.parse(catalogText));
+    expect(catalog.sources).toHaveLength(1);
+    expect(catalog.apps).toHaveLength(2);
+    const selectedApp = catalog.apps.find((candidate) => candidate.name === "Field Log")!;
+
+    const [statusResponse, overviewResponse] = await Promise.all([
+      fetch(`${agent!.baseUrl}/api/analytics/portfolio/status`, {
+        headers: authorization(guiToken),
+      }),
+      fetch(`${agent!.baseUrl}/api/analytics/overview`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 2,
+          scope: "PORTFOLIO",
+          selection: { kind: "ALL_CONNECTED" },
+          startDate: "2026-07-22",
+          endDate: "2026-08-20",
+          compare: "PREVIOUS_PERIOD",
+          granularity: "DAY",
+          breakdowns: ["APP", "TERRITORY"],
+        }),
+      }),
+    ]);
+    const statusText = await statusResponse.text();
+    const overviewText = await overviewResponse.text();
+    expect(statusResponse.status).toBe(200);
+    expect(overviewResponse.status).toBe(200);
+    const status = AnalyticsPortfolioStatusResponseSchema.parse(JSON.parse(statusText));
+    const overview = AnalyticsOverviewResponseV2Schema.parse(JSON.parse(overviewText));
+    expect(overview.scope).toBe("PORTFOLIO");
+    expect(status.catalogRevision).toBe(catalog.catalogRevision);
+    expect(overview.catalogRevision).toBe(catalog.catalogRevision);
+    expect(status.sources.map((source) => source.sourceId).sort()).toEqual(
+      catalog.sources.map((source) => source.id).sort(),
+    );
+    expect(overview.sourceCoverage.map((source) => source.sourceId).sort()).toEqual(
+      catalog.sources.map((source) => source.id).sort(),
+    );
+    expect(overview.apps.map((candidate) => candidate.id)).toEqual(catalog.apps.map((candidate) => candidate.id));
+
+    const plannedResponse = await fetch(`${agent!.baseUrl}/api/plans/analytics-report-request`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 2,
+        appId: selectedApp.id,
+        accessType: "ONE_TIME_SNAPSHOT",
+      }),
+    });
+    const plannedText = await plannedResponse.text();
+    expect(plannedResponse.status).toBe(201);
+    const planned = AnalyticsPortfolioReportRequestPlanResponseSchema.parse(JSON.parse(plannedText));
+    const pendingResponse = await fetch(`${agent!.baseUrl}/api/plans`, {
+      headers: authorization(guiToken),
+    });
+    const pendingText = await pendingResponse.text();
+    expect(pendingResponse.status).toBe(200);
+    const pending = JSON.parse(pendingText) as { plans: unknown[] };
+    const pendingPlan = pending.plans.find((candidate) => (
+      typeof candidate === "object" && candidate !== null && "id" in candidate
+      && candidate.id === planned.plan.id
+    ));
+    // Analytics plans use their dedicated V2 response contract and are not
+    // mixed into the generic pending-plan feed, whose union remains V1.
+    expect(pendingPlan).toBeUndefined();
+
+    const confirmedResponse = await fetch(`${agent!.baseUrl}/api/plans/${encodeURIComponent(planned.plan.id)}/confirm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ digest: planned.plan.digest }),
+    });
+    const confirmedText = await confirmedResponse.text();
+    expect(confirmedResponse.status).toBe(200);
+    expect(AnalyticsPortfolioReportRequestPlanResponseSchema.parse(JSON.parse(confirmedText)).plan.state).toBe("succeeded");
+
+    const startedResponse = await fetch(`${agent!.baseUrl}/api/analytics/portfolio/sync`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        schemaVersion: 2,
+        selection: { kind: "ALL_CONNECTED" },
+        force: false,
+      }),
+    });
+    const startedText = await startedResponse.text();
+    expect(startedResponse.status).toBe(202);
+    const started = AnalyticsPortfolioSyncResponseSchema.parse(JSON.parse(startedText));
+    let completedText = "";
+    let completed = started;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const poll = await fetch(`${agent!.baseUrl}/api/analytics/portfolio/sync/${encodeURIComponent(started.runId)}`, {
+        headers: authorization(guiToken),
+      });
+      completedText = await poll.text();
+      expect(poll.status).toBe(200);
+      completed = AnalyticsPortfolioSyncResponseSchema.parse(JSON.parse(completedText));
+      if (["SUCCEEDED", "PARTIAL", "FAILED"].includes(completed.state)) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(completed.state).toBe("SUCCEEDED");
+
+    const childRunIds = completed.sources.flatMap((source) => source.runIds);
+    expect(childRunIds.length).toBeGreaterThan(0);
+    for (const runId of [completed.runId, ...childRunIds]) {
+      for (const rawIdentity of [
+        "demo-issuer",
+        "demo-app-orbit-notes",
+        "demo-app-field-log",
+        "demo-analytics-request-1",
+        "demo-analytics-request-2",
+        "demo-analytics-request-3",
+      ]) expect(runId).not.toContain(rawIdentity);
+    }
+    for (const childRunId of childRunIds) {
+      const legacyBridge = await fetch(`${agent!.baseUrl}/api/analytics/sync/${encodeURIComponent(childRunId)}`, {
+        headers: authorization(guiToken),
+      });
+      expect(legacyBridge.status).toBe(404);
+      expect(await legacyBridge.json()).toMatchObject({ error: { code: "analytics_sync_not_found" } });
+    }
+
+    const publicBodies = [
+      catalogText,
+      statusText,
+      overviewText,
+      plannedText,
+      pendingText,
+      confirmedText,
+      startedText,
+      completedText,
+    ];
+    for (const body of publicBodies) {
+      for (const rawIdentity of [
+        "demo-issuer",
+        "demo-app-orbit-notes",
+        "demo-app-field-log",
+        "demo-analytics-request-1",
+        "demo-analytics-request-2",
+        "demo-analytics-request-3",
+      ]) expect(body).not.toContain(rawIdentity);
+      expect(body).not.toContain('"connectionId":"demo"');
+      expect(body).not.toContain('"issuerId"');
+    }
+  });
+
   it("validates portfolio membership and exposes background analytics sync as a pollable job", async () => {
     const headers = { ...authorization(guiToken), "content-type": "application/json" };
     const invalid = await fetch(`${agent!.baseUrl}/api/analytics/overview`, {
@@ -723,6 +1444,20 @@ describe("local-agent session boundary", () => {
     });
     expect(planned.status).toBe(201);
     const body = await planned.json() as { plan: { id: string; digest: string } };
+    const pendingResponse = await fetch(`${agent!.baseUrl}/api/plans`, {
+      headers: authorization(guiToken),
+    });
+    expect(pendingResponse.status).toBe(200);
+    const pending = await pendingResponse.json() as {
+      plans: Array<{ id: string; operation: string; after?: unknown }>;
+    };
+    expect(pending.plans).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: body.plan.id,
+        operation: "analytics.report_request.create",
+        after: { appId: "demo-app-field-log", accessType: "ONE_TIME_SNAPSHOT" },
+      }),
+    ]));
     const confirmed = await fetch(`${agent!.baseUrl}/api/plans/${body.plan.id}/confirm`, {
       method: "POST",
       headers,
@@ -902,7 +1637,6 @@ describe("local-agent session boundary", () => {
         fields: ["whatsNew"],
         source: {
           whatsNew: "A faster editor and more reliable sync.",
-          promotionalText: "Capture ideas fast.",
         },
       }),
     });
@@ -953,7 +1687,7 @@ describe("local-agent session boundary", () => {
         sourceLocale: "en-US",
         targetLocales: ["fr-FR", "fr-FR"],
         fields: ["whatsNew"],
-        source: { whatsNew: "A faster editor.", promotionalText: "" },
+        source: { whatsNew: "A faster editor." },
       }),
     });
 

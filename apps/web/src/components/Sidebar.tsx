@@ -8,7 +8,6 @@ import {
   ChevronDown,
   CircleDollarSign,
   ClipboardList,
-  FileText,
   Gauge,
   Globe2,
   KeyRound,
@@ -22,14 +21,13 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-export type WorkspaceSection = "overview" | "analytics" | "testflight" | "releases" | "store-listing" | "apple-ads" | "reviews";
+export type WorkspaceSection = "overview" | "analytics" | "testflight" | "releases" | "apple-ads" | "reviews";
 
 const navigation = [
   { label: "Overview", icon: Gauge, section: "overview" as const },
   { label: "Analytics", icon: ChartNoAxesCombined, section: "analytics" as const },
   { label: "TestFlight", icon: Send, section: "testflight" as const },
   { label: "Releases", icon: ClipboardList, section: "releases" as const },
-  { label: "Store Listing", icon: FileText, section: "store-listing" as const },
   { label: "Apple Ads", icon: BadgeDollarSign, section: "apple-ads" as const },
   { label: "Monetization", icon: CircleDollarSign },
   { label: "Distribution", icon: Globe2 },
@@ -120,8 +118,8 @@ export const Sidebar = ({
         >
           <span className="app-icon"><Orbit size={24} /></span>
           <span className="app-copy">
-            <strong>{app?.name ?? "Loading apps"}</strong>
-            <span>{app?.bundleId ?? "Checking local agent"}</span>
+            <strong>{app?.name ?? (status ? "No active app" : "Loading apps")}</strong>
+            <span>{app?.bundleId ?? (status ? "Portfolio Analytics is available" : "Checking local agent")}</span>
           </span>
           <ChevronDown className={switcherOpen ? "switcher-chevron open" : "switcher-chevron"} size={17} />
         </button>

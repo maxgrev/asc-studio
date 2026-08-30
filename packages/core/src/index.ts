@@ -13,6 +13,7 @@ import type {
   AppleAdsAdGroupSnapshot,
   AppleAdsKeywordSnapshot,
   AnalyticsOverviewQuery,
+  AnalyticsOverviewQueryV2,
   AnalyticsReportRequestCreateInput,
   AnalyticsSyncInput,
   AppStoreLocale,
@@ -52,6 +53,7 @@ import type {
 import {
   AnalyticsService,
   type AnalyticsOverviewContext,
+  type AnalyticsPortfolioOverviewContext,
   type AnalyticsProvider,
   type AnalyticsStore,
 } from "./analytics.js";
@@ -314,6 +316,10 @@ export class AscStudioService {
 
   getAnalyticsOverview(query: AnalyticsOverviewQuery, context: AnalyticsOverviewContext) {
     return this.analyticsService().overview(query, context);
+  }
+
+  getAnalyticsPortfolioOverview(query: AnalyticsOverviewQueryV2, context: AnalyticsPortfolioOverviewContext) {
+    return this.analyticsService().portfolioOverview(query, context);
   }
 
   syncAnalytics(input: AnalyticsSyncInput) {
