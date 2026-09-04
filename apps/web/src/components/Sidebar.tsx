@@ -21,15 +21,15 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-export type WorkspaceSection = "overview" | "analytics" | "testflight" | "releases" | "apple-ads" | "reviews";
+export type WorkspaceSection = "overview" | "analytics" | "testflight" | "releases" | "subscriptions" | "apple-ads" | "reviews";
 
 const navigation = [
   { label: "Overview", icon: Gauge, section: "overview" as const },
   { label: "Analytics", icon: ChartNoAxesCombined, section: "analytics" as const },
   { label: "TestFlight", icon: Send, section: "testflight" as const },
   { label: "Releases", icon: ClipboardList, section: "releases" as const },
+  { label: "Subscriptions", icon: CircleDollarSign, section: "subscriptions" as const },
   { label: "Apple Ads", icon: BadgeDollarSign, section: "apple-ads" as const },
-  { label: "Monetization", icon: CircleDollarSign },
   { label: "Distribution", icon: Globe2 },
   { label: "Reviews", icon: Star, section: "reviews" as const },
   { label: "Activity", icon: Activity },

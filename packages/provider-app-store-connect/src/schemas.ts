@@ -170,6 +170,65 @@ export const CustomerReviewsPageSchema = z.object({
 export const CustomerReviewResponseSchema = single(CustomerReviewResourceSchema);
 export const CustomerReviewResponseResourceResponseSchema = single(CustomerReviewResponseResourceSchema);
 
+export const SubscriptionGroupResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("subscriptionGroups"),
+  attributes: z.object({
+    referenceName: z.string().min(1),
+  }).passthrough(),
+}).passthrough();
+export const SubscriptionGroupsPageSchema = page(SubscriptionGroupResourceSchema);
+
+export const SubscriptionResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("subscriptions"),
+  attributes: z.object({
+    name: z.string().min(1),
+    productId: z.string().min(1),
+    familySharable: z.boolean().optional(),
+    state: z.string().min(1),
+    subscriptionPeriod: z.enum([
+      "ONE_WEEK",
+      "ONE_MONTH",
+      "TWO_MONTHS",
+      "THREE_MONTHS",
+      "SIX_MONTHS",
+      "ONE_YEAR",
+    ]),
+    groupLevel: z.number().int().positive().nullable().optional(),
+  }).passthrough(),
+}).passthrough();
+export const SubscriptionsPageSchema = page(SubscriptionResourceSchema);
+
+export const TerritoryResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("territories"),
+  attributes: z.object({ currency: z.string().regex(/^[A-Z]{3}$/) }).passthrough(),
+}).passthrough();
+
+export const SubscriptionPricePointResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("subscriptionPricePoints"),
+  attributes: z.object({
+    customerPrice: z.string().regex(/^\d+(?:\.\d+)?$/),
+    proceeds: z.string().regex(/^\d+(?:\.\d+)?$/),
+    proceedsYear2: z.string().regex(/^\d+(?:\.\d+)?$/),
+  }).passthrough(),
+}).passthrough();
+export const SubscriptionPricePointsPageSchema = page(SubscriptionPricePointResourceSchema);
+
+export const SubscriptionPriceResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("subscriptionPrices"),
+  attributes: z.object({
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+    preserved: z.boolean().optional(),
+    planType: z.enum(["UPFRONT", "MONTHLY"]).optional(),
+  }).passthrough(),
+}).passthrough();
+export const SubscriptionPricesPageSchema = page(SubscriptionPriceResourceSchema);
+export const SubscriptionPriceResponseSchema = single(SubscriptionPriceResourceSchema);
+
 export const AnalyticsReportAccessTypeSchema = z.enum(["ONGOING", "ONE_TIME_SNAPSHOT"]);
 export const AnalyticsReportCategorySchema = z.enum([
   "APP_STORE_ENGAGEMENT",
@@ -234,6 +293,11 @@ export type BetaGroupResource = z.infer<typeof BetaGroupResourceSchema>;
 export type ReviewSubmissionResource = z.infer<typeof ReviewSubmissionResourceSchema>;
 export type CustomerReviewResource = z.infer<typeof CustomerReviewResourceSchema>;
 export type CustomerReviewResponseResource = z.infer<typeof CustomerReviewResponseResourceSchema>;
+export type SubscriptionGroupResource = z.infer<typeof SubscriptionGroupResourceSchema>;
+export type SubscriptionResource = z.infer<typeof SubscriptionResourceSchema>;
+export type SubscriptionPriceResource = z.infer<typeof SubscriptionPriceResourceSchema>;
+export type SubscriptionPricePointResource = z.infer<typeof SubscriptionPricePointResourceSchema>;
+export type TerritoryResource = z.infer<typeof TerritoryResourceSchema>;
 export type AnalyticsReportRequestResource = z.infer<typeof AnalyticsReportRequestResourceSchema>;
 export type AnalyticsReportResource = z.infer<typeof AnalyticsReportResourceSchema>;
 export type AnalyticsReportInstanceResource = z.infer<typeof AnalyticsReportInstanceResourceSchema>;

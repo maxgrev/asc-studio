@@ -32,6 +32,10 @@ import type {
   ScreenshotAsset,
   ScreenshotAssetSnapshot,
   ScreenshotDisplayType,
+  SubscriptionPlanType,
+  SubscriptionPrice,
+  SubscriptionPricePoint,
+  SubscriptionSummary,
   SubmitVersionInput,
   UpdateAppleAdsCampaignInput,
   UpdateAppleAdsKeywordInput,
@@ -44,10 +48,12 @@ import type {
   VersionSubmissionResult,
   VersionSubmissionStatus,
 } from "@asc-studio/contracts";
+import { stableJson } from "@asc-studio/core";
 import type {
   AnalyticsProvider,
   AppleAdsProvider,
   ApplyScreenshotChangesInput,
+  ApplySubscriptionPriceChangesInput,
   AppListOptions,
   AscProvider,
   BuildListOptions,
@@ -70,6 +76,146 @@ const fieldLog: AppSummary = {
 };
 
 const apps = [orbitNotes, fieldLog];
+
+const orbitAnnualSubscription: SubscriptionSummary = {
+  id: "demo-subscription-orbit-pro-yearly",
+  appId: orbitNotes.id,
+  groupId: "demo-subscription-group-orbit-pro",
+  groupName: "Orbit Pro",
+  name: "Orbit Pro Yearly",
+  productId: "com.example.orbitnotes.pro.yearly",
+  state: "APPROVED",
+  period: "ONE_YEAR",
+  groupLevel: 1,
+  familySharable: true,
+};
+
+const orbitMonthlySubscription: SubscriptionSummary = {
+  id: "demo-subscription-orbit-pro-monthly",
+  appId: orbitNotes.id,
+  groupId: "demo-subscription-group-orbit-pro",
+  groupName: "Orbit Pro",
+  name: "Orbit Pro Monthly",
+  productId: "com.example.orbitnotes.pro.monthly",
+  state: "APPROVED",
+  period: "ONE_MONTH",
+  groupLevel: 2,
+  familySharable: true,
+};
+
+const fieldAnnualSubscription: SubscriptionSummary = {
+  id: "demo-subscription-field-team-yearly",
+  appId: fieldLog.id,
+  groupId: "demo-subscription-group-field-team",
+  groupName: "Field Team",
+  name: "Field Team Yearly",
+  productId: "com.example.fieldlog.team.yearly",
+  state: "READY_TO_SUBMIT",
+  period: "ONE_YEAR",
+  groupLevel: 1,
+  familySharable: false,
+};
+
+const demoSubscriptions = [orbitAnnualSubscription, orbitMonthlySubscription, fieldAnnualSubscription];
+
+const annualComparablePrices = [
+  ["AUS", "AUD", "179.99"],
+  ["BRA", "BRL", "599.90"],
+  ["CAN", "CAD", "159.99"],
+  ["DEU", "EUR", "119.99"],
+  ["EGY", "EGP", "5999.00"],
+  ["FRA", "EUR", "119.99"],
+  ["GBR", "GBP", "99.99"],
+  ["IDN", "IDR", "1899000"],
+  ["IND", "INR", "9999.00"],
+  ["JPN", "JPY", "18000"],
+  ["KOR", "KRW", "165000"],
+  ["MEX", "MXN", "2299.00"],
+  ["NGA", "NGN", "179900.00"],
+  ["PHL", "PHP", "6999.00"],
+  ["POL", "PLN", "499.99"],
+  ["THA", "THB", "4199.00"],
+  ["TUR", "TRY", "3999.00"],
+  ["USA", "USD", "119.99"],
+  ["VNM", "VND", "2999000"],
+  ["ZAF", "ZAR", "2199.99"],
+] as const;
+
+const zeroDecimalCurrencies = new Set(["IDR", "JPY", "KRW", "VND"]);
+const formatDemoDecimal = (value: number, currency: string) => zeroDecimalCurrencies.has(currency)
+  ? String(Math.round(value))
+  : value.toFixed(2);
+const demoPricePoint = (
+  subscriptionId: string,
+  territory: string,
+  currency: string,
+  customerPrice: string,
+  factor = 100,
+): SubscriptionPricePoint => ({
+  id: `demo-point-${subscriptionId}-${territory}-${factor}`,
+  territory,
+  currency,
+  customerPrice,
+  proceeds: formatDemoDecimal(Number(customerPrice) * 0.7, currency),
+  proceedsYear2: formatDemoDecimal(Number(customerPrice) * 0.85, currency),
+});
+const demoCurrentPrice = (
+  subscriptionId: string,
+  territory: string,
+  currency: string,
+  customerPrice: string,
+): SubscriptionPrice => ({
+  ...demoPricePoint(subscriptionId, territory, currency, customerPrice),
+  id: `demo-price-${subscriptionId}-${territory}`,
+  subscriptionId,
+  pricePointId: `demo-point-${subscriptionId}-${territory}-100`,
+  startDate: null,
+  preserved: false,
+  planType: "UPFRONT",
+});
+const scaledDemoPrice = (customerPrice: string, currency: string, factor: number) => {
+  const target = Number(customerPrice) * factor / 100;
+  const rounded = zeroDecimalCurrencies.has(currency)
+    ? Math.ceil(target)
+    : Math.ceil(target * 100 - Number.EPSILON) / 100;
+  return formatDemoDecimal(rounded, currency);
+};
+const annualPrices = annualComparablePrices.map(([territory, currency, price]) => (
+  demoCurrentPrice(orbitAnnualSubscription.id, territory, currency, price)
+));
+const monthlyPrices = annualComparablePrices.slice(0, 12).map(([territory, currency, price]) => (
+  demoCurrentPrice(
+    orbitMonthlySubscription.id,
+    territory,
+    currency,
+    scaledDemoPrice(price, currency, 12.5),
+  )
+));
+const fieldPrices = annualComparablePrices.slice(0, 10).map(([territory, currency, price]) => (
+  demoCurrentPrice(
+    fieldAnnualSubscription.id,
+    territory,
+    currency,
+    scaledDemoPrice(price, currency, 50),
+  )
+));
+const initialDemoSubscriptionPrices = [...annualPrices, ...monthlyPrices, ...fieldPrices];
+const demoSubscriptionPriceSnapshots = (prices: SubscriptionPrice[]) => prices.map((price) => ({
+  id: price.id,
+  territory: price.territory,
+  currency: price.currency,
+  customerPrice: price.customerPrice,
+  proceeds: price.proceeds,
+  proceedsYear2: price.proceedsYear2,
+  pricePointId: price.pricePointId,
+  startDate: price.startDate,
+  preserved: price.preserved,
+  planType: price.planType,
+})).sort((left, right) => (
+  left.territory.localeCompare(right.territory)
+  || (left.startDate ?? "").localeCompare(right.startDate ?? "")
+  || left.id.localeCompare(right.id)
+));
 
 export const demoAnalyticsIssuerId = "demo-issuer";
 export const demoAnalyticsFixtureVersion = "page-type-v2";
@@ -777,6 +923,7 @@ export class MockAscProvider implements AscProvider, AppleAdsProvider, Analytics
   private readonly attachedBuildIds = new Map<string, string>();
   private readonly submissions = new Map<string, VersionSubmissionStatus>();
   private readonly reviewsByApp = structuredClone(reviewFixturesByApp);
+  private readonly subscriptionPrices = structuredClone(initialDemoSubscriptionPrices);
   private readonly adsCampaigns = structuredClone(demoCampaigns);
   private readonly adsAdGroups = structuredClone(demoAdGroups);
   private readonly adsKeywords = structuredClone(demoKeywords);
@@ -1042,6 +1189,98 @@ export class MockAscProvider implements AscProvider, AppleAdsProvider, Analytics
 
   async listApps(options: AppListOptions = {}) {
     return structuredClone(options.paginate === false && options.limit ? apps.slice(0, options.limit) : apps);
+  }
+
+  async listSubscriptions(appId: string): Promise<SubscriptionSummary[]> {
+    return structuredClone(demoSubscriptions.filter((subscription) => subscription.appId === appId));
+  }
+
+  async listSubscriptionPrices(
+    subscriptionId: string,
+    planType?: SubscriptionPlanType,
+  ): Promise<SubscriptionPrice[]> {
+    return structuredClone(this.subscriptionPrices.filter((price) => (
+      price.subscriptionId === subscriptionId && (!planType || price.planType === planType)
+    )));
+  }
+
+  async listSubscriptionPricePoints(
+    subscriptionId: string,
+    territory: string,
+    planType: SubscriptionPlanType,
+  ): Promise<SubscriptionPricePoint[]> {
+    const current = this.subscriptionPrices.find((price) => (
+      price.subscriptionId === subscriptionId
+      && price.territory === territory
+      && price.planType === planType
+      && price.startDate === null
+    ));
+    if (!current) return [];
+    const factors = Array.from({ length: 11 }, (_, index) => 50 + index * 5);
+    return factors.map((factor) => demoPricePoint(
+      subscriptionId,
+      territory,
+      current.currency,
+      factor === 100
+        ? current.customerPrice
+        : scaledDemoPrice(current.customerPrice, current.currency, factor),
+      factor,
+    ));
+  }
+
+  async listSubscriptionPricePointEqualizations(
+    subscriptionId: string,
+    pricePoint: SubscriptionPricePoint,
+    planType: SubscriptionPlanType,
+  ): Promise<SubscriptionPricePoint[]> {
+    const factorMatch = pricePoint.id.match(/-(\d+)$/);
+    const factor = factorMatch ? Number(factorMatch[1]) : 100;
+    return this.subscriptionPrices
+      .filter((price) => (
+        price.subscriptionId === subscriptionId
+        && price.planType === planType
+        && price.startDate === null
+      ))
+      .map((current) => demoPricePoint(
+        subscriptionId,
+        current.territory,
+        current.currency,
+        factor === 100
+          ? current.customerPrice
+          : scaledDemoPrice(current.customerPrice, current.currency, factor),
+        factor,
+      ));
+  }
+
+  async applySubscriptionPriceChanges(input: ApplySubscriptionPriceChangesInput): Promise<void> {
+    const current = this.subscriptionPrices.filter((price) => (
+      price.subscriptionId === input.subscriptionId && price.planType === input.planType
+    ));
+    if (stableJson(demoSubscriptionPriceSnapshots(current)) !== stableJson(input.expected)) {
+      throw new Error("Demo subscription pricing changed before the update started.");
+    }
+    for (const [index, change] of input.changes.entries()) {
+      const source = current.find((price) => price.territory === change.territory && price.startDate === null);
+      if (!source) throw new Error(`The demo price for ${change.territory} no longer exists.`);
+      const factorMatch = change.pricePointId.match(/-(\d+)$/);
+      const factor = factorMatch ? Number(factorMatch[1]) : 100;
+      const point = demoPricePoint(
+        input.subscriptionId,
+        change.territory,
+        change.currency,
+        change.customerPrice,
+        factor,
+      );
+      this.subscriptionPrices.push({
+        ...point,
+        id: `demo-scheduled-price-${input.subscriptionId}-${change.territory}-${input.startDate}-${index}`,
+        subscriptionId: input.subscriptionId,
+        pricePointId: change.pricePointId,
+        startDate: input.startDate,
+        preserved: change.preserveCurrentPrice,
+        planType: input.planType,
+      });
+    }
   }
 
   async listCustomerReviews(

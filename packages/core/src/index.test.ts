@@ -16,6 +16,11 @@ import type {
   MutationPlan,
   ScreenshotAsset,
   ScreenshotDisplayType,
+  SubscriptionPlanType,
+  SubscriptionPrice,
+  SubscriptionPricePoint,
+  SubscriptionPriceSnapshot,
+  SubscriptionSummary,
   SubmitVersionInput,
   TesterGroup,
   ValidationReport,
@@ -26,7 +31,14 @@ import type {
   VersionSubmissionStatus,
 } from "@asc-studio/contracts";
 import { describe, expect, it } from "vitest";
-import { AscStudioService, stableJson, type AppleAdsProvider, type AscProvider, type PlanStore } from "./index.js";
+import {
+  AscStudioService,
+  stableJson,
+  type AppleAdsProvider,
+  type ApplySubscriptionPriceChangesInput,
+  type AscProvider,
+  type PlanStore,
+} from "./index.js";
 
 const app: AppSummary = {
   id: "demo-app-orbit-notes",
@@ -78,9 +90,52 @@ const initialReview: CustomerReview = {
   response: null,
 };
 
+const testSubscription: SubscriptionSummary = {
+  id: "subscription-yearly",
+  appId: app.id,
+  groupId: "subscription-group-pro",
+  groupName: "Pro",
+  name: "Pro Yearly",
+  productId: "com.example.orbitnotes.pro.yearly",
+  state: "APPROVED",
+  period: "ONE_YEAR",
+  groupLevel: 1,
+  familySharable: true,
+};
+
+const testSubscriptionPoint = (
+  territory: string,
+  currency: string,
+  customerPrice: string,
+  factor = 100,
+): SubscriptionPricePoint => ({
+  id: `point-${territory}-${factor}`,
+  territory,
+  currency,
+  customerPrice,
+  proceeds: (Number(customerPrice) * 0.7).toFixed(2),
+  proceedsYear2: (Number(customerPrice) * 0.85).toFixed(2),
+});
+
+const testSubscriptionPrices: SubscriptionPrice[] = [
+  ["USA", "USD", "119.99"],
+  ["GBR", "GBP", "99.99"],
+  ["IND", "INR", "9999.00"],
+].map(([territory, currency, customerPrice]) => ({
+  ...testSubscriptionPoint(territory!, currency!, customerPrice!),
+  id: `price-${territory}`,
+  subscriptionId: testSubscription.id,
+  pricePointId: `point-${territory}-100`,
+  startDate: null,
+  preserved: false,
+  planType: "UPFRONT" as const,
+}));
+
 class FakeAscProvider implements AscProvider, AppleAdsProvider {
   private readonly builds = [structuredClone(submissionBuild), structuredClone(initialBuild)];
   private readonly reviews = [structuredClone(initialReview)];
+  private readonly subscriptionPrices = structuredClone(testSubscriptionPrices);
+  private missingBaselineTerritory: string | null = null;
   private attachedBuildId: string | null = null;
   private submission: VersionSubmissionStatus | null = null;
   private validationBlocking = 0;
@@ -177,8 +232,91 @@ class FakeAscProvider implements AscProvider, AppleAdsProvider {
     this.connectionId = connectionId;
   }
 
+  setMissingBaselineTerritory(territory: string | null) {
+    this.missingBaselineTerritory = territory;
+  }
+
   async listApps() {
     return [structuredClone(app)];
+  }
+
+  async listSubscriptions(appId: string) {
+    return appId === app.id ? [structuredClone(testSubscription)] : [];
+  }
+
+  async listSubscriptionPrices(subscriptionId: string, planType?: SubscriptionPlanType) {
+    return structuredClone(this.subscriptionPrices.filter((price) => (
+      price.subscriptionId === subscriptionId && (!planType || price.planType === planType)
+    )));
+  }
+
+  async listSubscriptionPricePoints(
+    subscriptionId: string,
+    territory: string,
+    planType: SubscriptionPlanType,
+  ) {
+    const current = this.subscriptionPrices.find((price) => (
+      price.subscriptionId === subscriptionId
+      && price.territory === territory
+      && price.planType === planType
+      && price.startDate === null
+    ));
+    if (!current) return [];
+    return Array.from({ length: 11 }, (_, index) => 50 + index * 5).map((factor) => testSubscriptionPoint(
+      territory,
+      current.currency,
+      factor === 100 ? current.customerPrice : (Math.ceil(Number(current.customerPrice) * factor) / 100).toFixed(2),
+      factor,
+    ));
+  }
+
+  async listSubscriptionPricePointEqualizations(
+    subscriptionId: string,
+    pricePoint: SubscriptionPricePoint,
+    planType: SubscriptionPlanType,
+  ) {
+    const factor = Number(pricePoint.id.match(/-(\d+)$/)?.[1] ?? 100);
+    return this.subscriptionPrices
+      .filter((price) => price.subscriptionId === subscriptionId && price.planType === planType && price.startDate === null)
+      .filter((price) => factor !== 100 || price.territory !== this.missingBaselineTerritory)
+      .map((price) => testSubscriptionPoint(
+        price.territory,
+        price.currency,
+        factor === 100 ? price.customerPrice : (Math.ceil(Number(price.customerPrice) * factor) / 100).toFixed(2),
+        factor,
+      ));
+  }
+
+  async applySubscriptionPriceChanges(input: ApplySubscriptionPriceChangesInput) {
+    const current = await this.listSubscriptionPrices(input.subscriptionId, input.planType);
+    const snapshots: SubscriptionPriceSnapshot[] = current.map((price) => ({
+      id: price.id,
+      territory: price.territory,
+      currency: price.currency,
+      customerPrice: price.customerPrice,
+      proceeds: price.proceeds,
+      proceedsYear2: price.proceedsYear2,
+      pricePointId: price.pricePointId,
+      startDate: price.startDate,
+      preserved: price.preserved,
+      planType: price.planType,
+    })).sort((left, right) => left.territory.localeCompare(right.territory));
+    if (stableJson(snapshots) !== stableJson(input.expected)) throw new Error("Subscription pricing changed.");
+    for (const [index, change] of input.changes.entries()) {
+      const source = current.find((price) => price.territory === change.territory && price.startDate === null)!;
+      const factor = Number(change.pricePointId.match(/-(\d+)$/)?.[1] ?? 100);
+      const point = testSubscriptionPoint(change.territory, change.currency, change.customerPrice, factor);
+      this.subscriptionPrices.push({
+        ...point,
+        id: `scheduled-${change.territory}-${index}`,
+        subscriptionId: input.subscriptionId,
+        pricePointId: change.pricePointId,
+        startDate: input.startDate,
+        preserved: change.preserveCurrentPrice,
+        planType: input.planType,
+      });
+      expect(source.currency).toBe(change.currency);
+    }
   }
 
   async listCustomerReviews(appId: string, options?: Parameters<AscProvider["listCustomerReviews"]>[1]) {
@@ -531,6 +669,22 @@ class FakeAscProvider implements AscProvider, AppleAdsProvider {
     this.adsCampaigns[0]!.dailyBudget.amount = amount;
   }
 
+  addScheduledSubscriptionPrice(territory: string, startDate: string) {
+    const source = this.subscriptionPrices.find((price) => price.territory === territory && price.startDate === null);
+    if (!source) throw new Error(`Subscription price ${territory} was not found.`);
+    this.subscriptionPrices.push({
+      ...structuredClone(source),
+      id: `external-schedule-${territory}`,
+      startDate,
+    });
+  }
+
+  setSubscriptionPriceAmount(territory: string, customerPrice: string) {
+    const source = this.subscriptionPrices.find((price) => price.territory === territory && price.startDate === null);
+    if (!source) throw new Error(`Subscription price ${territory} was not found.`);
+    source.customerPrice = customerPrice;
+  }
+
   setReviewTitle(title: string) {
     this.reviews[0]!.title = title;
   }
@@ -648,6 +802,12 @@ const createHarness = () => {
     createUpsertCustomerReviewResponsePlan: (
       input: Parameters<AscStudioService["createUpsertCustomerReviewResponsePlan"]>[0],
     ) => coreService.createUpsertCustomerReviewResponsePlan(input, "gui"),
+    listSubscriptions: (appId: string) => coreService.listSubscriptions(appId),
+    listSubscriptionPrices: (appId: string, subscriptionId: string, planType?: SubscriptionPlanType) =>
+      coreService.listSubscriptionPrices(appId, subscriptionId, planType),
+    createSubscriptionParityPricingPlan: (
+      input: Parameters<AscStudioService["createSubscriptionParityPricingPlan"]>[0],
+    ) => coreService.createSubscriptionParityPricingPlan(input, "gui"),
     createAddBuildToGroupPlan: (input: AddBuildToGroupInput) => coreService.createAddBuildToGroupPlan(input, "gui"),
     confirmAddBuildToGroupPlan: (planId: string, digest: string) => coreService.confirmAddBuildToGroupPlan(planId, digest, "gui"),
     listBuilds: (appId: string) => coreService.listBuilds(appId),
@@ -690,6 +850,108 @@ describe("stableJson", () => {
 });
 
 describe("AscStudioService mutation plans", () => {
+  it("builds and applies a softened parity plan with a hard revenue floor", async () => {
+    const { service, store } = createHarness();
+    const plan = await service.createSubscriptionParityPricingPlan({
+      appId: app.id,
+      subscriptionId: testSubscription.id,
+      planType: "UPFRONT",
+      baseTerritory: "USA",
+      floorPercent: 70,
+      strengthPercent: 50,
+      startDate: "2026-08-07",
+    });
+
+    expect(plan.operation).toBe("subscription.prices.update");
+    if (plan.operation !== "subscription.prices.update") throw new Error("Expected subscription pricing plan.");
+    expect(plan.after.summary).toMatchObject({
+      storefronts: 3,
+      changes: 2,
+      decreases: 2,
+      increases: 0,
+      floorProtected: 1,
+    });
+    expect(plan.after.recommendations.find((item) => item.territory === "IND")).toMatchObject({
+      factorPercent: 70,
+      reason: "floor",
+      change: "decrease",
+      recommended: { customerPrice: "6999.30" },
+    });
+    expect(plan.after.recommendations.find((item) => item.territory === "GBR")).toMatchObject({
+      factorPercent: 95,
+      reason: "ppp",
+      recommended: { customerPrice: "95.00" },
+    });
+
+    await service.confirmPlan(plan.id, plan.digest);
+    const prices = await service.listSubscriptionPrices(app.id, testSubscription.id, "UPFRONT");
+    expect(prices.filter((price) => price.startDate === "2026-08-07")).toHaveLength(2);
+    expect(store.events.map((event) => event.operation)).toContain("subscription.prices.update");
+  });
+
+  it("holds a storefront unchanged when Apple already has a future price", async () => {
+    const { provider, service } = createHarness();
+    provider.addScheduledSubscriptionPrice("GBR", "2026-08-20");
+    const plan = await service.createSubscriptionParityPricingPlan({
+      appId: app.id,
+      subscriptionId: testSubscription.id,
+      planType: "UPFRONT",
+      baseTerritory: "USA",
+      floorPercent: 70,
+      strengthPercent: 50,
+      startDate: "2026-08-07",
+    });
+
+    if (plan.operation !== "subscription.prices.update") throw new Error("Expected subscription pricing plan.");
+    expect(plan.after.summary).toMatchObject({ changes: 1, scheduledProtected: 1 });
+    expect(plan.after.recommendations.find((item) => item.territory === "GBR")).toMatchObject({
+      reason: "scheduled",
+      change: "protected",
+    });
+    expect(plan.after.changes.map((change) => change.territory)).toEqual(["IND"]);
+  });
+
+  it("holds a storefront unchanged when Apple omits its comparable baseline", async () => {
+    const { provider, service } = createHarness();
+    provider.setMissingBaselineTerritory("GBR");
+    const plan = await service.createSubscriptionParityPricingPlan({
+      appId: app.id,
+      subscriptionId: testSubscription.id,
+      planType: "UPFRONT",
+      baseTerritory: "USA",
+      floorPercent: 70,
+      strengthPercent: 50,
+      startDate: "2026-08-07",
+    });
+
+    if (plan.operation !== "subscription.prices.update") throw new Error("Expected subscription pricing plan.");
+    expect(plan.after.summary).toMatchObject({ changes: 1, noData: 1 });
+    expect(plan.after.recommendations.find((item) => item.territory === "GBR")).toMatchObject({
+      reason: "no_data",
+      change: "unchanged",
+      equalized: null,
+      recommended: { id: "point-GBR-100", customerPrice: "99.99" },
+    });
+    expect(plan.after.changes.map((change) => change.territory)).toEqual(["IND"]);
+  });
+
+  it("fails closed when subscription pricing changes after review", async () => {
+    const { provider, service, store } = createHarness();
+    const plan = await service.createSubscriptionParityPricingPlan({
+      appId: app.id,
+      subscriptionId: testSubscription.id,
+      planType: "UPFRONT",
+      baseTerritory: "USA",
+      floorPercent: 70,
+      strengthPercent: 50,
+      startDate: "2026-08-07",
+    });
+    provider.setSubscriptionPriceAmount("IND", "8999.00");
+
+    await expect(service.confirmPlan(plan.id, plan.digest)).rejects.toMatchObject({ code: "stale_plan" });
+    expect(store.plans.get(plan.id)?.state).toBe("stale");
+  });
+
   it("plans an exact first customer-review response with a stable digest", async () => {
     const { service } = createHarness();
     const responseBody = "  Thanks for the thoughtful review.\nWe appreciate it.  ";

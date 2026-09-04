@@ -150,11 +150,20 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Long-running jobs with persisted events, cancellation, and recovery
 - Webhook intake plus polling reconciliation
 
-## 0.7 — Monetization
+## Subscription parity pricing — complete
 
-- IAPs, subscriptions, groups, offers, prices, territory availability, and review assets
+- List auto-renewable subscriptions and their complete current and scheduled storefront prices through Apple's public API
+- Build softened purchasing-power recommendations from a dated World Bank PPP/exchange-rate snapshot
+- Enforce a configurable hard floor, cap recommendations at Apple's comparable price, and round upward to real Apple price points
+- Hold missing-data storefronts and territories with future schedules unchanged
+- Show exact local-currency territory diffs, evidence years, floor interventions, and preserved-subscriber raises before confirmation
+- Re-read the entire pricing schedule before a write, create future-dated changes without retries, reconcile failed or indeterminate writes, and require exact restoration or manual App Store Connect review
+- Exercise the same policy in deterministic demo mode without contacting Apple
+
+## 0.7 — Remaining monetization
+
+- IAPs, subscription groups, offers, introductory pricing, territory availability, and review assets
 - Version-aware IAP and subscription metadata
-- Purchasing-power-parity plans with exact territory diffs
 - StoreKit configuration export and test checks
 
 ## 0.8 — Distribution

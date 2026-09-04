@@ -36,6 +36,13 @@ import type {
   ScreenshotAssetSnapshot,
   ScreenshotDisplayType,
   ScreenshotUploadReceipt,
+  SubscriptionParityPricingInput,
+  SubscriptionPlanType,
+  SubscriptionPrice,
+  SubscriptionPriceChange,
+  SubscriptionPricePoint,
+  SubscriptionPriceSnapshot,
+  SubscriptionSummary,
   SubmitVersionInput,
   UpdateAppleAdsCampaignInput,
   UpdateAppleAdsKeywordInput,
@@ -57,9 +64,19 @@ import {
   type AnalyticsProvider,
   type AnalyticsStore,
 } from "./analytics.js";
+import {
+  pricePointByTerritory,
+  selectPricePointAtOrAbove,
+  sortedSubscriptionPriceSnapshots,
+  subscriptionParityBand,
+  subscriptionPriceLevelSource,
+  subscriptionPriceSnapshot,
+  subscriptionPriceState,
+} from "./subscription-pricing.js";
 
 export type { UpsertCustomerReviewResponseInput } from "@asc-studio/contracts";
 export * from "./analytics.js";
+export * from "./subscription-pricing.js";
 
 export interface AscProvider {
   getStatus(): Promise<AgentStatus>;
@@ -67,6 +84,19 @@ export interface AscProvider {
   listCustomerReviews(appId: string, options?: CustomerReviewListOptions): Promise<CustomerReviewsPage>;
   getCustomerReview(appId: string, reviewId: string): Promise<CustomerReview>;
   upsertCustomerReviewResponse(reviewId: string, responseBody: string): Promise<CustomerReviewResponse>;
+  listSubscriptions(appId: string): Promise<SubscriptionSummary[]>;
+  listSubscriptionPrices(subscriptionId: string, planType?: SubscriptionPlanType): Promise<SubscriptionPrice[]>;
+  listSubscriptionPricePoints(
+    subscriptionId: string,
+    territory: string,
+    planType: SubscriptionPlanType,
+  ): Promise<SubscriptionPricePoint[]>;
+  listSubscriptionPricePointEqualizations(
+    subscriptionId: string,
+    pricePoint: SubscriptionPricePoint,
+    planType: SubscriptionPlanType,
+  ): Promise<SubscriptionPricePoint[]>;
+  applySubscriptionPriceChanges(input: ApplySubscriptionPriceChangesInput): Promise<void>;
   listBuilds(appId: string, options?: BuildListOptions): Promise<BuildSummary[]>;
   getBuild(appId: string, buildId: string): Promise<BuildSummary>;
   listGroups(appId: string): Promise<TesterGroup[]>;
@@ -115,6 +145,14 @@ export interface ApplyScreenshotChangesInput {
   uploads: ScreenshotUploadReceipt[];
   deleteIds: string[];
   expected: ScreenshotAssetSnapshot[];
+}
+
+export interface ApplySubscriptionPriceChangesInput {
+  subscriptionId: string;
+  planType: SubscriptionPlanType;
+  startDate: string;
+  changes: SubscriptionPriceChange[];
+  expected: SubscriptionPriceSnapshot[];
 }
 
 export interface AppListOptions {
@@ -362,6 +400,19 @@ export class AscStudioService {
     return this.dependencies.provider.listApps(options);
   }
 
+  listSubscriptions(appId: string) {
+    return this.dependencies.provider.listSubscriptions(appId);
+  }
+
+  async listSubscriptionPrices(
+    appId: string,
+    subscriptionId: string,
+    planType?: SubscriptionPlanType,
+  ) {
+    await this.requireSubscription(appId, subscriptionId);
+    return this.dependencies.provider.listSubscriptionPrices(subscriptionId, planType);
+  }
+
   async listCustomerReviews(appId: string, options?: CustomerReviewListOptions) {
     if (options?.cursor !== undefined && options.cursor.length > 2_048) {
       throw new DomainError("invalid_cursor", "The customer-review cursor is too long.");
@@ -487,6 +538,263 @@ export class AscStudioService {
     };
 
     await this.savePlanned(plan, actor, review.id);
+    return plan;
+  }
+
+  async createSubscriptionParityPricingPlan(
+    input: SubscriptionParityPricingInput,
+    actor: AuditEvent["actor"],
+  ): Promise<MutationPlan> {
+    const now = this.dependencies.now();
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const startDate = new Date(`${input.startDate}T00:00:00.000Z`);
+    if (Number.isNaN(startDate.getTime()) || startDate.toISOString().slice(0, 10) !== input.startDate) {
+      throw new DomainError("invalid_start_date", "Choose a real calendar date for the price change.");
+    }
+    const earliest = new Date(today);
+    earliest.setUTCDate(earliest.getUTCDate() + 2);
+    const latest = new Date(today);
+    latest.setUTCDate(latest.getUTCDate() + 180);
+    if (startDate < earliest || startDate > latest) {
+      throw new DomainError(
+        "invalid_start_date",
+        `Schedule parity pricing between ${earliest.toISOString().slice(0, 10)} and ${latest.toISOString().slice(0, 10)}.`,
+      );
+    }
+
+    const subscription = await this.requireSubscription(input.appId, input.subscriptionId);
+    const [prices, basePoints, context] = await Promise.all([
+      this.dependencies.provider.listSubscriptionPrices(subscription.id, input.planType),
+      this.dependencies.provider.listSubscriptionPricePoints(
+        subscription.id,
+        input.baseTerritory,
+        input.planType,
+      ),
+      this.activeContext(),
+    ]);
+    const asOfDate = today.toISOString().slice(0, 10);
+    const state = subscriptionPriceState(prices, asOfDate);
+    const basePrice = state.current.get(input.baseTerritory);
+    if (!basePrice) {
+      throw new DomainError(
+        "subscription_base_price_missing",
+        `The subscription has no current ${input.planType.toLocaleLowerCase("en-US")} price in ${input.baseTerritory}.`,
+      );
+    }
+    const basePointFromPrice: SubscriptionPricePoint = {
+      id: basePrice.pricePointId,
+      territory: basePrice.territory,
+      currency: basePrice.currency,
+      customerPrice: basePrice.customerPrice,
+      proceeds: basePrice.proceeds,
+      proceedsYear2: basePrice.proceedsYear2,
+    };
+    const basePoint = basePoints.find((point) => point.id === basePrice.pricePointId) ?? basePointFromPrice;
+    const baselineEqualizations = await this.dependencies.provider.listSubscriptionPricePointEqualizations(
+      subscription.id,
+      basePoint,
+      input.planType,
+    );
+    const baselineByTerritory = pricePointByTerritory([...baselineEqualizations, basePoint]);
+
+    const bands = new Map([...state.current.keys()].map((territory) => [
+      territory,
+      subscriptionParityBand(
+        territory,
+        input.baseTerritory,
+        input.floorPercent,
+        input.strengthPercent,
+      ),
+    ] as const));
+    const factors = [...new Set([...bands.values()]
+      .filter((band) => band.reason !== "no_data")
+      .map((band) => band.factorPercent))]
+      .sort((left, right) => left - right);
+    const availableBasePoints = basePoints.some((point) => point.id === basePoint.id)
+      ? basePoints
+      : [...basePoints, basePoint];
+    const pointForFactor = new Map<number, SubscriptionPricePoint>();
+    for (const factor of factors) {
+      if (factor === 100) {
+        pointForFactor.set(factor, basePoint);
+        continue;
+      }
+      const selected = selectPricePointAtOrAbove(
+        availableBasePoints,
+        Number(basePoint.customerPrice) * factor / 100,
+      );
+      if (!selected) {
+        throw new DomainError(
+          "subscription_price_point_missing",
+          `Apple did not return a ${input.baseTerritory} price point at or above the ${factor}% safety band.`,
+        );
+      }
+      pointForFactor.set(factor, selected);
+    }
+
+    const equalizationsByFactor = new Map<number, Map<string, SubscriptionPricePoint>>();
+    await Promise.all(factors.map(async (factor) => {
+      const sourcePoint = pointForFactor.get(factor)!;
+      if (factor === 100) {
+        equalizationsByFactor.set(factor, baselineByTerritory);
+        return;
+      }
+      const equalizations = await this.dependencies.provider.listSubscriptionPricePointEqualizations(
+        subscription.id,
+        sourcePoint,
+        input.planType,
+      );
+      equalizationsByFactor.set(factor, pricePointByTerritory([...equalizations, sourcePoint]));
+    }));
+
+    const recommendations = [...state.current.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([territory, current]) => {
+        const currentPoint: SubscriptionPricePoint = {
+          id: current.pricePointId,
+          territory: current.territory,
+          currency: current.currency,
+          customerPrice: current.customerPrice,
+          proceeds: current.proceeds,
+          proceedsYear2: current.proceedsYear2,
+        };
+        const band = bands.get(territory)!;
+        const comparable = baselineByTerritory.get(territory) ?? null;
+        const equalized = comparable?.currency === current.currency ? comparable : null;
+        if (state.scheduled.has(territory)) {
+          return {
+            territory,
+            territoryName: band.territoryName,
+            currency: current.currency,
+            priceLevelRatio: band.priceLevelRatio,
+            dataYear: band.dataYear,
+            factorPercent: band.factorPercent,
+            reason: "scheduled" as const,
+            change: "protected" as const,
+            preserveCurrentPrice: false,
+            current: subscriptionPriceSnapshot(current),
+            equalized,
+            recommended: currentPoint,
+          };
+        }
+        if (!equalized) {
+          return {
+            territory,
+            territoryName: band.territoryName,
+            currency: current.currency,
+            priceLevelRatio: band.priceLevelRatio,
+            dataYear: band.dataYear,
+            factorPercent: 100,
+            reason: "no_data" as const,
+            change: "unchanged" as const,
+            preserveCurrentPrice: false,
+            current: subscriptionPriceSnapshot(current),
+            equalized: null,
+            recommended: currentPoint,
+          };
+        }
+        const target = band.reason === "no_data"
+          ? null
+          : equalizationsByFactor.get(band.factorPercent)?.get(territory) ?? null;
+        if (!target || target.currency !== current.currency) {
+          return {
+            territory,
+            territoryName: band.territoryName,
+            currency: current.currency,
+            priceLevelRatio: band.priceLevelRatio,
+            dataYear: band.dataYear,
+            factorPercent: 100,
+            reason: "no_data" as const,
+            change: "unchanged" as const,
+            preserveCurrentPrice: false,
+            current: subscriptionPriceSnapshot(current),
+            equalized,
+            recommended: currentPoint,
+          };
+        }
+        const change = target.id === current.pricePointId
+          ? "unchanged" as const
+          : Number(target.customerPrice) > Number(current.customerPrice)
+            ? "increase" as const
+            : "decrease" as const;
+        return {
+          territory,
+          territoryName: band.territoryName,
+          currency: current.currency,
+          priceLevelRatio: band.priceLevelRatio,
+          dataYear: band.dataYear,
+          factorPercent: band.factorPercent,
+          reason: band.reason,
+          change,
+          preserveCurrentPrice: change === "increase",
+          current: subscriptionPriceSnapshot(current),
+          equalized,
+          recommended: target,
+        };
+      });
+    const changes: SubscriptionPriceChange[] = recommendations.flatMap((recommendation) => (
+      recommendation.change === "increase" || recommendation.change === "decrease"
+        ? [{
+            territory: recommendation.territory,
+            currency: recommendation.currency,
+            pricePointId: recommendation.recommended.id,
+            customerPrice: recommendation.recommended.customerPrice,
+            preserveCurrentPrice: recommendation.preserveCurrentPrice,
+          }]
+        : []
+    ));
+    if (changes.length === 0) {
+      throw new DomainError("no_changes", "These guardrails already match every eligible storefront price.");
+    }
+
+    const createdAt = now;
+    const expiresAt = new Date(createdAt.getTime() + 10 * 60 * 1000);
+    const target = {
+      appId: subscription.appId,
+      subscriptionId: subscription.id,
+      subscriptionName: subscription.name,
+      productId: subscription.productId,
+      planType: input.planType,
+      baseTerritory: input.baseTerritory,
+    };
+    const before = { prices: sortedSubscriptionPriceSnapshots(prices) };
+    const after = {
+      startDate: input.startDate,
+      floorPercent: input.floorPercent,
+      strengthPercent: input.strengthPercent,
+      dataSource: subscriptionPriceLevelSource,
+      summary: {
+        storefronts: recommendations.length,
+        changes: changes.length,
+        increases: recommendations.filter((item) => item.change === "increase").length,
+        decreases: recommendations.filter((item) => item.change === "decrease").length,
+        unchanged: recommendations.filter((item) => item.change === "unchanged").length,
+        floorProtected: recommendations.filter((item) => item.reason === "floor").length,
+        noData: recommendations.filter((item) => item.reason === "no_data").length,
+        scheduledProtected: recommendations.filter((item) => item.reason === "scheduled").length,
+      },
+      recommendations,
+      changes,
+    };
+    const planWithoutDigest = {
+      operation: "subscription.prices.update" as const,
+      context,
+      target,
+      before,
+      after,
+      expiresAt: expiresAt.toISOString(),
+    };
+    const plan: MutationPlan = {
+      id: this.dependencies.id(),
+      ...planWithoutDigest,
+      risk: "mutation",
+      state: "awaiting_confirmation",
+      createdAt: createdAt.toISOString(),
+      digest: this.dependencies.digest(stableJson(planWithoutDigest)),
+      summary: `Schedule ${changes.length} parity price change${changes.length === 1 ? "" : "s"} for ${subscription.name}`,
+      error: null,
+    };
+    await this.savePlanned(plan, actor, subscription.id);
     return plan;
   }
 
@@ -1101,6 +1409,8 @@ export class AscStudioService {
         return this.confirmUpsertCustomerReviewResponsePlan(plan, actor);
       case "analytics.report_request.create":
         return this.confirmCreateAnalyticsReportRequestPlan(plan, actor);
+      case "subscription.prices.update":
+        return this.confirmUpdateSubscriptionPricesPlan(plan, actor);
       case "apple_ads.campaign.create":
         return this.confirmCreateAppleAdsCampaignPlan(plan, actor);
       case "apple_ads.campaign.update":
@@ -1152,6 +1462,33 @@ export class AscStudioService {
     }
     return this.runPlan(plan, actor, plan.target.appId, async () => {
       await this.analyticsProvider().createAnalyticsReportRequest(plan.after);
+    });
+  }
+
+  private async confirmUpdateSubscriptionPricesPlan(
+    plan: Extract<MutationPlan, { operation: "subscription.prices.update" }>,
+    actor: AuditEvent["actor"],
+  ) {
+    const subscription = await this.requireSubscription(plan.target.appId, plan.target.subscriptionId)
+      .catch(async () => this.markStale(plan, actor, plan.target.subscriptionId, "The subscription no longer exists."));
+    if (subscription.name !== plan.target.subscriptionName || subscription.productId !== plan.target.productId) {
+      await this.markStale(plan, actor, subscription.id, "The subscription changed after planning.");
+    }
+    const current = await this.dependencies.provider.listSubscriptionPrices(
+      subscription.id,
+      plan.target.planType,
+    );
+    if (stableJson(sortedSubscriptionPriceSnapshots(current)) !== stableJson(plan.before.prices)) {
+      await this.markStale(plan, actor, subscription.id, "Subscription pricing changed after planning.");
+    }
+    return this.runPlan(plan, actor, subscription.id, async () => {
+      await this.dependencies.provider.applySubscriptionPriceChanges({
+        subscriptionId: subscription.id,
+        planType: plan.target.planType,
+        startDate: plan.after.startDate,
+        changes: plan.after.changes,
+        expected: plan.before.prices,
+      });
     });
   }
 
@@ -1477,6 +1814,13 @@ export class AscStudioService {
     const version = versions.find((candidate) => candidate.id === versionId);
     if (!version) throw new DomainError("version_not_found", "The selected App Store version no longer exists.");
     return version;
+  }
+
+  private async requireSubscription(appId: string, subscriptionId: string) {
+    const subscriptions = await this.dependencies.provider.listSubscriptions(appId);
+    const subscription = subscriptions.find((candidate) => candidate.id === subscriptionId);
+    if (!subscription) throw new DomainError("subscription_not_found", "The selected subscription no longer exists.");
+    return subscription;
   }
 
   private async activeContext() {

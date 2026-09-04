@@ -18,10 +18,11 @@ import { OverviewWorkspace } from "./components/OverviewWorkspace.js";
 import { ReleaseWorkspace, type ReleaseTarget } from "./components/ReleaseWorkspace.js";
 import { ReviewsWorkspace } from "./components/ReviewsWorkspace.js";
 import { Sidebar, type WorkspaceSection } from "./components/Sidebar.js";
+import { SubscriptionsWorkspace } from "./components/SubscriptionsWorkspace.js";
 import { TestFlightWorkspace } from "./components/TestFlightWorkspace.js";
 
 const initialAppLimit = 25;
-const workspaceSections: WorkspaceSection[] = ["overview", "analytics", "testflight", "releases", "apple-ads", "reviews"];
+const workspaceSections: WorkspaceSection[] = ["overview", "analytics", "testflight", "releases", "subscriptions", "apple-ads", "reviews"];
 const initialWorkspaceSection = () => {
   const value = new URLSearchParams(window.location.search).get("section");
   if (value === "store-listing") return "releases";
@@ -492,6 +493,8 @@ export const App = () => {
         </main>
       ) : section === "testflight" ? (
         <TestFlightWorkspace app={app} status={status} onInspectorChange={setTestFlightInspectorOpen} key={`testflight-${status?.connectionId ?? "none"}-${app.id}`} />
+      ) : section === "subscriptions" ? (
+        <SubscriptionsWorkspace app={app} status={status} key={`subscriptions-${status.connectionId ?? "none"}-${app.id}`} />
       ) : section === "apple-ads" ? (
         <AppleAdsWorkspace app={app} status={status} onManageConnection={() => openConnections("apple-ads")} onUseInMetadata={(keyword) => {
           setMetadataKeywordSuggestion(keyword);

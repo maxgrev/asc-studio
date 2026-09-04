@@ -32,6 +32,8 @@ import {
   ScreenshotsResponseSchema,
   ScreenshotUploadResponseSchema,
   SubmissionStatusResponseSchema,
+  SubscriptionPricesResponseSchema,
+  SubscriptionsResponseSchema,
   TranslationProviderStatusSchema,
   ValidationResponseSchema,
   VersionsResponseSchema,
@@ -64,6 +66,9 @@ import type {
   MutationPlan,
   SubmitVersionInput,
   SubmitVersionMutationPlan,
+  SubscriptionParityPricingInput,
+  SubscriptionPlanType,
+  UpdateSubscriptionPricesMutationPlan,
   UpdateAppleAdsCampaignInput,
   UpdateAppleAdsCampaignMutationPlan,
   UpdateAppleAdsKeywordInput,
@@ -270,6 +275,17 @@ export const api = {
     return request(`/api/apps/${encodeURIComponent(appId)}/builds?${query}`, BuildsResponseSchema);
   },
   groups: (appId: string) => request(`/api/apps/${encodeURIComponent(appId)}/groups`, GroupsResponseSchema),
+  subscriptions: (appId: string) => request(
+    `/api/apps/${encodeURIComponent(appId)}/subscriptions`,
+    SubscriptionsResponseSchema,
+  ),
+  subscriptionPrices: (appId: string, subscriptionId: string, planType?: SubscriptionPlanType) => {
+    const query = planType ? `?${new URLSearchParams({ planType })}` : "";
+    return request(
+      `/api/apps/${encodeURIComponent(appId)}/subscriptions/${encodeURIComponent(subscriptionId)}/prices${query}`,
+      SubscriptionPricesResponseSchema,
+    );
+  },
   customerReviews: (
     appId: string,
     options: {
@@ -365,6 +381,19 @@ export const api = {
   planBuildGroup: async (input: AddBuildToGroupInput): Promise<{ plan: BuildGroupMutationPlan }> => {
     const response = await request("/api/plans/build-group", PlanResponseSchema, { method: "POST", body: JSON.stringify(input) });
     if (response.plan.operation !== "build.add_to_group") throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
+    return { plan: response.plan };
+  },
+  planSubscriptionPrices: async (
+    input: SubscriptionParityPricingInput,
+  ): Promise<{ plan: UpdateSubscriptionPricesMutationPlan }> => {
+    const response = await request(
+      "/api/plans/subscription-prices",
+      PlanResponseSchema,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    if (response.plan.operation !== "subscription.prices.update") {
+      throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
+    }
     return { plan: response.plan };
   },
   planVersion: async (input: CreateVersionInput): Promise<{ plan: CreateVersionMutationPlan }> => {

@@ -21,6 +21,10 @@ import {
   type ScreenshotAssetSnapshot,
   type ScreenshotDisplayType,
   type StatusTone,
+  type SubscriptionPlanType,
+  type SubscriptionPrice,
+  type SubscriptionPricePoint,
+  type SubscriptionSummary,
   type SubmitVersionInput,
   type TesterGroup,
   type ValidationCheck,
@@ -31,8 +35,10 @@ import {
   type VersionSubmissionResult,
   type VersionSubmissionStatus,
 } from "@asc-studio/contracts";
+import { stableJson } from "@asc-studio/core";
 import type {
   ApplyScreenshotChangesInput,
+  ApplySubscriptionPriceChangesInput,
   AppListOptions,
   AscProvider,
   AnalyticsProvider,
@@ -75,6 +81,14 @@ import {
   ScreenshotSetsPageSchema,
   ScreenshotsPageSchema,
   ScreenshotUploadOperationsSchema,
+  SubscriptionGroupsPageSchema,
+  SubscriptionPricePointResourceSchema,
+  SubscriptionPricePointsPageSchema,
+  SubscriptionPriceResourceSchema,
+  SubscriptionPriceResponseSchema,
+  SubscriptionPricesPageSchema,
+  SubscriptionsPageSchema,
+  TerritoryResourceSchema,
   type AppStoreVersionResource,
   type BetaGroupResource,
   type BuildResource,
@@ -84,6 +98,11 @@ import {
   type PreReleaseVersionResource,
   type ReviewSubmissionResource,
   type ScreenshotResource,
+  type SubscriptionGroupResource,
+  type SubscriptionPricePointResource,
+  type SubscriptionPriceResource,
+  type SubscriptionResource,
+  type TerritoryResource,
 } from "./schemas.js";
 
 export type { AppStoreConnectCredentials } from "./client.js";
@@ -150,6 +169,85 @@ const screenshotSnapshot = (asset: ScreenshotAsset): ScreenshotAssetSnapshot => 
   state: asset.state,
   sortOrder: asset.sortOrder,
 });
+
+const normalizeSubscription = (
+  resource: SubscriptionResource,
+  appId: string,
+  group: SubscriptionGroupResource,
+): SubscriptionSummary => ({
+  id: resource.id,
+  appId,
+  groupId: group.id,
+  groupName: group.attributes.referenceName,
+  name: resource.attributes.name,
+  productId: resource.attributes.productId,
+  state: resource.attributes.state,
+  period: resource.attributes.subscriptionPeriod,
+  groupLevel: resource.attributes.groupLevel ?? null,
+  familySharable: resource.attributes.familySharable ?? false,
+});
+
+const normalizeSubscriptionPricePoint = (
+  resource: SubscriptionPricePointResource,
+  territories: Map<string, TerritoryResource>,
+): SubscriptionPricePoint => {
+  const territory = relationshipId(resource, "territory");
+  if (!territory) throw new Error(`App Store Connect omitted the territory for price point ${resource.id}.`);
+  const currency = territories.get(territory)?.attributes.currency;
+  if (!currency) throw new Error(`App Store Connect omitted the currency for ${territory}.`);
+  return {
+    id: resource.id,
+    territory,
+    currency,
+    customerPrice: resource.attributes.customerPrice,
+    proceeds: resource.attributes.proceeds,
+    proceedsYear2: resource.attributes.proceedsYear2,
+  };
+};
+
+const normalizeSubscriptionPrice = (
+  resource: SubscriptionPriceResource,
+  subscriptionId: string,
+  pricePoints: Map<string, SubscriptionPricePoint>,
+  territories: Map<string, TerritoryResource>,
+): SubscriptionPrice => {
+  const pricePointId = relationshipId(resource, "subscriptionPricePoint");
+  if (!pricePointId) throw new Error(`App Store Connect omitted the price point for subscription price ${resource.id}.`);
+  const point = pricePoints.get(pricePointId);
+  if (!point) throw new Error(`App Store Connect omitted price-point details for subscription price ${resource.id}.`);
+  const territory = relationshipId(resource, "territory") ?? point.territory;
+  const currency = territories.get(territory)?.attributes.currency ?? point.currency;
+  return {
+    id: resource.id,
+    subscriptionId,
+    territory,
+    currency,
+    customerPrice: point.customerPrice,
+    proceeds: point.proceeds,
+    proceedsYear2: point.proceedsYear2,
+    pricePointId,
+    startDate: resource.attributes.startDate ?? null,
+    preserved: resource.attributes.preserved ?? false,
+    planType: resource.attributes.planType ?? "UPFRONT",
+  };
+};
+
+const subscriptionPriceSnapshots = (prices: SubscriptionPrice[]) => prices.map((price) => ({
+  id: price.id,
+  territory: price.territory,
+  currency: price.currency,
+  customerPrice: price.customerPrice,
+  proceeds: price.proceeds,
+  proceedsYear2: price.proceedsYear2,
+  pricePointId: price.pricePointId,
+  startDate: price.startDate,
+  preserved: price.preserved,
+  planType: price.planType,
+})).sort((left, right) => (
+  left.territory.localeCompare(right.territory)
+  || (left.startDate ?? "").localeCompare(right.startDate ?? "")
+  || left.id.localeCompare(right.id)
+));
 
 const releaseSnapshot = (
   locale: LocalizationSnapshot["locale"],
@@ -458,6 +556,216 @@ export class AppStoreConnectProvider implements AscProvider, AnalyticsProvider {
       bundleId: resource.attributes.bundleId,
       platforms: [],
     }));
+  }
+
+  async listSubscriptions(appId: string): Promise<SubscriptionSummary[]> {
+    const groupQuery = new URLSearchParams({
+      limit: "200",
+      "fields[subscriptionGroups]": "referenceName",
+    });
+    const groupPages = await this.collect(
+      `/v1/apps/${encodeURIComponent(appId)}/subscriptionGroups?${groupQuery}`,
+      SubscriptionGroupsPageSchema,
+      true,
+    );
+    const groups = groupPages.flatMap((page) => page.data);
+    const subscriptions = await Promise.all(groups.map(async (group) => {
+      const query = new URLSearchParams({
+        limit: "200",
+        "fields[subscriptions]": "name,productId,familySharable,state,subscriptionPeriod,groupLevel",
+      });
+      const pages = await this.collect(
+        `/v1/subscriptionGroups/${encodeURIComponent(group.id)}/subscriptions?${query}`,
+        SubscriptionsPageSchema,
+        true,
+      );
+      return pages.flatMap((page) => page.data).map((resource) => normalizeSubscription(resource, appId, group));
+    }));
+    return subscriptions.flat().sort((left, right) => (
+      left.groupName.localeCompare(right.groupName)
+      || (left.groupLevel ?? Number.MAX_SAFE_INTEGER) - (right.groupLevel ?? Number.MAX_SAFE_INTEGER)
+      || left.name.localeCompare(right.name)
+    ));
+  }
+
+  async listSubscriptionPrices(
+    subscriptionId: string,
+    planType?: SubscriptionPlanType,
+  ): Promise<SubscriptionPrice[]> {
+    const query = new URLSearchParams({
+      limit: "200",
+      include: "subscriptionPricePoint,territory",
+      "fields[subscriptionPrices]": "startDate,preserved,planType,territory,subscriptionPricePoint",
+      "fields[subscriptionPricePoints]": "customerPrice,proceeds,proceedsYear2,territory",
+      "fields[territories]": "currency",
+    });
+    if (planType) query.set("filter[planType]", planType);
+    const pages = await this.collect(
+      `/v1/subscriptions/${encodeURIComponent(subscriptionId)}/prices?${query}`,
+      SubscriptionPricesPageSchema,
+      true,
+    );
+    const included = pages.flatMap((page) => page.included ?? []);
+    const territories = new Map(included.flatMap((candidate) => {
+      const parsed = TerritoryResourceSchema.safeParse(candidate);
+      return parsed.success ? [[parsed.data.id, parsed.data] as const] : [];
+    }));
+    const pricePointResources = new Map(included.flatMap((candidate) => {
+      const parsed = SubscriptionPricePointResourceSchema.safeParse(candidate);
+      return parsed.success ? [[parsed.data.id, parsed.data] as const] : [];
+    }));
+    const pricePoints = new Map([...pricePointResources.values()].map((resource) => {
+      const point = normalizeSubscriptionPricePoint(resource, territories);
+      return [point.id, point] as const;
+    }));
+    return pages.flatMap((page) => page.data)
+      .map((resource) => normalizeSubscriptionPrice(resource, subscriptionId, pricePoints, territories))
+      .filter((price) => !planType || price.planType === planType);
+  }
+
+  async listSubscriptionPricePoints(
+    subscriptionId: string,
+    territory: string,
+    planType: SubscriptionPlanType,
+  ): Promise<SubscriptionPricePoint[]> {
+    const query = new URLSearchParams({
+      limit: "8000",
+      include: "territory",
+      "filter[territory]": territory,
+      "filter[planType]": planType,
+      "fields[subscriptionPricePoints]": "customerPrice,proceeds,proceedsYear2,territory",
+      "fields[territories]": "currency",
+    });
+    const pages = await this.collect(
+      `/v1/subscriptions/${encodeURIComponent(subscriptionId)}/pricePoints?${query}`,
+      SubscriptionPricePointsPageSchema,
+      true,
+    );
+    return this.normalizeSubscriptionPricePointPages(pages);
+  }
+
+  async listSubscriptionPricePointEqualizations(
+    subscriptionId: string,
+    pricePoint: SubscriptionPricePoint,
+    planType: SubscriptionPlanType,
+  ): Promise<SubscriptionPricePoint[]> {
+    const query = new URLSearchParams({
+      limit: "8000",
+      include: "territory",
+      "filter[subscription]": subscriptionId,
+      "filter[planType]": planType,
+      "fields[subscriptionPricePoints]": "customerPrice,proceeds,proceedsYear2,territory",
+      "fields[territories]": "currency",
+    });
+    const pages = await this.collect(
+      `/v1/subscriptionPricePoints/${encodeURIComponent(pricePoint.id)}/equalizations?${query}`,
+      SubscriptionPricePointsPageSchema,
+      true,
+    );
+    return this.normalizeSubscriptionPricePointPages(pages);
+  }
+
+  async applySubscriptionPriceChanges(input: ApplySubscriptionPriceChangesInput): Promise<void> {
+    const current = await this.listSubscriptionPrices(input.subscriptionId, input.planType);
+    const expectedDigest = stableJson(input.expected);
+    if (stableJson(subscriptionPriceSnapshots(current)) !== expectedDigest) {
+      throw new Error("App Store Connect subscription pricing changed before the update started.");
+    }
+    const expectedIds = new Set(input.expected.map((price) => price.id));
+    const attemptedChanges: typeof input.changes = [];
+    const knownCreatedIds = new Set<string>();
+    try {
+      for (const change of input.changes) {
+        attemptedChanges.push(change);
+        const response = await this.client.request(
+          "POST",
+          "/v1/subscriptionPrices",
+          SubscriptionPriceResponseSchema,
+          {
+            expectedStatus: 201,
+            retry: false,
+            body: {
+              data: {
+                type: "subscriptionPrices",
+                attributes: {
+                  startDate: input.startDate,
+                  preserveCurrentPrice: change.preserveCurrentPrice,
+                  planType: input.planType,
+                },
+                relationships: {
+                  subscription: { data: { type: "subscriptions", id: input.subscriptionId } },
+                  subscriptionPricePoint: { data: { type: "subscriptionPricePoints", id: change.pricePointId } },
+                },
+              },
+            },
+          },
+        );
+        knownCreatedIds.add(response.data.id);
+      }
+      const verified = await this.listSubscriptionPrices(input.subscriptionId, input.planType);
+      for (const change of input.changes) {
+        if (!verified.some((price) => (
+          price.territory === change.territory
+          && price.pricePointId === change.pricePointId
+          && price.startDate === input.startDate
+          && price.planType === input.planType
+        ))) {
+          throw new Error(`App Store Connect could not verify the scheduled price for ${change.territory}.`);
+        }
+      }
+    } catch (error) {
+      const deletedIds = new Set<string>();
+      let consecutiveRestoredReads = 0;
+      for (let round = 0; round < 4; round += 1) {
+        let observed: SubscriptionPrice[];
+        try {
+          observed = await this.listSubscriptionPrices(input.subscriptionId, input.planType);
+        } catch {
+          consecutiveRestoredReads = 0;
+          continue;
+        }
+
+        const discoveredIds = observed.flatMap((price) => (
+          !expectedIds.has(price.id)
+          && price.startDate === input.startDate
+          && price.planType === input.planType
+          && attemptedChanges.some((change) => (
+            change.territory === price.territory
+            && change.currency === price.currency
+            && change.pricePointId === price.pricePointId
+          ))
+            ? [price.id]
+            : []
+        ));
+        const rollbackIds = [...new Set([...knownCreatedIds, ...discoveredIds])]
+          .filter((id) => !expectedIds.has(id) && !deletedIds.has(id));
+        if (rollbackIds.length > 0) {
+          consecutiveRestoredReads = 0;
+          for (const id of rollbackIds.reverse()) {
+            try {
+              await this.client.requestNoContent(
+                "DELETE",
+                `/v1/subscriptionPrices/${encodeURIComponent(id)}`,
+                { expectedStatus: 204, retry: false },
+              );
+              deletedIds.add(id);
+            } catch {
+              // A lost DELETE response is resolved by the exact schedule reads below.
+            }
+          }
+          continue;
+        }
+
+        if (stableJson(subscriptionPriceSnapshots(observed)) === expectedDigest) {
+          consecutiveRestoredReads += 1;
+          if (consecutiveRestoredReads >= 2) throw error;
+        } else {
+          consecutiveRestoredReads = 0;
+        }
+      }
+      const message = error instanceof Error ? error.message : "The subscription pricing update failed.";
+      throw new Error(`${message} ASC Studio could not verify that the original subscription price schedule was restored; review App Store Connect before retrying.`);
+    }
   }
 
   async listCustomerReviews(
@@ -1038,6 +1346,18 @@ export class AppStoreConnectProvider implements AscProvider, AnalyticsProvider {
       state: submission?.attributes.state ?? "NOT_SUBMITTED",
       submittedAt: submission?.attributes.submittedDate ?? null,
     };
+  }
+
+  private normalizeSubscriptionPricePointPages(
+    pages: Array<output<typeof SubscriptionPricePointsPageSchema>>,
+  ) {
+    const included = pages.flatMap((page) => page.included ?? []);
+    const territories = new Map(included.flatMap((candidate) => {
+      const parsed = TerritoryResourceSchema.safeParse(candidate);
+      return parsed.success ? [[parsed.data.id, parsed.data] as const] : [];
+    }));
+    return pages.flatMap((page) => page.data)
+      .map((resource) => normalizeSubscriptionPricePoint(resource, territories));
   }
 
   private async collect<Schema extends ZodTypeAny>(

@@ -1695,6 +1695,72 @@ describe("local-agent session boundary", () => {
     expect(await response.json()).toMatchObject({ error: { code: "invalid_input" } });
   });
 
+  it("reviews and schedules guarded subscription parity prices through the GUI API", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const start = new Date();
+    start.setUTCDate(start.getUTCDate() + 7);
+    const startDate = start.toISOString().slice(0, 10);
+    const subscriptionsResponse = await fetch(
+      `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/subscriptions`,
+      { headers: authorization(guiToken) },
+    );
+    const subscriptions = await subscriptionsResponse.json() as { subscriptions: Array<{ id: string; period: string }> };
+    expect(subscriptionsResponse.status).toBe(200);
+    expect(subscriptions.subscriptions).toContainEqual(expect.objectContaining({
+      id: "demo-subscription-orbit-pro-yearly",
+      period: "ONE_YEAR",
+    }));
+
+    const pricesResponse = await fetch(
+      `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/subscriptions/demo-subscription-orbit-pro-yearly/prices?planType=UPFRONT`,
+      { headers: authorization(guiToken) },
+    );
+    const prices = await pricesResponse.json() as { prices: Array<{ territory: string; customerPrice: string }> };
+    expect(pricesResponse.status).toBe(200);
+    expect(prices.prices).toContainEqual(expect.objectContaining({ territory: "USA", customerPrice: "119.99" }));
+
+    const planResponse = await fetch(`${agent!.baseUrl}/api/plans/subscription-prices`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        appId: "demo-app-orbit-notes",
+        subscriptionId: "demo-subscription-orbit-pro-yearly",
+        planType: "UPFRONT",
+        baseTerritory: "USA",
+        floorPercent: 70,
+        strengthPercent: 50,
+        startDate,
+      }),
+    });
+    const planBody = await planResponse.json() as {
+      plan: { id: string; digest: string; operation: string; after: { summary: { changes: number; floorProtected: number } } };
+    };
+    expect(planResponse.status).toBe(201);
+    expect(planBody.plan).toMatchObject({
+      operation: "subscription.prices.update",
+      after: { summary: { floorProtected: expect.any(Number), changes: expect.any(Number) } },
+    });
+    expect(planBody.plan.after.summary.changes).toBeGreaterThan(0);
+    expect(planBody.plan.after.summary.floorProtected).toBeGreaterThan(0);
+
+    const confirmResponse = await fetch(`${agent!.baseUrl}/api/plans/${planBody.plan.id}/confirm`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ digest: planBody.plan.digest }),
+    });
+    expect(confirmResponse.status).toBe(200);
+    expect(await confirmResponse.json()).toMatchObject({
+      plan: { operation: "subscription.prices.update", state: "succeeded" },
+    });
+
+    const scheduledResponse = await fetch(
+      `${agent!.baseUrl}/api/apps/demo-app-orbit-notes/subscriptions/demo-subscription-orbit-pro-yearly/prices?planType=UPFRONT`,
+      { headers: authorization(guiToken) },
+    );
+    const scheduled = await scheduledResponse.json() as { prices: Array<{ startDate: string | null }> };
+    expect(scheduled.prices.filter((price) => price.startDate === startDate)).toHaveLength(planBody.plan.after.summary.changes);
+  });
+
   it("plans, confirms, reads, and validates release metadata through the GUI API", async () => {
     const headers = { ...authorization(guiToken), "content-type": "application/json" };
     const versionsResponse = await fetch(`${agent!.baseUrl}/api/apps/demo-app-orbit-notes/versions?platform=IOS`, {

@@ -25,6 +25,8 @@ import {
   GenerateCustomerReviewReplyInputSchema,
   GenerateReleaseCopyTranslationsInputSchema,
   ScreenshotDisplayTypeSchema,
+  SubscriptionParityPricingInputSchema,
+  SubscriptionPlanTypeSchema,
   SubmitVersionInputSchema,
   UpdateAppleAdsCampaignInputSchema,
   UpdateAppleAdsKeywordInputSchema,
@@ -205,7 +207,7 @@ class AsyncReadWriteLock {
 }
 
 const domainStatus = (code: string) => {
-  if (["app_not_found", "group_not_found", "localization_not_found", "plan_not_found", "review_not_found", "screenshot_not_found", "version_not_found", "source_version_not_found"].includes(code)) return 404;
+  if (["app_not_found", "group_not_found", "localization_not_found", "plan_not_found", "review_not_found", "screenshot_not_found", "subscription_not_found", "version_not_found", "source_version_not_found"].includes(code)) return 404;
   if ([
     "already_assigned",
     "analytics_report_request_exists",
@@ -1263,6 +1265,26 @@ const main = async () => {
         json(response, 200, { apps });
         return;
       }
+      const subscriptionsMatch = url.pathname.match(/^\/api\/apps\/([^/]+)\/subscriptions$/);
+      if (request.method === "GET" && subscriptionsMatch?.[1]) {
+        json(response, 200, {
+          subscriptions: await service.listSubscriptions(decodeURIComponent(subscriptionsMatch[1])),
+        });
+        return;
+      }
+      const subscriptionPricesMatch = url.pathname.match(/^\/api\/apps\/([^/]+)\/subscriptions\/([^/]+)\/prices$/);
+      if (request.method === "GET" && subscriptionPricesMatch?.[1] && subscriptionPricesMatch[2]) {
+        const planTypeValue = url.searchParams.get("planType");
+        const planType = planTypeValue === null ? undefined : SubscriptionPlanTypeSchema.parse(planTypeValue);
+        json(response, 200, {
+          prices: await service.listSubscriptionPrices(
+            decodeURIComponent(subscriptionPricesMatch[1]),
+            decodeURIComponent(subscriptionPricesMatch[2]),
+            planType,
+          ),
+        });
+        return;
+      }
       const customerReviewsMatch = url.pathname.match(/^\/api\/apps\/([^/]+)\/customer-reviews$/);
       if (request.method === "GET" && customerReviewsMatch?.[1]) {
         const query = customerReviewsQuerySchema.parse(uniqueSearchParams(url.searchParams));
@@ -1409,6 +1431,11 @@ const main = async () => {
         // Filter marker-backed V2 plans in SQL before LIMIT so a burst of V2
         // plans cannot crowd older V1 plans out of this paginated feed.
         json(response, 200, { plans: await store.listNonPortfolioPlans("awaiting_confirmation", 50) });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/plans/subscription-prices") {
+        const input = SubscriptionParityPricingInputSchema.parse(await readBody(request));
+        json(response, 201, { plan: await service.createSubscriptionParityPricingPlan(input, "gui") });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/plans/version") {

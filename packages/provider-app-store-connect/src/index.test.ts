@@ -31,6 +31,398 @@ afterEach(async () => {
 });
 
 describe("AppStoreConnectProvider direct transport", () => {
+  it("maps subscription groups, products, price points, and storefront schedules", async () => {
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === "/v1/apps/app-1/subscriptionGroups" && init?.method === "GET") {
+        return json(page([{ type: "subscriptionGroups", id: "group-pro", attributes: { referenceName: "Pro" } }]));
+      }
+      if (url.pathname === "/v1/subscriptionGroups/group-pro/subscriptions" && init?.method === "GET") {
+        return json(page([{
+          type: "subscriptions",
+          id: "subscription-yearly",
+          attributes: {
+            name: "Pro Yearly",
+            productId: "com.example.pro.yearly",
+            familySharable: true,
+            state: "APPROVED",
+            subscriptionPeriod: "ONE_YEAR",
+            groupLevel: 1,
+          },
+        }]));
+      }
+      if (url.pathname === "/v1/subscriptions/subscription-yearly/prices" && init?.method === "GET") {
+        expect(url.searchParams.get("filter[planType]")).toBe("UPFRONT");
+        return json(page([{
+          type: "subscriptionPrices",
+          id: "price-us",
+          attributes: { startDate: null, preserved: false, planType: "UPFRONT" },
+          relationships: {
+            territory: { data: { type: "territories", id: "USA" } },
+            subscriptionPricePoint: { data: { type: "subscriptionPricePoints", id: "point-us-120" } },
+          },
+        }], { included: [{
+          type: "territories",
+          id: "USA",
+          attributes: { currency: "USD" },
+        }, {
+          type: "subscriptionPricePoints",
+          id: "point-us-120",
+          attributes: { customerPrice: "119.99", proceeds: "83.99", proceedsYear2: "101.99" },
+          relationships: { territory: { data: { type: "territories", id: "USA" } } },
+        }] }));
+      }
+      throw new Error(`Unexpected request: ${init?.method} ${url}`);
+    }) as unknown as typeof fetch;
+    const provider = new AppStoreConnectProvider({ credentials, fetch: mockFetch });
+
+    await expect(provider.listSubscriptions("app-1")).resolves.toEqual([{
+      id: "subscription-yearly",
+      appId: "app-1",
+      groupId: "group-pro",
+      groupName: "Pro",
+      name: "Pro Yearly",
+      productId: "com.example.pro.yearly",
+      state: "APPROVED",
+      period: "ONE_YEAR",
+      groupLevel: 1,
+      familySharable: true,
+    }]);
+    await expect(provider.listSubscriptionPrices("subscription-yearly", "UPFRONT")).resolves.toEqual([{
+      id: "price-us",
+      subscriptionId: "subscription-yearly",
+      territory: "USA",
+      currency: "USD",
+      customerPrice: "119.99",
+      proceeds: "83.99",
+      proceedsYear2: "101.99",
+      pricePointId: "point-us-120",
+      startDate: null,
+      preserved: false,
+      planType: "UPFRONT",
+    }]);
+  });
+
+  it("posts exact future subscription price points and verifies the resulting schedule", async () => {
+    let scheduled = false;
+    let writeBody: unknown;
+    const included = [{ type: "territories", id: "GBR", attributes: { currency: "GBP" } }, {
+      type: "subscriptionPricePoints",
+      id: "point-gb-current",
+      attributes: { customerPrice: "99.99", proceeds: "69.99", proceedsYear2: "84.99" },
+      relationships: { territory: { data: { type: "territories", id: "GBR" } } },
+    }, {
+      type: "subscriptionPricePoints",
+      id: "point-gb-guarded",
+      attributes: { customerPrice: "94.99", proceeds: "66.49", proceedsYear2: "80.74" },
+      relationships: { territory: { data: { type: "territories", id: "GBR" } } },
+    }];
+    const currentPrice = {
+      type: "subscriptionPrices",
+      id: "price-gb-current",
+      attributes: { startDate: null, preserved: false, planType: "UPFRONT" },
+      relationships: {
+        territory: { data: { type: "territories", id: "GBR" } },
+        subscriptionPricePoint: { data: { type: "subscriptionPricePoints", id: "point-gb-current" } },
+      },
+    };
+    const scheduledPrice = {
+      type: "subscriptionPrices",
+      id: "price-gb-scheduled",
+      attributes: { startDate: "2026-09-15", preserved: false, planType: "UPFRONT" },
+      relationships: {
+        territory: { data: { type: "territories", id: "GBR" } },
+        subscriptionPricePoint: { data: { type: "subscriptionPricePoints", id: "point-gb-guarded" } },
+      },
+    };
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === "/v1/subscriptions/subscription-yearly/prices" && init?.method === "GET") {
+        return json(page(scheduled ? [currentPrice, scheduledPrice] : [currentPrice], { included }));
+      }
+      if (url.pathname === "/v1/subscriptionPrices" && init?.method === "POST") {
+        writeBody = JSON.parse(String(init.body));
+        scheduled = true;
+        return json({ data: scheduledPrice, links: { self: `${url}/price-gb-scheduled` } }, 201);
+      }
+      throw new Error(`Unexpected request: ${init?.method} ${url}`);
+    }) as unknown as typeof fetch;
+    const provider = new AppStoreConnectProvider({ credentials, fetch: mockFetch });
+
+    await provider.applySubscriptionPriceChanges({
+      subscriptionId: "subscription-yearly",
+      planType: "UPFRONT",
+      startDate: "2026-09-15",
+      expected: [{
+        id: "price-gb-current",
+        territory: "GBR",
+        currency: "GBP",
+        customerPrice: "99.99",
+        proceeds: "69.99",
+        proceedsYear2: "84.99",
+        pricePointId: "point-gb-current",
+        startDate: null,
+        preserved: false,
+        planType: "UPFRONT",
+      }],
+      changes: [{
+        territory: "GBR",
+        currency: "GBP",
+        pricePointId: "point-gb-guarded",
+        customerPrice: "94.99",
+        preserveCurrentPrice: false,
+      }],
+    });
+
+    expect(writeBody).toEqual({
+      data: {
+        type: "subscriptionPrices",
+        attributes: { startDate: "2026-09-15", preserveCurrentPrice: false, planType: "UPFRONT" },
+        relationships: {
+          subscription: { data: { type: "subscriptions", id: "subscription-yearly" } },
+          subscriptionPricePoint: { data: { type: "subscriptionPricePoints", id: "point-gb-guarded" } },
+        },
+      },
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("removes newly created subscription schedules when verification fails", async () => {
+    let removedId: string | null = null;
+    const currentPrice = {
+      type: "subscriptionPrices",
+      id: "price-us-current",
+      attributes: { startDate: null, preserved: false, planType: "UPFRONT" },
+      relationships: {
+        territory: { data: { type: "territories", id: "USA" } },
+        subscriptionPricePoint: { data: { type: "subscriptionPricePoints", id: "point-us-current" } },
+      },
+    };
+    const scheduledPrice = {
+      type: "subscriptionPrices",
+      id: "price-us-created",
+      attributes: { startDate: "2026-09-15", preserved: true, planType: "UPFRONT" },
+      relationships: {
+        territory: { data: { type: "territories", id: "USA" } },
+        subscriptionPricePoint: { data: { type: "subscriptionPricePoints", id: "point-us-higher" } },
+      },
+    };
+    const included = [{ type: "territories", id: "USA", attributes: { currency: "USD" } }, {
+      type: "subscriptionPricePoints",
+      id: "point-us-current",
+      attributes: { customerPrice: "119.99", proceeds: "83.99", proceedsYear2: "101.99" },
+      relationships: { territory: { data: { type: "territories", id: "USA" } } },
+    }, {
+      type: "subscriptionPricePoints",
+      id: "point-us-higher",
+      attributes: { customerPrice: "129.99", proceeds: "90.99", proceedsYear2: "110.49" },
+      relationships: { territory: { data: { type: "territories", id: "USA" } } },
+    }];
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === "/v1/subscriptions/subscription-yearly/prices" && init?.method === "GET") {
+        return json(page([currentPrice], { included }));
+      }
+      if (url.pathname === "/v1/subscriptionPrices" && init?.method === "POST") {
+        return json({ data: scheduledPrice, links: { self: `${url}/price-us-created` } }, 201);
+      }
+      if (url.pathname === "/v1/subscriptionPrices/price-us-created" && init?.method === "DELETE") {
+        removedId = "price-us-created";
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected request: ${init?.method} ${url}`);
+    }) as unknown as typeof fetch;
+    const provider = new AppStoreConnectProvider({ credentials, fetch: mockFetch });
+
+    await expect(provider.applySubscriptionPriceChanges({
+      subscriptionId: "subscription-yearly",
+      planType: "UPFRONT",
+      startDate: "2026-09-15",
+      expected: [{
+        id: "price-us-current",
+        territory: "USA",
+        currency: "USD",
+        customerPrice: "119.99",
+        proceeds: "83.99",
+        proceedsYear2: "101.99",
+        pricePointId: "point-us-current",
+        startDate: null,
+        preserved: false,
+        planType: "UPFRONT",
+      }],
+      changes: [{
+        territory: "USA",
+        currency: "USD",
+        pricePointId: "point-us-higher",
+        customerPrice: "129.99",
+        preserveCurrentPrice: true,
+      }],
+    })).rejects.toThrow("could not verify the scheduled price for USA");
+    expect(removedId).toBe("price-us-created");
+    expect(mockFetch).toHaveBeenCalledTimes(7);
+  });
+
+  it("discovers and removes a schedule when Apple accepts a POST but its response is lost", async () => {
+    let scheduled = false;
+    let removedId: string | null = null;
+    const currentPrice = {
+      type: "subscriptionPrices",
+      id: "price-gb-current",
+      attributes: { startDate: null, preserved: false, planType: "UPFRONT" },
+      relationships: {
+        territory: { data: { type: "territories", id: "GBR" } },
+        subscriptionPricePoint: { data: { type: "subscriptionPricePoints", id: "point-gb-current" } },
+      },
+    };
+    const scheduledPrice = {
+      type: "subscriptionPrices",
+      id: "price-gb-created",
+      attributes: { startDate: "2026-09-15", preserved: false, planType: "UPFRONT" },
+      relationships: {
+        territory: { data: { type: "territories", id: "GBR" } },
+        subscriptionPricePoint: { data: { type: "subscriptionPricePoints", id: "point-gb-lower" } },
+      },
+    };
+    const included = [{ type: "territories", id: "GBR", attributes: { currency: "GBP" } }, {
+      type: "subscriptionPricePoints",
+      id: "point-gb-current",
+      attributes: { customerPrice: "99.99", proceeds: "69.99", proceedsYear2: "84.99" },
+      relationships: { territory: { data: { type: "territories", id: "GBR" } } },
+    }, {
+      type: "subscriptionPricePoints",
+      id: "point-gb-lower",
+      attributes: { customerPrice: "94.99", proceeds: "66.49", proceedsYear2: "80.74" },
+      relationships: { territory: { data: { type: "territories", id: "GBR" } } },
+    }];
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === "/v1/subscriptions/subscription-yearly/prices" && init?.method === "GET") {
+        return json(page(scheduled ? [currentPrice, scheduledPrice] : [currentPrice], { included }));
+      }
+      if (url.pathname === "/v1/subscriptionPrices" && init?.method === "POST") {
+        scheduled = true;
+        return json({ data: { type: "subscriptionPrices", id: "price-gb-created" } }, 201);
+      }
+      if (url.pathname === "/v1/subscriptionPrices/price-gb-created" && init?.method === "DELETE") {
+        removedId = "price-gb-created";
+        scheduled = false;
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`Unexpected request: ${init?.method} ${url}`);
+    }) as unknown as typeof fetch;
+    const provider = new AppStoreConnectProvider({ credentials, fetch: mockFetch });
+
+    let caught: unknown;
+    try {
+      await provider.applySubscriptionPriceChanges({
+        subscriptionId: "subscription-yearly",
+        planType: "UPFRONT",
+        startDate: "2026-09-15",
+        expected: [{
+          id: "price-gb-current",
+          territory: "GBR",
+          currency: "GBP",
+          customerPrice: "99.99",
+          proceeds: "69.99",
+          proceedsYear2: "84.99",
+          pricePointId: "point-gb-current",
+          startDate: null,
+          preserved: false,
+          planType: "UPFRONT",
+        }],
+        changes: [{
+          territory: "GBR",
+          currency: "GBP",
+          pricePointId: "point-gb-lower",
+          customerPrice: "94.99",
+          preserveCurrentPrice: false,
+        }],
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).not.toContain("could not verify that the original subscription price schedule was restored");
+    expect(removedId).toBe("price-gb-created");
+    expect(scheduled).toBe(false);
+    expect(mockFetch).toHaveBeenCalledTimes(6);
+  });
+
+  it("requires manual review when an indeterminate Apple write cannot be rolled back exactly", async () => {
+    let scheduled = false;
+    const currentPrice = {
+      type: "subscriptionPrices",
+      id: "price-ca-current",
+      attributes: { startDate: null, preserved: false, planType: "UPFRONT" },
+      relationships: {
+        territory: { data: { type: "territories", id: "CAN" } },
+        subscriptionPricePoint: { data: { type: "subscriptionPricePoints", id: "point-ca-current" } },
+      },
+    };
+    const scheduledPrice = {
+      type: "subscriptionPrices",
+      id: "price-ca-created",
+      attributes: { startDate: "2026-09-15", preserved: false, planType: "UPFRONT" },
+      relationships: {
+        territory: { data: { type: "territories", id: "CAN" } },
+        subscriptionPricePoint: { data: { type: "subscriptionPricePoints", id: "point-ca-lower" } },
+      },
+    };
+    const included = [{ type: "territories", id: "CAN", attributes: { currency: "CAD" } }, {
+      type: "subscriptionPricePoints",
+      id: "point-ca-current",
+      attributes: { customerPrice: "159.99", proceeds: "111.99", proceedsYear2: "135.99" },
+      relationships: { territory: { data: { type: "territories", id: "CAN" } } },
+    }, {
+      type: "subscriptionPricePoints",
+      id: "point-ca-lower",
+      attributes: { customerPrice: "149.99", proceeds: "104.99", proceedsYear2: "127.49" },
+      relationships: { territory: { data: { type: "territories", id: "CAN" } } },
+    }];
+    const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === "/v1/subscriptions/subscription-yearly/prices" && init?.method === "GET") {
+        return json(page(scheduled ? [currentPrice, scheduledPrice] : [currentPrice], { included }));
+      }
+      if (url.pathname === "/v1/subscriptionPrices" && init?.method === "POST") {
+        scheduled = true;
+        return json({ data: { type: "subscriptionPrices", id: "price-ca-created" } }, 201);
+      }
+      if (url.pathname === "/v1/subscriptionPrices/price-ca-created" && init?.method === "DELETE") {
+        return json({ errors: [{ status: "500", title: "Delete failed", detail: "Schedule remained." }] }, 500);
+      }
+      throw new Error(`Unexpected request: ${init?.method} ${url}`);
+    }) as unknown as typeof fetch;
+    const provider = new AppStoreConnectProvider({ credentials, fetch: mockFetch });
+
+    await expect(provider.applySubscriptionPriceChanges({
+      subscriptionId: "subscription-yearly",
+      planType: "UPFRONT",
+      startDate: "2026-09-15",
+      expected: [{
+        id: "price-ca-current",
+        territory: "CAN",
+        currency: "CAD",
+        customerPrice: "159.99",
+        proceeds: "111.99",
+        proceedsYear2: "135.99",
+        pricePointId: "point-ca-current",
+        startDate: null,
+        preserved: false,
+        planType: "UPFRONT",
+      }],
+      changes: [{
+        territory: "CAN",
+        currency: "CAD",
+        pricePointId: "point-ca-lower",
+        customerPrice: "149.99",
+        preserveCurrentPrice: false,
+      }],
+    })).rejects.toThrow("could not verify that the original subscription price schedule was restored; review App Store Connect before retrying");
+    expect(scheduled).toBe(true);
+  });
+
   it("signs short-lived Apple JWTs and follows first-party pagination", async () => {
     const authorizations: string[] = [];
     const mockFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {

@@ -8,6 +8,110 @@ export const AppSummarySchema = z.object({
 });
 export type AppSummary = z.infer<typeof AppSummarySchema>;
 
+export const SubscriptionPeriodSchema = z.enum([
+  "ONE_WEEK",
+  "ONE_MONTH",
+  "TWO_MONTHS",
+  "THREE_MONTHS",
+  "SIX_MONTHS",
+  "ONE_YEAR",
+]);
+export type SubscriptionPeriod = z.infer<typeof SubscriptionPeriodSchema>;
+
+export const SubscriptionPlanTypeSchema = z.enum(["UPFRONT", "MONTHLY"]);
+export type SubscriptionPlanType = z.infer<typeof SubscriptionPlanTypeSchema>;
+
+export const SubscriptionSummarySchema = z.object({
+  id: z.string().min(1),
+  appId: z.string().min(1),
+  groupId: z.string().min(1),
+  groupName: z.string().min(1),
+  name: z.string().min(1),
+  productId: z.string().min(1),
+  state: z.string().min(1),
+  period: SubscriptionPeriodSchema,
+  groupLevel: z.number().int().positive().nullable(),
+  familySharable: z.boolean(),
+}).strict();
+export type SubscriptionSummary = z.infer<typeof SubscriptionSummarySchema>;
+
+const SubscriptionDecimalSchema = z.string().regex(/^\d+(?:\.\d+)?$/, "Use a non-negative decimal amount.");
+const SubscriptionTerritorySchema = z.string().regex(/^[A-Z]{3}$/, "Use a three-letter App Store territory code.");
+const SubscriptionCurrencySchema = z.string().regex(/^[A-Z]{3}$/, "Use an ISO 4217 currency code.");
+const SubscriptionDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date in YYYY-MM-DD format.");
+
+export const SubscriptionPricePointSchema = z.object({
+  id: z.string().min(1),
+  territory: SubscriptionTerritorySchema,
+  currency: SubscriptionCurrencySchema,
+  customerPrice: SubscriptionDecimalSchema,
+  proceeds: SubscriptionDecimalSchema,
+  proceedsYear2: SubscriptionDecimalSchema,
+}).strict();
+export type SubscriptionPricePoint = z.infer<typeof SubscriptionPricePointSchema>;
+
+export const SubscriptionPriceSchema = SubscriptionPricePointSchema.extend({
+  subscriptionId: z.string().min(1),
+  pricePointId: z.string().min(1),
+  startDate: SubscriptionDateSchema.nullable(),
+  preserved: z.boolean(),
+  planType: SubscriptionPlanTypeSchema,
+}).omit({ id: true }).extend({
+  id: z.string().min(1),
+}).strict();
+export type SubscriptionPrice = z.infer<typeof SubscriptionPriceSchema>;
+
+export const SubscriptionPriceSnapshotSchema = SubscriptionPriceSchema.omit({ subscriptionId: true });
+export type SubscriptionPriceSnapshot = z.infer<typeof SubscriptionPriceSnapshotSchema>;
+
+export const SubscriptionParityPricingInputSchema = z.object({
+  appId: z.string().min(1),
+  subscriptionId: z.string().min(1),
+  planType: SubscriptionPlanTypeSchema,
+  baseTerritory: SubscriptionTerritorySchema,
+  floorPercent: z.number().int().min(50).max(100),
+  strengthPercent: z.number().int().min(0).max(100),
+  startDate: SubscriptionDateSchema,
+}).strict();
+export type SubscriptionParityPricingInput = z.infer<typeof SubscriptionParityPricingInputSchema>;
+
+export const SubscriptionParityReasonSchema = z.enum([
+  "base",
+  "ppp",
+  "floor",
+  "no_data",
+  "scheduled",
+]);
+export type SubscriptionParityReason = z.infer<typeof SubscriptionParityReasonSchema>;
+
+export const SubscriptionParityChangeKindSchema = z.enum(["increase", "decrease", "unchanged", "protected"]);
+export type SubscriptionParityChangeKind = z.infer<typeof SubscriptionParityChangeKindSchema>;
+
+export const SubscriptionParityRecommendationSchema = z.object({
+  territory: SubscriptionTerritorySchema,
+  territoryName: z.string().min(1),
+  currency: SubscriptionCurrencySchema,
+  priceLevelRatio: z.number().positive().nullable(),
+  dataYear: z.number().int().min(2000).max(2100).nullable(),
+  factorPercent: z.number().int().min(50).max(100),
+  reason: SubscriptionParityReasonSchema,
+  change: SubscriptionParityChangeKindSchema,
+  preserveCurrentPrice: z.boolean(),
+  current: SubscriptionPriceSnapshotSchema,
+  equalized: SubscriptionPricePointSchema.nullable(),
+  recommended: SubscriptionPricePointSchema,
+}).strict();
+export type SubscriptionParityRecommendation = z.infer<typeof SubscriptionParityRecommendationSchema>;
+
+export const SubscriptionPriceChangeSchema = z.object({
+  territory: SubscriptionTerritorySchema,
+  currency: SubscriptionCurrencySchema,
+  pricePointId: z.string().min(1),
+  customerPrice: SubscriptionDecimalSchema,
+  preserveCurrentPrice: z.boolean(),
+}).strict();
+export type SubscriptionPriceChange = z.infer<typeof SubscriptionPriceChangeSchema>;
+
 export const CustomerReviewResponseStateSchema = z.enum(["PENDING_PUBLISH", "PUBLISHED"]);
 export type CustomerReviewResponseState = z.infer<typeof CustomerReviewResponseStateSchema>;
 
@@ -1811,6 +1915,44 @@ export const CreateAnalyticsPortfolioReportRequestMutationPlanSchema = PlanBaseS
 }).strict();
 export type CreateAnalyticsPortfolioReportRequestMutationPlan = z.infer<typeof CreateAnalyticsPortfolioReportRequestMutationPlanSchema>;
 
+export const UpdateSubscriptionPricesMutationPlanSchema = PlanBaseSchema.extend({
+  operation: z.literal("subscription.prices.update"),
+  target: z.object({
+    appId: z.string().min(1),
+    subscriptionId: z.string().min(1),
+    subscriptionName: z.string().min(1),
+    productId: z.string().min(1),
+    planType: SubscriptionPlanTypeSchema,
+    baseTerritory: SubscriptionTerritorySchema,
+  }).strict(),
+  before: z.object({
+    prices: z.array(SubscriptionPriceSnapshotSchema).max(1_000),
+  }).strict(),
+  after: z.object({
+    startDate: SubscriptionDateSchema,
+    floorPercent: z.number().int().min(50).max(100),
+    strengthPercent: z.number().int().min(0).max(100),
+    dataSource: z.object({
+      name: z.literal("World Bank World Development Indicators"),
+      indicators: z.tuple([z.literal("PA.NUS.PPP"), z.literal("PA.NUS.FCRF")]),
+      retrievedAt: SubscriptionDateSchema,
+    }).strict(),
+    summary: z.object({
+      storefronts: z.number().int().nonnegative(),
+      changes: z.number().int().nonnegative(),
+      increases: z.number().int().nonnegative(),
+      decreases: z.number().int().nonnegative(),
+      unchanged: z.number().int().nonnegative(),
+      floorProtected: z.number().int().nonnegative(),
+      noData: z.number().int().nonnegative(),
+      scheduledProtected: z.number().int().nonnegative(),
+    }).strict(),
+    recommendations: z.array(SubscriptionParityRecommendationSchema).max(500),
+    changes: z.array(SubscriptionPriceChangeSchema).min(1).max(500),
+  }).strict(),
+});
+export type UpdateSubscriptionPricesMutationPlan = z.infer<typeof UpdateSubscriptionPricesMutationPlanSchema>;
+
 export const AppleAdsCampaignSnapshotSchema = AppleAdsCampaignSchema.pick({
   id: true,
   adAccountId: true,
@@ -1924,6 +2066,7 @@ export const MutationPlanSchema = z.discriminatedUnion("operation", [
   SubmitVersionMutationPlanSchema,
   UpsertCustomerReviewResponseMutationPlanSchema,
   CreateAnalyticsReportRequestMutationPlanSchema,
+  UpdateSubscriptionPricesMutationPlanSchema,
   CreateAppleAdsCampaignMutationPlanSchema,
   UpdateAppleAdsCampaignMutationPlanSchema,
   CreateAppleAdsAdGroupMutationPlanSchema,
@@ -1949,6 +2092,16 @@ export const AppsResponseSchema = z.object({
   apps: z.array(AppSummarySchema),
 });
 export type AppsResponse = z.infer<typeof AppsResponseSchema>;
+
+export const SubscriptionsResponseSchema = z.object({
+  subscriptions: z.array(SubscriptionSummarySchema),
+}).strict();
+export type SubscriptionsResponse = z.infer<typeof SubscriptionsResponseSchema>;
+
+export const SubscriptionPricesResponseSchema = z.object({
+  prices: z.array(SubscriptionPriceSchema).max(1_000),
+}).strict();
+export type SubscriptionPricesResponse = z.infer<typeof SubscriptionPricesResponseSchema>;
 
 export const AppleAdsCampaignsResponseSchema = z.object({
   campaigns: z.array(AppleAdsCampaignSchema),
