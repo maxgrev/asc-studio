@@ -33,7 +33,7 @@ interface DialogFrameProps {
   children: ReactNode;
 }
 
-const DialogFrame = ({ title, subtitle, wide, busy, onClose, children }: DialogFrameProps) => {
+export const DialogFrame = ({ title, subtitle, wide, busy, onClose, children }: DialogFrameProps) => {
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -114,6 +114,7 @@ export const CreateVersionDialog = ({ appId, platform, versions, plan, busy, err
   const [copyMetadataFrom, setCopyMetadataFrom] = useState<string>(latest?.versionString ?? "");
   const [excludeWhatsNew, setExcludeWhatsNew] = useState(true);
   const validVersion = /^\d+(?:\.\d+){1,2}$/.test(versionString);
+  const versionCreated = plan?.state === "failed";
 
   return (
     <DialogFrame title={plan ? "Review new version" : "Create a new version"} subtitle="Start an editable App Store version and carry each locale’s stable content forward." busy={busy} onClose={onClose}>
@@ -139,7 +140,7 @@ export const CreateVersionDialog = ({ appId, platform, versions, plan, busy, err
       )}
       {error ? <div className="dialog-error" role="alert">{error}</div> : null}
       <footer className="dialog-footer">
-        <button className="button secondary" type="button" onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="button secondary" type="button" onClick={onClose} disabled={busy}>{versionCreated ? "Close" : "Cancel"}</button>
         {!plan ? (
           <button className="button primary" type="button" disabled={!validVersion || busy} onClick={() => onReview({
             appId,
@@ -150,7 +151,7 @@ export const CreateVersionDialog = ({ appId, platform, versions, plan, busy, err
             excludeWhatsNew,
           })}>{busy ? "Creating plan…" : "Review version"}</button>
         ) : (
-          <button className="button primary" type="button" disabled={busy} onClick={onConfirm}>{busy ? "Creating…" : `Create ${plan.after.versionString}`}</button>
+          <button className="button primary" type="button" disabled={busy || versionCreated} onClick={onConfirm}>{busy ? "Creating…" : versionCreated ? "Version created" : `Create ${plan.after.versionString}`}</button>
         )}
       </footer>
     </DialogFrame>

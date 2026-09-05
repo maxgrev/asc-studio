@@ -13,6 +13,7 @@ import {
   AnalyticsPortfolioStatusResponseSchema,
   AnalyticsPortfolioSyncResponseSchema,
   type MutationPlan,
+  type SearchMetadata,
 } from "@asc-studio/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SqliteAnalyticsStore } from "./analytics-store.js";
@@ -1861,6 +1862,25 @@ describe("local-agent session boundary", () => {
     );
     expect(validateResponse.status).toBe(200);
     expect(await validateResponse.json()).toMatchObject({ report: { versionId: "demo-version-250", summary: { warnings: 1 } } });
+  });
+
+  it("reads and applies shared search metadata through the reviewed GUI API", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    const path = "/api/apps/demo-app-orbit-notes/versions/demo-version-250/search-metadata?locale=fr-FR";
+    const response = await fetch(`${agent!.baseUrl}${path}`, { headers });
+    expect(response.status).toBe(200);
+    const { metadata } = await response.json() as { metadata: SearchMetadata };
+    const values = { name: "Orbit : Notes et idées", subtitle: "Organisez votre quotidien", keywords: "journal,écriture,tâches" };
+    const planned = await fetch(`${agent!.baseUrl}/api/plans/search-metadata`, { method: "POST", headers, body: JSON.stringify({ appId: metadata.appId, versionId: metadata.versionId, locale: metadata.locale, expected: metadata, values }) });
+    expect(planned.status).toBe(201);
+    const { plan } = await planned.json() as { plan: MutationPlan };
+    expect(plan.operation).toBe("app.search_metadata.update");
+    const confirmed = await fetch(`${agent!.baseUrl}/api/plans/${plan.id}/confirm`, { method: "POST", headers, body: JSON.stringify({ digest: plan.digest }) });
+    expect(confirmed.status).toBe(200);
+    const saved = await fetch(`${agent!.baseUrl}${path}`, { headers });
+    expect(await saved.json()).toMatchObject({ metadata: { values } });
+    const stale = await fetch(`${agent!.baseUrl}/api/plans/search-metadata`, { method: "POST", headers, body: JSON.stringify({ appId: metadata.appId, versionId: metadata.versionId, locale: metadata.locale, expected: metadata, values }) });
+    expect(stale.status).toBeGreaterThanOrEqual(400);
   });
 
   it("stages, reviews, and replaces a macOS screenshot set through the GUI API", async () => {

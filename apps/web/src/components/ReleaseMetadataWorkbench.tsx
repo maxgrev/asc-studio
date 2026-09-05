@@ -10,6 +10,7 @@ import {
   Languages,
   LoaderCircle,
   RotateCcw,
+  Search,
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef } from "react";
 import {
@@ -36,6 +37,7 @@ export interface ReleaseMetadataWorkbenchProps {
   onFieldChange: (locale: AppStoreLocale, field: LocalizationField, value: string) => void;
   onRevertLocale: (locale: AppStoreLocale) => void;
   onTranslateAdapt: () => void;
+  onOptimizeSearch: () => void;
   onFocusFieldHandled: () => void;
 }
 
@@ -82,6 +84,7 @@ export const ReleaseMetadataWorkbench = ({
   onFieldChange,
   onRevertLocale,
   onTranslateAdapt,
+  onOptimizeSearch,
   onFocusFieldHandled,
 }: ReleaseMetadataWorkbenchProps) => {
   const idPrefix = useId().replaceAll(":", "");
@@ -257,6 +260,7 @@ export const ReleaseMetadataWorkbench = ({
               <p>{selectedLocale}{selectedLocale === sourceLocale ? " · Source locale" : ""}{!editable ? " · Read-only version" : selectedDirtyFields.size ? ` · ${selectedDirtyFields.size} edited field${selectedDirtyFields.size === 1 ? "" : "s"}` : " · No local changes"}</p>
             </div>
             <div className="release-editor-actions">
+              <button className="button secondary" type="button" disabled={loading || locked} onClick={onOptimizeSearch}><Search size={15} />Optimize search</button>
               <button
                 className="button tertiary"
                 type="button"

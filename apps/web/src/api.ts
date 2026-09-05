@@ -26,6 +26,7 @@ import {
   OpenAiConnectionResponseSchema,
   GroupsResponseSchema,
   LocalizationsResponseSchema,
+  SearchMetadataResponseSchema,
   PlanResponseSchema,
   PlansResponseSchema,
   ScreenshotDiscardResponseSchema,
@@ -48,6 +49,8 @@ import type {
   AppleAdsKeywordResearchInput,
   AppStoreConnectCredentialsInput,
   AppStorePlatform,
+  AppStoreLocale,
+  UpdateSearchMetadataInput,
   ScreenshotDisplayType,
   ScreenshotUploadReceipt,
   BuildGroupMutationPlan,
@@ -193,6 +196,15 @@ export const api = {
     AppleAdsKeywordResearchResponseSchema,
     { method: "POST", body: JSON.stringify(input) },
   ),
+  searchMetadata: (appId: string, versionId: string, locale: AppStoreLocale) => request(
+    `/api/apps/${encodeURIComponent(appId)}/versions/${encodeURIComponent(versionId)}/search-metadata?${new URLSearchParams({ locale })}`,
+    SearchMetadataResponseSchema,
+  ),
+  planSearchMetadata: async (input: UpdateSearchMetadataInput) => {
+    const response = await request("/api/plans/search-metadata", PlanResponseSchema, { method: "POST", body: JSON.stringify(input) });
+    if (response.plan.operation !== "app.search_metadata.update") throw new ApiError("invalid_response", "The local agent returned the wrong plan type.", 502);
+    return { plan: response.plan };
+  },
   appleAdsCampaignReport: (input: AppleAdsCampaignReportInput) => request(
     "/api/apple-ads/campaign-report",
     AppleAdsCampaignReportResponseSchema,

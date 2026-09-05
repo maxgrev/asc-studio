@@ -1403,6 +1403,41 @@ export const VersionLocalizationDraftSchema = ReleaseMetadataSchema.merge(StoreL
 });
 export type VersionLocalizationDraft = z.infer<typeof VersionLocalizationDraftSchema>;
 
+export const SearchMetadataValuesSchema = z.object({
+  name: z.string().min(2).max(30).refine((value) => value.trim().length >= 2, "Use at least two characters for the name."),
+  subtitle: z.string().max(30),
+  keywords: z.string().max(100),
+}).strict();
+export type SearchMetadataValues = z.infer<typeof SearchMetadataValuesSchema>;
+
+export const SearchMetadataSchema = z.object({
+  appId: z.string().min(1),
+  versionId: z.string().min(1),
+  versionString: z.string().min(1),
+  platform: AppStorePlatformSchema,
+  locale: AppStoreLocaleSchema,
+  versionEditable: z.boolean(),
+  appInfoId: z.string().min(1),
+  appInfoState: z.string().min(1),
+  appInfoEditable: z.boolean(),
+  appInfoLocalizationId: z.string().min(1),
+  versionLocalizationId: z.string().min(1),
+  values: z.object({ name: z.string(), subtitle: z.string(), keywords: z.string() }).strict(),
+}).strict();
+export type SearchMetadata = z.infer<typeof SearchMetadataSchema>;
+
+export const UpdateSearchMetadataInputSchema = z.object({
+  appId: z.string().min(1),
+  versionId: z.string().min(1),
+  locale: AppStoreLocaleSchema,
+  expected: SearchMetadataSchema,
+  values: SearchMetadataValuesSchema,
+}).strict().refine((input) => input.appId === input.expected.appId
+  && input.versionId === input.expected.versionId && input.locale === input.expected.locale,
+"The metadata must belong to the selected app, version, and locale.");
+export type UpdateSearchMetadataInput = z.infer<typeof UpdateSearchMetadataInputSchema>;
+export const SearchMetadataResponseSchema = z.object({ metadata: SearchMetadataSchema }).strict();
+
 export const VersionLocalizationFieldSchema = z.enum([
   "description",
   "whatsNew",
@@ -1813,6 +1848,14 @@ export const UpdateLocalizationsMutationPlanSchema = PlanBaseSchema.extend({
 });
 export type UpdateLocalizationsMutationPlan = z.infer<typeof UpdateLocalizationsMutationPlanSchema>;
 
+export const UpdateSearchMetadataMutationPlanSchema = PlanBaseSchema.extend({
+  operation: z.literal("app.search_metadata.update"),
+  target: z.object({ appId: z.string(), versionId: z.string(), locale: AppStoreLocaleSchema }),
+  before: SearchMetadataSchema,
+  after: SearchMetadataValuesSchema,
+});
+export type UpdateSearchMetadataMutationPlan = z.infer<typeof UpdateSearchMetadataMutationPlanSchema>;
+
 export const ScreenshotAssetSnapshotSchema = ScreenshotAssetSchema.omit({
   localizationId: true,
   locale: true,
@@ -2062,6 +2105,7 @@ export const MutationPlanSchema = z.discriminatedUnion("operation", [
   BuildGroupMutationPlanSchema,
   CreateVersionMutationPlanSchema,
   UpdateLocalizationsMutationPlanSchema,
+  UpdateSearchMetadataMutationPlanSchema,
   UpdateScreenshotsMutationPlanSchema,
   SubmitVersionMutationPlanSchema,
   UpsertCustomerReviewResponseMutationPlanSchema,

@@ -20,6 +20,8 @@ import {
   CreateAppleAdsKeywordInputSchema,
   AppStoreConnectCredentialsInputSchema,
   AppStorePlatformSchema,
+  AppStoreLocaleSchema,
+  UpdateSearchMetadataInputSchema,
   CustomerReviewSortSchema,
   CreateVersionInputSchema,
   GenerateCustomerReviewReplyInputSchema,
@@ -1351,6 +1353,14 @@ const main = async () => {
         json(response, 200, { groups: await service.listGroups(decodeURIComponent(groupsMatch[1])) });
         return;
       }
+      const searchMetadataMatch = url.pathname.match(/^\/api\/apps\/([^/]+)\/versions\/([^/]+)\/search-metadata$/);
+      if (request.method === "GET" && searchMetadataMatch?.[1] && searchMetadataMatch[2]) {
+        json(response, 200, { metadata: await service.getSearchMetadata(
+          decodeURIComponent(searchMetadataMatch[1]), decodeURIComponent(searchMetadataMatch[2]),
+          AppStoreLocaleSchema.parse(url.searchParams.get("locale")),
+        ) });
+        return;
+      }
       const localizationsMatch = url.pathname.match(/^\/api\/apps\/([^/]+)\/versions\/([^/]+)\/localizations$/);
       if (request.method === "GET" && localizationsMatch?.[1] && localizationsMatch[2]) {
         json(response, 200, {
@@ -1446,6 +1456,11 @@ const main = async () => {
       if (request.method === "POST" && url.pathname === "/api/plans/localizations") {
         const input = UpdateVersionLocalizationsInputSchema.parse(await readBody(request));
         json(response, 201, { plan: await service.createUpdateVersionLocalizationsPlan(input, "gui") });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/plans/search-metadata") {
+        const input = UpdateSearchMetadataInputSchema.parse(await readBody(request));
+        json(response, 201, { plan: await service.createSearchMetadataPlan(input, "gui") });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/plans/screenshots") {

@@ -13,6 +13,9 @@ import type {
   CustomerReview,
   CustomerReviewResponse,
   LocalizationSnapshot,
+  SearchMetadata,
+  SearchMetadataValues,
+  AppStoreLocale,
   MutationPlan,
   ScreenshotAsset,
   ScreenshotDisplayType,
@@ -132,6 +135,17 @@ const testSubscriptionPrices: SubscriptionPrice[] = [
 }));
 
 class FakeAscProvider implements AscProvider, AppleAdsProvider {
+  searchValues = { name: "Orbit Notes", subtitle: "Capture ideas", keywords: "notes,ideas,tasks,writing" };
+  searchEditable = true;
+  async getSearchMetadata(appId: string, versionId: string, locale: AppStoreLocale): Promise<SearchMetadata> {
+    return { appId, versionId, locale, versionString: "2.5.0", platform: "IOS", versionEditable: this.searchEditable,
+      appInfoId: "info-1", appInfoState: "PREPARE_FOR_SUBMISSION", appInfoEditable: true,
+      appInfoLocalizationId: `info-${locale}`, versionLocalizationId: `version-${locale}`, values: { ...this.searchValues } };
+  }
+  async applySearchMetadata(expected: SearchMetadata, values: SearchMetadataValues) {
+    if (stableJson(this.searchValues) !== stableJson(expected.values)) throw new Error("Metadata changed.");
+    this.searchValues = { ...values };
+  }
   private readonly builds = [structuredClone(submissionBuild), structuredClone(initialBuild)];
   private readonly reviews = [structuredClone(initialReview)];
   private readonly subscriptionPrices = structuredClone(testSubscriptionPrices);
@@ -812,6 +826,7 @@ const createHarness = () => {
     confirmAddBuildToGroupPlan: (planId: string, digest: string) => coreService.confirmAddBuildToGroupPlan(planId, digest, "gui"),
     listBuilds: (appId: string) => coreService.listBuilds(appId),
     createVersionPlan: (input: CreateVersionInput) => coreService.createVersionPlan(input, "gui"),
+    createSearchMetadataPlan: (input: Parameters<AscStudioService["createSearchMetadataPlan"]>[0]) => coreService.createSearchMetadataPlan(input, "gui"),
     createUpdateVersionLocalizationsPlan: (input: Parameters<AscStudioService["createUpdateVersionLocalizationsPlan"]>[0]) =>
       coreService.createUpdateVersionLocalizationsPlan(input, "gui"),
     createUpdateScreenshotsPlan: (input: Parameters<AscStudioService["createUpdateScreenshotsPlan"]>[0]) =>
@@ -846,6 +861,37 @@ describe("stableJson", () => {
     expect(stableJson({ z: 1, a: { d: 4, c: 3 }, list: ["b", "a"] })).toBe(
       '{"a":{"c":3,"d":4},"list":["b","a"],"z":1}',
     );
+  });
+});
+
+describe("search metadata plans", () => {
+  it("reviews all three fields, applies once, and audits the shared change", async () => {
+    const { provider, service, store } = createHarness();
+    const expected = await provider.getSearchMetadata(app.id, "version-250", "en-US");
+    const values = { name: "Orbit: Notes & Tasks", subtitle: "Capture every idea", keywords: "journal,writing,organizer" };
+    const plan = await service.createSearchMetadataPlan({ appId: app.id, versionId: "version-250", locale: "en-US", expected, values });
+    expect(provider.searchValues).toEqual(expected.values);
+    expect(plan).toMatchObject({ operation: "app.search_metadata.update", before: expected, after: values });
+    await service.confirmPlan(plan.id, plan.digest);
+    expect(provider.searchValues).toEqual(values);
+    expect(store.events).toContainEqual(expect.objectContaining({ operation: "app.search_metadata.update", phase: "succeeded" }));
+    await expect(service.confirmPlan(plan.id, plan.digest)).rejects.toMatchObject({ code: "plan_not_confirmable" });
+  });
+  it("rejects a draft based on stale shared app information before planning", async () => {
+    const { provider, service } = createHarness();
+    const expected = await provider.getSearchMetadata(app.id, "version-250", "en-US");
+    provider.searchValues.name = "Changed on macOS";
+    await expect(service.createSearchMetadataPlan({ appId: app.id, versionId: "version-250", locale: "en-US", expected, values: { ...expected.values, keywords: "journal" } })).rejects.toMatchObject({ code: "search_metadata_changed" });
+  });
+  it.each(["metadata", "editability"])("invalidates the plan when %s changes before confirmation", async (change) => {
+    const { provider, service, store } = createHarness();
+    const expected = await provider.getSearchMetadata(app.id, "version-250", "en-US");
+    const plan = await service.createSearchMetadataPlan({ appId: app.id, versionId: "version-250", locale: "en-US", expected, values: { ...expected.values, keywords: "journal" } });
+    if (change === "metadata") provider.searchValues.subtitle = "Changed elsewhere";
+    else provider.searchEditable = false;
+    await expect(service.confirmPlan(plan.id, plan.digest)).rejects.toMatchObject({ code: "stale_plan" });
+    expect(provider.searchValues.keywords).toBe(expected.values.keywords);
+    expect(store.plans.get(plan.id)?.state).toBe("stale");
   });
 });
 

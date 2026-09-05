@@ -65,6 +65,19 @@ export const LocalizationResourceSchema = z.object({
 export const LocalizationsPageSchema = page(LocalizationResourceSchema);
 export const LocalizationResponseSchema = single(LocalizationResourceSchema);
 
+export const AppInfosPageSchema = page(z.object({
+  ...resourceBase,
+  type: z.literal("appInfos"),
+  attributes: z.object({ state: z.string().optional(), appStoreState: z.string().optional() }).passthrough(),
+}).passthrough());
+export const AppInfoLocalizationResourceSchema = z.object({
+  ...resourceBase,
+  type: z.literal("appInfoLocalizations"),
+  attributes: z.object({ locale: z.string(), name: z.string(), subtitle: z.string().nullable().optional() }).passthrough(),
+}).passthrough();
+export const AppInfoLocalizationsPageSchema = page(AppInfoLocalizationResourceSchema);
+export const AppInfoLocalizationResponseSchema = single(AppInfoLocalizationResourceSchema);
+
 export const ScreenshotSetResourceSchema = z.object({
   ...resourceBase,
   type: z.literal("appScreenshotSets"),

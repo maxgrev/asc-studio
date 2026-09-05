@@ -29,6 +29,9 @@ import type {
   CustomerReviewResponse,
   CustomerReviewsPage,
   LocalizationSnapshot,
+  AppStoreLocale,
+  SearchMetadata,
+  SearchMetadataValues,
   ScreenshotAsset,
   ScreenshotAssetSnapshot,
   ScreenshotDisplayType,
@@ -920,6 +923,7 @@ const screenshotSnapshot = (asset: ScreenshotAsset): ScreenshotAssetSnapshot => 
 });
 
 export class MockAscProvider implements AscProvider, AppleAdsProvider, AnalyticsProvider {
+  private readonly searchNames = new Map<string, { name: string; subtitle: string }>();
   private readonly attachedBuildIds = new Map<string, string>();
   private readonly submissions = new Map<string, VersionSubmissionStatus>();
   private readonly reviewsByApp = structuredClone(reviewFixturesByApp);
@@ -1402,6 +1406,33 @@ export class MockAscProvider implements AscProvider, AppleAdsProvider, Analytics
     const localizations = localizationsByVersion.get(versionId);
     if (!localizations) throw new Error(`Version ${versionId} was not found.`);
     return structuredClone(localizations);
+  }
+
+  async getSearchMetadata(appId: string, versionId: string, locale: AppStoreLocale): Promise<SearchMetadata> {
+    const app = apps.find((item) => item.id === appId);
+    const version = (await this.listVersions(appId)).find((item) => item.id === versionId);
+    const localization = (await this.listVersionLocalizations(versionId)).find((item) => item.locale === locale);
+    if (!app || !version || !localization) throw new Error("The selected app, version, or locale was not found.");
+    const shared = this.searchNames.get(`${appId}:${locale}`) ?? {
+      name: app.name,
+      subtitle: locale === "de-DE" ? "Ideen ordnen, Gedanken sammeln" : locale === "fr-FR" ? "Vos idées, bien organisées" : "Capture ideas, organize tasks",
+    };
+    return {
+      appId, versionId, versionString: version.versionString, platform: version.platform, locale,
+      versionEditable: version.editable,
+      appInfoId: `demo-app-info-${appId}`, appInfoState: "PREPARE_FOR_SUBMISSION", appInfoEditable: true,
+      appInfoLocalizationId: `demo-app-info-${appId}-${locale}`, versionLocalizationId: localization.id,
+      values: { ...shared, keywords: localization.keywords },
+    };
+  }
+
+  async applySearchMetadata(expected: SearchMetadata, values: SearchMetadataValues) {
+    const current = await this.getSearchMetadata(expected.appId, expected.versionId, expected.locale);
+    if (!current.versionEditable || stableJson(current) !== stableJson(expected)) throw new Error("The search metadata changed before saving.");
+    this.searchNames.set(`${expected.appId}:${expected.locale}`, { name: values.name, subtitle: values.subtitle });
+    const localization = localizationsByVersion.get(expected.versionId)?.find((item) => item.id === expected.versionLocalizationId);
+    if (!localization) throw new Error("The localization was not found.");
+    localization.keywords = values.keywords;
   }
 
   async listScreenshots(

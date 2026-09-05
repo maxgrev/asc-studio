@@ -49,6 +49,7 @@ import {
   type TranslationSelection,
 } from "./ReleaseDialogs.js";
 import { ScreenshotManager } from "./ScreenshotManager.js";
+import { SearchOptimizationDialog } from "./SearchOptimizationDialog.js";
 
 export interface ReleaseTarget {
   versionId?: string | undefined;
@@ -131,6 +132,7 @@ export const ReleaseWorkspace = ({
   const [submissionPlan, setSubmissionPlan] = useState<SubmitVersionMutationPlan | null>(null);
   const [submissionStatus, setSubmissionStatus] = useState<VersionSubmissionStatus | null>(null);
   const [translationOpen, setTranslationOpen] = useState(false);
+  const [searchOptimizationOpen, setSearchOptimizationOpen] = useState(false);
   const [readinessOpen, setReadinessOpen] = useState(false);
   const [readiness, setReadiness] = useState<ValidationReport | null>(null);
   const [activityOpen, setActivityOpen] = useState(false);
@@ -190,6 +192,7 @@ export const ReleaseWorkspace = ({
     || Boolean(submissionPlan)
     || createOpen
     || translationOpen
+    || searchOptimizationOpen
     || readinessOpen
     || screenshotPending
     || screenshotApplying;
@@ -197,6 +200,7 @@ export const ReleaseWorkspace = ({
     || Boolean(localizationPlan)
     || Boolean(submissionPlan)
     || translationOpen
+    || searchOptimizationOpen
     || readinessOpen;
 
   useEffect(() => {
@@ -565,11 +569,14 @@ export const ReleaseWorkspace = ({
       setCreatePlan(null);
       setCreateOpen(false);
     } catch (error) {
-      if (error instanceof ApiError && ["plan_expired", "stale_plan", "plan_not_confirmable"].includes(error.code)) {
+      const versionCreated = error instanceof ApiError && error.code === "app_store_connect_version_metadata_copy_failed";
+      if (versionCreated) {
+        setCreatePlan({ ...createPlan, state: "failed", error: error.message });
+      } else if (error instanceof ApiError && ["plan_expired", "stale_plan", "plan_not_confirmable"].includes(error.code)) {
         setCreatePlan(null);
       }
       setMutationError(error instanceof Error ? error.message : "Version creation failed.");
-      await loadVersions();
+      await loadVersions(versionCreated ? versionString : undefined);
     } finally {
       setMutationBusy(false);
     }
@@ -759,6 +766,7 @@ export const ReleaseWorkspace = ({
                   onFieldChange={updateField}
                   onRevertLocale={revertDraft}
                   onTranslateAdapt={() => setTranslationOpen(true)}
+                  onOptimizeSearch={() => setSearchOptimizationOpen(true)}
                   onFocusFieldHandled={() => setFocusField(null)}
                 />
               </div>
@@ -840,6 +848,26 @@ export const ReleaseWorkspace = ({
         setSubmissionPlan(null);
         setMutationError(null);
       }} /> : null}
+      {searchOptimizationOpen && selectedVersion && selectedLocale ? <SearchOptimizationDialog
+        key={`${app.id}:${selectedVersion.id}:${selectedLocale}`}
+        app={app}
+        version={selectedVersion}
+        locale={selectedLocale}
+        initialKeywords={drafts.get(selectedLocale)?.keywords}
+        onClose={() => setSearchOptimizationOpen(false)}
+        onBusyChange={setMutationBusy}
+        onSaved={async (values) => {
+          const response = await api.localizations(app.id, selectedVersion.id);
+          setLocalizations(response.localizations);
+          const baselines = new Map(response.localizations.map((item) => [item.locale, draftFrom(item)] as const));
+          const baseline = baselines.get(selectedLocale);
+          setDraftState((current) => {
+            const next = reconcileReleaseDraftVersion(current, selectedVersion.id, baselines);
+            return baseline ? updateReleaseDraftFields(next, { versionId: selectedVersion.id, baseline, fields: ["keywords"], values: { keywords: values.keywords } }) : next;
+          });
+          await refreshEvents();
+        }}
+      /> : null}
       {translationOpen && source ? <TranslationDialog
         source={source}
         targets={translationTargets}

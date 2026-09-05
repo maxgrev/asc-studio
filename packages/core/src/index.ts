@@ -31,6 +31,9 @@ import type {
   CustomerReviewsPage,
   CustomerReviewSort,
   LocalizationSnapshot,
+  SearchMetadata,
+  SearchMetadataValues,
+  UpdateSearchMetadataInput,
   MutationPlan,
   ScreenshotAsset,
   ScreenshotAssetSnapshot,
@@ -103,6 +106,8 @@ export interface AscProvider {
   addBuildToGroup(input: AddBuildToGroupInput): Promise<void>;
   listVersions(appId: string, platform?: AppStorePlatform, options?: VersionListOptions): Promise<AppStoreVersion[]>;
   listVersionLocalizations(versionId: string): Promise<VersionLocalization[]>;
+  getSearchMetadata(appId: string, versionId: string, locale: AppStoreLocale): Promise<SearchMetadata>;
+  applySearchMetadata(expected: SearchMetadata, values: SearchMetadataValues): Promise<void>;
   listScreenshots(
     localizationId: string,
     locale: AppStoreLocale,
@@ -972,6 +977,45 @@ export class AscStudioService {
     return plan;
   }
 
+  async getSearchMetadata(appId: string, versionId: string, locale: AppStoreLocale) {
+    return this.dependencies.provider.getSearchMetadata(appId, versionId, locale);
+  }
+
+  async createSearchMetadataPlan(input: UpdateSearchMetadataInput, actor: AuditEvent["actor"]): Promise<MutationPlan> {
+    const [before, context] = await Promise.all([
+      this.getSearchMetadata(input.appId, input.versionId, input.locale),
+      this.activeContext(),
+    ]);
+    if (stableJson(before) !== stableJson(input.expected)) {
+      throw new DomainError("search_metadata_changed", "Search metadata changed in App Store Connect. Refresh the current values before reviewing your draft.");
+    }
+    if (!before.versionEditable || !before.appInfoEditable) {
+      throw new DomainError("version_not_editable", "The version and shared app information must both be editable to apply search metadata.");
+    }
+    if (stableJson(before.values) === stableJson(input.values)) throw new DomainError("no_changes", "The draft matches App Store Connect.");
+    const createdAt = this.dependencies.now();
+    const planWithoutDigest = {
+      operation: "app.search_metadata.update" as const,
+      context,
+      target: { appId: input.appId, versionId: input.versionId, locale: input.locale },
+      before,
+      after: input.values,
+      expiresAt: new Date(createdAt.getTime() + 10 * 60 * 1000).toISOString(),
+    };
+    const plan: MutationPlan = {
+      id: this.dependencies.id(),
+      ...planWithoutDigest,
+      risk: "mutation",
+      state: "awaiting_confirmation",
+      createdAt: createdAt.toISOString(),
+      digest: this.dependencies.digest(stableJson(planWithoutDigest)),
+      summary: `Update ${input.locale} search metadata for ${before.versionString}; name and subtitle are shared across platforms`,
+      error: null,
+    };
+    await this.savePlanned(plan, actor, input.appId);
+    return plan;
+  }
+
   async createSubmitVersionPlan(
     input: SubmitVersionInput,
     actor: AuditEvent["actor"],
@@ -1401,6 +1445,13 @@ export class AscStudioService {
         return this.confirmCreateVersionPlan(plan, actor);
       case "version.update_localizations":
         return this.confirmUpdateLocalizationsPlan(plan, actor);
+      case "app.search_metadata.update": {
+        const current = await this.getSearchMetadata(plan.target.appId, plan.target.versionId, plan.target.locale);
+        if (!current.versionEditable || !current.appInfoEditable || stableJson(current) !== stableJson(plan.before)) {
+          await this.markStale(plan, actor, plan.target.appId, "The version or shared app information changed after planning.");
+        }
+        return this.runPlan(plan, actor, plan.target.appId, () => this.dependencies.provider.applySearchMetadata(plan.before, plan.after));
+      }
       case "version.update_screenshots":
         return this.confirmUpdateScreenshotsPlan(plan, actor);
       case "version.submit":

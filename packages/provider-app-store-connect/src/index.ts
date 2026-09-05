@@ -17,6 +17,9 @@ import {
   type CustomerReviewResponse,
   type CustomerReviewsPage,
   type LocalizationSnapshot,
+  type AppStoreLocale,
+  type SearchMetadata,
+  type SearchMetadataValues,
   type ScreenshotAsset,
   type ScreenshotAssetSnapshot,
   type ScreenshotDisplayType,
@@ -59,6 +62,9 @@ import { AppStoreConnectAnalyticsReports } from "./analytics.js";
 export { AnalyticsPermissionError } from "./analytics.js";
 import {
   AppsPageSchema,
+  AppInfosPageSchema,
+  AppInfoLocalizationsPageSchema,
+  AppInfoLocalizationResponseSchema,
   AppStoreVersionResponseSchema,
   AppStoreVersionsPageSchema,
   BetaGroupResourceSchema,
@@ -947,6 +953,69 @@ export class AppStoreConnectProvider implements AscProvider, AnalyticsProvider {
     return pages.flatMap((page) => page.data).map((resource) => normalizeLocalization(resource, versionId));
   }
 
+  async getSearchMetadata(appId: string, versionId: string, locale: AppStoreLocale): Promise<SearchMetadata> {
+    const [version, infoPages, localizations] = await Promise.all([
+      this.getVersion(appId, versionId),
+      this.collect(`/v1/apps/${encodeURIComponent(appId)}/appInfos?limit=200`, AppInfosPageSchema, true),
+      this.listVersionLocalizations(versionId),
+    ]);
+    const infos = infoPages.flatMap((page) => page.data);
+    const infoState = (info: typeof infos[number]) => info.attributes.state ?? info.attributes.appStoreState ?? "UNKNOWN";
+    const candidates = infos.filter((info) => version.editable
+      ? editableVersionStates.has(infoState(info))
+      : ["READY_FOR_DISTRIBUTION", "READY_FOR_SALE"].includes(infoState(info)));
+    const info = candidates.length === 1 ? candidates[0] : infos.length === 1 ? infos[0] : null;
+    if (!info) throw new AppStoreConnectApiError("App Store Connect did not identify a unique current app information record. Check App Information before editing search metadata.", 409, "APP_INFO_UNAVAILABLE", null, []);
+    const infoLocalizations = (await this.collect(
+      `/v1/appInfos/${encodeURIComponent(info.id)}/appInfoLocalizations?limit=200`, AppInfoLocalizationsPageSchema, true,
+    )).flatMap((page) => page.data);
+    const shared = infoLocalizations.find((item) => item.attributes.locale === locale);
+    const localized = localizations.find((item) => item.locale === locale);
+    if (!shared || !localized) throw new AppStoreConnectApiError(`Add ${locale} to both App Information and the version in App Store Connect before optimizing its search metadata.`, 409, "SEARCH_LOCALE_MISSING", null, []);
+    return {
+      appId, versionId, versionString: version.versionString, platform: version.platform, locale,
+      versionEditable: version.editable,
+      appInfoId: info.id, appInfoState: infoState(info), appInfoEditable: editableVersionStates.has(infoState(info)),
+      appInfoLocalizationId: shared.id, versionLocalizationId: localized.id,
+      values: { name: shared.attributes.name, subtitle: shared.attributes.subtitle ?? "", keywords: localized.keywords },
+    };
+  }
+
+  async applySearchMetadata(expected: SearchMetadata, values: SearchMetadataValues): Promise<void> {
+    const current = await this.getSearchMetadata(expected.appId, expected.versionId, expected.locale);
+    if (!current.versionEditable || !current.appInfoEditable || stableJson(current) !== stableJson(expected)) {
+      throw new AppStoreConnectApiError("The version or shared app information changed before the update started. Refresh and review your draft again.", 409, "SEARCH_METADATA_CHANGED", null, []);
+    }
+    const sharedAttributes = {
+      ...(values.name !== current.values.name ? { name: values.name } : {}),
+      ...(values.subtitle !== current.values.subtitle ? { subtitle: toAppleValue(values.subtitle) } : {}),
+    };
+    try {
+      if (Object.keys(sharedAttributes).length) {
+        await this.client.request("PATCH", `/v1/appInfoLocalizations/${encodeURIComponent(current.appInfoLocalizationId)}`, AppInfoLocalizationResponseSchema, {
+          body: { data: { type: "appInfoLocalizations", id: current.appInfoLocalizationId, attributes: sharedAttributes } },
+        });
+      }
+      if (values.keywords !== current.values.keywords) {
+        await this.client.request("PATCH", `/v1/appStoreVersionLocalizations/${encodeURIComponent(current.versionLocalizationId)}`, LocalizationResponseSchema, {
+          body: { data: { type: "appStoreVersionLocalizations", id: current.versionLocalizationId, attributes: { keywords: toAppleValue(values.keywords) } } },
+        });
+      }
+      const saved = await this.getSearchMetadata(expected.appId, expected.versionId, expected.locale);
+      if (saved.appInfoId !== expected.appInfoId || stableJson(saved.values) !== stableJson(values)) {
+        throw new Error("App Store Connect did not confirm all three saved fields.");
+      }
+    } catch (error) {
+      throw new AppStoreConnectApiError(
+        `Search metadata could not be fully saved and verified. Some changes may already be saved. Refresh the current values and review the remaining differences before retrying. ${error instanceof Error ? error.message : ""}`,
+        error instanceof AppStoreConnectApiError ? error.status : 502,
+        "SEARCH_METADATA_APPLY_FAILED",
+        error instanceof AppStoreConnectApiError ? error.requestId : null,
+        error instanceof AppStoreConnectApiError ? error.errors : [],
+      );
+    }
+  }
+
   async listScreenshots(
     localizationId: string,
     locale: VersionLocalization["locale"],
@@ -969,6 +1038,7 @@ export class AppStoreConnectProvider implements AscProvider, AnalyticsProvider {
       ? existing.find((version) => version.versionString === input.copyMetadataFrom) ?? null
       : null;
     if (input.copyMetadataFrom && !source) throw new Error(`Source version ${input.copyMetadataFrom} no longer exists.`);
+    const sourceLocalizations = source ? await this.listVersionLocalizations(source.id) : [];
     const response = await this.client.request("POST", "/v1/appStoreVersions", AppStoreVersionResponseSchema, {
       expectedStatus: 201,
       body: {
@@ -985,15 +1055,35 @@ export class AppStoreConnectProvider implements AscProvider, AnalyticsProvider {
       },
     });
     const created = normalizeVersion(response.data, input.appId);
-    if (source) {
-      const sourceLocalizations = await this.listVersionLocalizations(source.id);
-      for (const localization of sourceLocalizations) {
-        await this.createLocalization(created.id, {
-          ...localization,
-          id: "",
-          versionId: created.id,
+    if (sourceLocalizations.length > 0) {
+      try {
+        // Apple can carry localizations forward when creating a version. Update
+        // those resources by their new IDs and create only missing locales.
+        const current = await this.listVersionLocalizations(created.id);
+        const currentByLocale = new Map(current.map((localization) => [localization.locale, localization] as const));
+        const patches = sourceLocalizations.map((localization): VersionLocalizationPatch => ({
+          locale: localization.locale,
+          description: localization.description,
           whatsNew: input.excludeWhatsNew ? "" : localization.whatsNew,
-        });
+          promotionalText: localization.promotionalText,
+          keywords: localization.keywords,
+          marketingUrl: localization.marketingUrl,
+          supportUrl: localization.supportUrl,
+        }));
+        await this.applyVersionLocalizationPatches(
+          created.id,
+          patches,
+          patches.map((patch) => releaseSnapshot(patch.locale, currentByLocale.get(patch.locale))),
+        );
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "The metadata copy failed.";
+        throw new AppStoreConnectApiError(
+          `Version ${created.versionString} was created, but its localized content could not be fully copied and verified. Review and complete the localized content on the existing version. ${detail}`,
+          error instanceof AppStoreConnectApiError ? error.status : 502,
+          "VERSION_METADATA_COPY_FAILED",
+          error instanceof AppStoreConnectApiError ? error.requestId : null,
+          error instanceof AppStoreConnectApiError ? error.errors : [],
+        );
       }
     }
     return { ...created, copiedFrom: input.copyMetadataFrom };
@@ -1427,27 +1517,6 @@ export class AppStoreConnectProvider implements AscProvider, AnalyticsProvider {
     const linkedAppId = relationshipId(response.data, "app");
     if (linkedAppId && linkedAppId !== appId) throw new Error("The selected App Store version belongs to another app.");
     return version;
-  }
-
-  private async createLocalization(versionId: string, localization: VersionLocalization) {
-    await this.client.request("POST", "/v1/appStoreVersionLocalizations", LocalizationResponseSchema, {
-      expectedStatus: 201,
-      body: {
-        data: {
-          type: "appStoreVersionLocalizations",
-          attributes: {
-            locale: localization.locale,
-            description: toAppleValue(localization.description),
-            keywords: toAppleValue(localization.keywords),
-            marketingUrl: toAppleValue(localization.marketingUrl),
-            promotionalText: toAppleValue(localization.promotionalText),
-            supportUrl: toAppleValue(localization.supportUrl),
-            whatsNew: toAppleValue(localization.whatsNew),
-          },
-          relationships: { appStoreVersion: { data: { type: "appStoreVersions", id: versionId } } },
-        },
-      },
-    });
   }
 
   private async findScreenshotSet(localizationId: string, displayType: ScreenshotDisplayType) {

@@ -72,6 +72,15 @@ ASC Studio should grow by complete, auditable workflows. A long list of thin API
 - Keep platform/version/build state, local-work count, and the review action visible in the responsive first viewport
 - On mobile, keep labeled readiness and submit actions in a persistent safe-area dock
 
+## Releases search optimizer — complete
+
+- Read localized Name and Subtitle from shared app information alongside the selected release’s Keywords
+- Preview the three fields together, check character limits and word overlap, and compare local variants
+- Research storefront/category keyword suggestions and popularity with the existing Apple Ads connection
+- Show word coverage and add researched terms to any field when space permits; keep unknown organic rank and difficulty unavailable
+- Review shared and version-specific changes together, check for stale data, apply only changed fields, and verify the result
+- Keep partial saves explicit and require refreshed current values before another review
+
 ## 0.6 — Direct Apple API provider — complete
 
 - Remove the external `asc` CLI runtime and version pin
