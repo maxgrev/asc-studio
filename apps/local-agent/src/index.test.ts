@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,8 @@ import {
   AnalyticsPortfolioReportRequestPlanResponseSchema,
   AnalyticsPortfolioStatusResponseSchema,
   AnalyticsPortfolioSyncResponseSchema,
+  AppStoreLocaleSchema,
+  PlanResponseSchema,
   type MutationPlan,
   type SearchMetadata,
 } from "@asc-studio/contracts";
@@ -1881,6 +1884,94 @@ describe("local-agent session boundary", () => {
     expect(await saved.json()).toMatchObject({ metadata: { values } });
     const stale = await fetch(`${agent!.baseUrl}/api/plans/search-metadata`, { method: "POST", headers, body: JSON.stringify({ appId: metadata.appId, versionId: metadata.versionId, locale: metadata.locale, expected: metadata, values }) });
     expect(stale.status).toBeGreaterThanOrEqual(400);
+  });
+
+  it("reviews and applies 13 locale drafts larger than the default request limit", async () => {
+    const bulkAgent = await startAgent();
+    try {
+      const headers = { ...authorization(guiToken), "content-type": "application/json" };
+      const localizations = AppStoreLocaleSchema.options.slice(0, 13).map((locale) => ({
+        locale,
+        description: "Localized description. ".repeat(170),
+        whatsNew: "検索と同期を改善しました。".repeat(100),
+        promotionalText: "New ways to organize your notes.",
+        keywords: "notes,writing,ideas",
+        marketingUrl: "https://example.com/notes",
+        supportUrl: "https://example.com/support",
+        fields: ["description", "whatsNew", "promotionalText", "keywords", "marketingUrl", "supportUrl"],
+      }));
+      const body = JSON.stringify({ appId: "demo-app-orbit-notes", versionId: "demo-version-250", localizations });
+      expect(Buffer.byteLength(body)).toBeGreaterThan(64 * 1024);
+      const response = await fetch(`${bulkAgent.baseUrl}/api/plans/localizations`, { method: "POST", headers, body });
+      const responseBody = await response.json();
+      expect(response.status, JSON.stringify(responseBody)).toBe(201);
+      const { plan } = PlanResponseSchema.parse(responseBody);
+      expect(plan).toMatchObject({ target: { locales: localizations.map((item) => item.locale).sort() } });
+      const confirmed = await fetch(`${bulkAgent.baseUrl}/api/plans/${plan.id}/confirm`, {
+        method: "POST", headers, body: JSON.stringify({ digest: plan.digest }),
+      });
+      expect(confirmed.status).toBe(200);
+      const saved = await fetch(`${bulkAgent.baseUrl}/api/apps/demo-app-orbit-notes/versions/demo-version-250/localizations`, { headers });
+      expect(await saved.json()).toMatchObject({
+        localizations: expect.arrayContaining(localizations.map(({ fields: _fields, ...values }) => expect.objectContaining(values))),
+      });
+    } finally { await stopAgent(bulkAgent); }
+  });
+
+  it("accepts a full set of maximum-length locale drafts without Content-Length", async () => {
+    const input = JSON.stringify({
+      appId: "demo-app-orbit-notes",
+      versionId: "demo-version-250",
+      localizations: AppStoreLocaleSchema.options.map((locale) => ({
+        locale,
+        description: "\\".repeat(4_000),
+        whatsNew: "検索".repeat(2_000),
+        promotionalText: "新".repeat(170),
+        keywords: "語".repeat(100),
+        marketingUrl: `https://example.com/${"a".repeat(3_980)}`,
+        supportUrl: `https://example.com/${"b".repeat(3_980)}`,
+        fields: ["description", "whatsNew", "promotionalText", "keywords", "marketingUrl", "supportUrl"],
+      })),
+    });
+    const bytes = new TextEncoder().encode(input);
+    expect(bytes.byteLength).toBeGreaterThan(1_000_000);
+    const options: RequestInit & { duplex: "half" } = {
+      method: "POST",
+      headers: { ...authorization(guiToken), "content-type": "application/json" },
+      body: new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } }),
+      duplex: "half",
+    };
+    const response = await fetch(`${agent!.baseUrl}/api/plans/localizations`, options);
+    expect(response.status).toBe(201);
+    const { plan } = PlanResponseSchema.parse(await response.json());
+    expect(plan).toMatchObject({ target: { locales: expect.arrayContaining(AppStoreLocaleSchema.options) } });
+  });
+
+  it("bounds bulk localization bodies without increasing other API request limits", async () => {
+    const headers = { ...authorization(guiToken), "content-type": "application/json" };
+    for (const [path, size] of [["/api/plans/localizations", 4 * 1024 * 1024], ["/api/plans/version", 64 * 1024]] as const) {
+      // Send the oversized declaration alone: the server must reject it before
+      // reading the body, without depending on a client's upload/socket timing.
+      const response = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+        const request = httpRequest(`${agent!.baseUrl}${path}`, {
+          method: "POST", headers: { ...headers, "content-length": size + 1 },
+        }, (incoming) => {
+          let body = "";
+          incoming.setEncoding("utf8");
+          incoming.on("data", (chunk: string) => { body += chunk; });
+          incoming.on("end", () => resolve({ status: incoming.statusCode, body }));
+          incoming.on("error", reject);
+        });
+        request.on("error", reject);
+        request.end();
+      });
+      expect(response.status).toBe(413);
+      expect(JSON.parse(response.body)).toMatchObject({ error: { code: "body_too_large" } });
+    }
+    const unauthenticated = await fetch(`${agent!.baseUrl}/api/plans/localizations`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    });
+    expect(unauthenticated.status).toBe(401);
   });
 
   it("stages, reviews, and replaces a macOS screenshot set through the GUI API", async () => {

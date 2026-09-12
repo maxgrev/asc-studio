@@ -86,6 +86,9 @@ const host = "127.0.0.1";
 const dataDirectory = process.env.ASC_STUDIO_DATA_DIR ?? join(process.cwd(), ".asc-studio");
 const webDirectory = process.env.ASC_STUDIO_WEB_DIR ? resolve(process.env.ASC_STUDIO_WEB_DIR) : null;
 const maximumBodyBytes = 64 * 1024;
+// A localization plan can contain 40 full drafts. Allow all six fields at
+// their schema limits, including multibyte text and JSON escape expansion.
+const maximumLocalizationPlanBodyBytes = 4 * 1024 * 1024;
 const maximumScreenshotBytes = 20 * 1024 * 1024;
 const screenshotUploadsDirectory = join(dataDirectory, "uploads", "screenshots");
 
@@ -344,10 +347,10 @@ const readRawBuffer = async (request: IncomingMessage, maximumBytes = maximumBod
   return Buffer.concat(chunks);
 };
 
-const readRawBody = async (request: IncomingMessage) => (await readRawBuffer(request)).toString("utf8");
+const readRawBody = async (request: IncomingMessage, maximumBytes = maximumBodyBytes) => (await readRawBuffer(request, maximumBytes)).toString("utf8");
 
-const readBody = async (request: IncomingMessage) => {
-  const body = await readRawBody(request);
+const readBody = async (request: IncomingMessage, maximumBytes = maximumBodyBytes) => {
+  const body = await readRawBody(request, maximumBytes);
   if (!body) return {};
   try {
     return JSON.parse(body) as unknown;
@@ -873,7 +876,9 @@ const main = async () => {
       if (isApiRequest || isMcpRequest) {
         enforceDeclaredBodySize(
           request,
-          url.pathname === "/api/uploads/screenshots" ? maximumScreenshotBytes : maximumBodyBytes,
+          url.pathname === "/api/uploads/screenshots" ? maximumScreenshotBytes
+            : request.method === "POST" && url.pathname === "/api/plans/localizations" ? maximumLocalizationPlanBodyBytes
+            : maximumBodyBytes,
         );
       }
 
@@ -1454,7 +1459,7 @@ const main = async () => {
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/plans/localizations") {
-        const input = UpdateVersionLocalizationsInputSchema.parse(await readBody(request));
+        const input = UpdateVersionLocalizationsInputSchema.parse(await readBody(request, maximumLocalizationPlanBodyBytes));
         json(response, 201, { plan: await service.createUpdateVersionLocalizationsPlan(input, "gui") });
         return;
       }

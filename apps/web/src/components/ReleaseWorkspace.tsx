@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api.js";
 import {
   draftFrom,
+  localeNames,
   localizationFields,
   metadataIssues,
   platformLabel,
@@ -156,6 +157,7 @@ export const ReleaseWorkspace = ({
     }
     if (selectedVersionIdRef.current === versionId) return;
     selectedVersionIdRef.current = versionId;
+    setMutationError(null);
     setLocalizations([]);
     setSelectedLocale(null);
     setSourceLocale(null);
@@ -492,13 +494,19 @@ export const ReleaseWorkspace = ({
   }, [baselineByLocale, drafts, localizationPlan, onSuggestedKeywordUsed, selectedLocale, selectedVersion?.editable, selectedVersion?.id, suggestedKeyword]);
 
   const reviewLocalizations = async () => {
-    if (!selectedVersion || drafts.size === 0) return;
+    if (!selectedVersion || drafts.size === 0 || mutationBusy || syncing || loadingLocalizations) return;
     const invalid = [...drafts].flatMap(([locale, draft]) => {
       const changed = dirtyFields.get(locale);
-      return [...metadataIssues(draft), ...storeListingIssues(draft)].filter((issue) => changed?.has(issue.field));
+      return [...metadataIssues(draft), ...storeListingIssues(draft)]
+        .filter((issue) => changed?.has(issue.field))
+        .map((issue) => ({ ...issue, locale }));
     });
-    if (invalid.length) {
-      setFatalError("Fix the locale issues before reviewing changes.");
+    const firstIssue = invalid[0];
+    if (firstIssue) {
+      setMutationError(`${localeNames[firstIssue.locale]}: ${firstIssue.message}${invalid.length > 1 ? ` ${invalid.length - 1} more issue${invalid.length === 2 ? "" : "s"} to fix before review.` : ""}`);
+      setSelectedLocale(firstIssue.locale);
+      setPanel("metadata");
+      setFocusField(firstIssue.field);
       return;
     }
     setMutationBusy(true);
@@ -708,7 +716,7 @@ export const ReleaseWorkspace = ({
         <header className="topbar release-topbar">
           <div><h1>{selectedVersion ? `Release ${selectedVersion.versionString}` : `${platformLabel(selectedPlatform)} releases`}</h1><p>Localized content, screenshots, build, and submission—together for this version.</p></div>
           <div className="topbar-actions">
-            <button className="button secondary" type="button" onClick={() => void sync()} disabled={syncing || screenshotPending || screenshotApplying} title={screenshotPending ? "Review or undo screenshot changes before syncing." : undefined} aria-label={syncing ? "Syncing releases" : "Sync releases"}>
+            <button className="button secondary" type="button" onClick={() => void sync()} disabled={syncing || mutationBusy || screenshotPending || screenshotApplying} title={screenshotPending ? "Review or undo screenshot changes before syncing." : undefined} aria-label={syncing ? "Syncing releases" : "Sync releases"}>
               <RefreshCw size={17} className={syncing ? "spin" : undefined} /><span>{syncing ? "Syncing" : "Sync"}</span>
             </button>
           </div>
@@ -740,15 +748,17 @@ export const ReleaseWorkspace = ({
                 <button type="button" role="tab" aria-selected={panel === "screenshots"} className={panel === "screenshots" ? "active" : ""} disabled={Boolean(localizationPlan)} onClick={() => setPanel("screenshots")}><Images size={16} />Screenshots{screenshotPending ? <span className="tab-pending-dot" aria-label="Changes pending" /> : null}</button>
                 <span className="release-work-status">
                   <span><strong>{drafts.size ? `${drafts.size} locale draft${drafts.size === 1 ? "" : "s"}` : "Content is current"}</strong><small>{drafts.size ? `${dirtyFieldCount} edited field${dirtyFieldCount === 1 ? "" : "s"} saved locally` : "No unreviewed content changes"}</small></span>
-                  <button className="button primary" type="button" disabled={!selectedVersion.editable || drafts.size === 0 || mutationBusy || Boolean(localizationPlan)} onClick={() => void reviewLocalizations()}><CheckSquare2 size={15} />Review changes{drafts.size ? ` (${drafts.size})` : ""}</button>
+                  <button className="button primary" type="button" disabled={!selectedVersion.editable || drafts.size === 0 || mutationBusy || syncing || loadingLocalizations || Boolean(localizationPlan)} aria-busy={mutationBusy && !releaseModalOpen} onClick={() => void reviewLocalizations()}>{mutationBusy ? <RefreshCw size={15} className="spin" /> : <CheckSquare2 size={15} />}{mutationBusy ? "Preparing review…" : `Review changes${drafts.size ? ` (${drafts.size})` : ""}`}</button>
                 </span>
               </nav>
 
               <div className="release-mobile-context" aria-label="Release status and local work">
                 <span><small>Version status</small><strong>{submissionStatus?.id ? versionStateLabel(submissionStatus.state) : versionStateLabel(selectedVersion.state)}</strong></span>
-                {panel === "metadata" ? <button className="button primary" type="button" disabled={!selectedVersion.editable || drafts.size === 0 || mutationBusy || Boolean(localizationPlan)} onClick={() => void reviewLocalizations()}><CheckSquare2 size={15} />Review changes ({drafts.size})</button>
+                {panel === "metadata" ? <button className="button primary" type="button" disabled={!selectedVersion.editable || drafts.size === 0 || mutationBusy || syncing || loadingLocalizations || Boolean(localizationPlan)} aria-busy={mutationBusy && !releaseModalOpen} onClick={() => void reviewLocalizations()}>{mutationBusy ? <RefreshCw size={15} className="spin" /> : <CheckSquare2 size={15} />}{mutationBusy ? "Preparing review…" : `Review changes (${drafts.size})`}</button>
                   : <span className={screenshotPending ? "pending" : ""}><small>Screenshots</small><strong>{screenshotApplying ? "Applying changes…" : screenshotPending ? "Changes pending" : "No local changes"}</strong></span>}
               </div>
+
+              {mutationError && !releaseModalOpen ? <div className="error-banner" role="alert"><span>{mutationError}</span><button type="button" onClick={() => setMutationError(null)}>Dismiss</button></div> : null}
 
               <div hidden={panel !== "metadata"} className="release-metadata-panel" role="tabpanel">
                 <ReleaseMetadataWorkbench
