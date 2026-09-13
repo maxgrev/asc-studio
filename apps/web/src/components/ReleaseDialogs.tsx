@@ -347,10 +347,10 @@ const translationFieldOptions: Array<{
   detail: string;
   limit: number;
 }> = [
-  { field: "whatsNew", label: "What’s New", detail: "Translate for this update", limit: 4_000 },
-  { field: "promotionalText", label: "Promotional text", detail: "Translate as timely storefront copy", limit: 170 },
-  { field: "description", label: "Description", detail: "Translate naturally without adding claims", limit: 4_000 },
-  { field: "keywords", label: "Keywords", detail: "Adapt for local search—not word for word", limit: 100 },
+  { field: "whatsNew", label: "What’s New", detail: "Translate and condense if needed—never cut off", limit: 4_000 },
+  { field: "promotionalText", label: "Promotional text", detail: "Adapt into complete storefront copy that fits", limit: 170 },
+  { field: "description", label: "Description", detail: "Translate naturally and condense only when needed", limit: 4_000 },
+  { field: "keywords", label: "Keywords", detail: "Choose whole local search terms that fit", limit: 100 },
   { field: "supportUrl", label: "Support URL", detail: "Copy unchanged", limit: 4_000 },
   { field: "marketingUrl", label: "Marketing URL", detail: "Copy unchanged", limit: 4_000 },
 ];
@@ -452,7 +452,7 @@ export const TranslationDialog = ({
   return (
     <DialogFrame
       title="Translate & adapt"
-      subtitle={`Use ${localeNames[source.locale]} as the source. Selected fields become local drafts until you review them.`}
+      subtitle={`Use ${localeNames[source.locale]} as the source. Copy is adapted to each field limit and stays in local drafts until you review it.`}
       wide
       busy={busy}
       onClose={onClose}
@@ -482,7 +482,7 @@ export const TranslationDialog = ({
 
         <div className="keyword-boundary">
           <ShieldCheck size={19} />
-          <p><strong>Only selected fields change</strong><span>Keywords are adapted for local search. URLs are copied unchanged and never sent to OpenAI.</span></p>
+          <p><strong>Complete copy within every limit</strong><span>Long translations are rewritten to fit, never cut off. Keywords use whole local search terms; URLs are copied unchanged and never sent to OpenAI.</span></p>
         </div>
 
         <section className="translation-targets" aria-labelledby="translation-targets-title">

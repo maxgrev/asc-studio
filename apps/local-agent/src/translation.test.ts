@@ -132,7 +132,17 @@ describe("release-copy translators", () => {
     };
     expect(body.instructions).toContain("adapt it for local App Store search behavior");
     expect(body.instructions).toContain("ASCII-comma-separated list");
-    expect(JSON.parse(body.input)).toEqual(allFieldsInput);
+    expect(body.instructions).toContain("Never truncate, slice, or cut off a translation");
+    expect(body.instructions).toContain("create a concise localized marketing hook");
+    expect(JSON.parse(body.input)).toEqual({
+      ...allFieldsInput,
+      characterLimits: {
+        description: 4_000,
+        whatsNew: 4_000,
+        promotionalText: 170,
+        keywords: 100,
+      },
+    });
     expect(Object.keys(body.text.format.schema.properties.translations.items.properties)).toEqual([
       "locale",
       "description",
@@ -147,6 +157,80 @@ describe("release-copy translators", () => {
       "promotionalText",
       "keywords",
     ]);
+  });
+
+  it.each([
+    ["at the hard boundary", `${"x".repeat(166)}peaq`],
+    ["beyond the hard boundary", `${"x".repeat(216)}peaq`],
+  ])("re-adapts promotional text %s from the full source instead of accepting clipped copy", async (_case, clippedDraft) => {
+    const sourceText = "Talk to your Mac, record a meeting and get notes, ask Auri anything, and write or organize ideas from one place.";
+    const adaptedText = "Fale com o Mac, grave reuniões, receba notas e organize suas ideias com o Auri.";
+    const lengthInput = GenerateReleaseCopyTranslationsInputSchema.parse({
+      sourceLocale: "en-US",
+      targetLocales: ["pt-BR"],
+      fields: ["promotionalText"],
+      source: { promotionalText: sourceText },
+    });
+    let call = 0;
+    const fetchMock = vi.fn(async (_request: string | URL | Request, _init?: RequestInit) => {
+      call += 1;
+      return openAiOutput({
+        translations: [{
+          locale: "pt-BR",
+          promotionalText: call === 1 ? clippedDraft : adaptedText,
+        }],
+      });
+    });
+    const translator = new OpenAiReleaseCopyTranslator("test-key", "test-model", fetchMock as unknown as typeof fetch);
+
+    await expect(translator.generate(lengthInput)).resolves.toEqual([
+      { locale: "pt-BR", promotionalText: adaptedText },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const generationBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      text: { format: { schema: { properties: { translations: { items: { properties: { promotionalText: { maxLength: number } } } } } } } };
+    };
+    expect(generationBody.text.format.schema.properties.translations.items.properties.promotionalText.maxLength).toBe(340);
+
+    const adaptationBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as {
+      instructions: string;
+      input: string;
+      text: { format: { schema: { properties: { translations: { items: { properties: { promotionalText: { maxLength: number } } } } } } } };
+    };
+    expect(adaptationBody.instructions).toContain("draft translation may have been clipped");
+    expect(adaptationBody.instructions).toContain("do not trim characters or words from the end");
+    expect(JSON.parse(adaptationBody.input)).toEqual({
+      sourceLocale: "en-US",
+      targetLocale: "pt-BR",
+      fields: ["promotionalText"],
+      hardCharacterLimits: { promotionalText: 170 },
+      comfortableCharacterLimits: { promotionalText: 160 },
+      source: { promotionalText: sourceText },
+      draft: { promotionalText: clippedDraft },
+    });
+    expect(adaptationBody.text.format.schema.properties.translations.items.properties.promotionalText.maxLength).toBe(170);
+    expect(adaptedText.length).toBeLessThan(170);
+  });
+
+  it("fails closed when repeated adaptations still land on the hard character limit", async () => {
+    const boundaryText = "x".repeat(170);
+    const lengthInput = GenerateReleaseCopyTranslationsInputSchema.parse({
+      sourceLocale: "en-US",
+      targetLocales: ["pt-BR"],
+      fields: ["promotionalText"],
+      source: { promotionalText: "A complete promotional message that needs a concise localization." },
+    });
+    const fetchMock = vi.fn(async () => openAiOutput({
+      translations: [{ locale: "pt-BR", promotionalText: boundaryText }],
+    }));
+    const translator = new OpenAiReleaseCopyTranslator("test-key", "test-model", fetchMock as unknown as typeof fetch);
+
+    await expect(translator.generate(lengthInput)).rejects.toMatchObject({
+      code: "translation_invalid_response",
+      status: 502,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("batches large locale sets safely and returns nothing when a later batch fails", async () => {
